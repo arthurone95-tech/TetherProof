@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1791106348188,
+      "tag": "0000_luxuriant_pyro",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791106359569,
+      "tag": "0001_rls_and_auth_link",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791110449604,
+      "tag": "0002_fix_user_role_enum_cast",
+      "breakpoints": true
+    }
+  ]
+}

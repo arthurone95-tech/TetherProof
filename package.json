@@ -1,0 +1,28 @@
+{
+  "name": "tetherproof",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TetherProof - a verified capability and execution network",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @tetherproof/shared && npm run build --workspace @tetherproof/api && npm run build --workspace @tetherproof/web",
+    "dev": "npm run build --workspace @tetherproof/shared && npm run dev --workspace @tetherproof/api",
+    "dev:web": "npm run build --workspace @tetherproof/shared && npm run dev --workspace @tetherproof/web",
+    "start": "npm run start --workspace @tetherproof/api",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "db:generate": "npm run db:generate --workspace @tetherproof/api",
+    "db:migrate": "npm run db:migrate --workspace @tetherproof/api",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
