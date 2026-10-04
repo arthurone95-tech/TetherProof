@@ -11,8 +11,8 @@ This document defines the high-level system architecture, component layout, data
 The application follows a modular monolith / decoupled client-server architecture:
 * **Frontend:** Responsive Web Application optimized for mobile browsers (for trade workers and clients checking SMS links) and desktop browsers (for enterprise employers and training administrators).
 * **Backend API Server:** Node.js / TypeScript API server handling business logic, role-based authorization, capability graph calculations, and matching algorithms.
-* **Backend-as-a-Service:** Supabase provides the managed PostgreSQL database, Auth (user roles and sessions), and private Storage for media uploads with metadata scrubbing.
-* **External Integration & Messaging Layer:** Handles OAuth connectors (GitHub/Jira), SMS/WhatsApp dispatch APIs, and AI metadata inspection services.
+* **Backend-as-a-Service:** Supabase provides the managed PostgreSQL database, Auth (user roles and sessions), and private Storage for media uploads. Metadata is removed from media by the API before it is stored, not by Supabase Storage.
+* **External Integration & Messaging Layer:** Handles OAuth connectors (GitHub/Jira) and SMS/WhatsApp dispatch APIs.
 
 ---
 
@@ -32,7 +32,7 @@ The application follows a modular monolith / decoupled client-server architectur
 * **Core Modules:**
   * **Auth & RBAC:** Supabase Auth issues and validates sessions. The API reads the role from the server-controlled `app_metadata.role` claim and enforces role segregation (Worker, Employer, Training Provider, Admin) on every route.
   * **Telemetry & Ingestion Service:** Processes webhook events from developer tools and parses voice-to-text milestone submissions.
-  * **Trust & Anti-Fraud Engine:** Executes graph centrality calculations, GPS/location proximity checks, and metadata/AI-fake validation rules.
+  * **Trust & Anti-Fraud Engine:** Executes graph centrality calculations and GPS/location proximity checks. Synthetic-media detection is planned but not implemented; see `doc/13` E-008.
   * **Matching Engine:** Computes zero-knowledge capability scores and filters candidates based on employer spec criteria.
 
 ### C. Data & Persistence Layer

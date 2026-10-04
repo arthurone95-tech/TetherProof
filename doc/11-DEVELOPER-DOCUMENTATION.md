@@ -24,8 +24,9 @@ This document provides technical instructions for developers and AI agents setti
    * A single `.env` at the repository root serves every workspace; the API and Drizzle locate it automatically.
    * *Security Warning:* Never commit your active `.env` file to version control.
 4. **Run Database Migrations:** Run `npm run db:migrate`. Migrations are plain SQL files in `apps/api/drizzle/`, reviewed in a pull request before being applied. Schema changes are made with `npm run db:generate` and never pushed directly.
-5. **Start Development Server:** Run `npm run dev` for the API and `npm run dev:web` for the web app.
-6. **Verify the Setup:** Run `npm run build`, then `npm run smoke -- --live` (see section 4).
+5. **Create the Proof Bucket:** Run `npm run storage:ensure-bucket`. This creates the private `work-proofs` bucket and applies its size cap and MIME allow-list. The limits have to be written directly to `storage.buckets`, because Supabase's management API accepts them and then discards them without error (`doc/13` E-017). Re-run it against a new or reset project.
+6. **Start Development Server:** Run `npm run dev` for the API and `npm run dev:web` for the web app.
+7. **Verify the Setup:** Run `npm run build`, then `npm run smoke -- --live` (see section 4).
 
 ---
 
@@ -44,6 +45,7 @@ This document provides technical instructions for developers and AI agents setti
   * `npm run smoke -- --live --web` — additionally the client confirmation page and the browser CORS path. Serves the web app on the origin listed in `CORS_ORIGINS`, so free that port first.
   * `--live` is mandatory and the script prompts before touching anything: it creates and deletes real accounts. Only ever point it at a development Supabase project, never production. In CI add `--yes`.
 * **Unit Tests:** Execute unit and integration suites using the project test runner (`npm test`).
+* **Media Scrubbing:** Run `npm run scrub-check`. It asserts the metadata scrubber against constructed fixtures rather than mocks and needs no server, database, or live project.
 * **Manual Verification:** Before submitting changes, verify UI layouts across mobile and desktop breakpoints, and confirm the confirmation page in a real browser at a phone viewport.
 * **Security Checks:** Ensure no private secrets, API keys, or unmasked database credentials are introduced into source files. Confirm `.env` remains untracked and the service-role key appears only in server-side code.
 

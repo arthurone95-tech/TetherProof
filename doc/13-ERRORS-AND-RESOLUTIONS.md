@@ -192,17 +192,42 @@ path still unproven, for the same reason; see the "Not covered" note under E-016
 
 ## E-008: Media EXIF/metadata scrubbing is documented but not implemented
 
-* **Status:** Open — deferred to Phase 2
+* **Status:** Resolved 2026-10-04
 * **Found:** 2026-10-04, review against `08-SECURITY-DOCUMENTATION.md`.
 
 ### Description
-`08-SECURITY-DOCUMENTATION.md` states that uploads are processed to strip EXIF location metadata before storage, and `03-SYSTEM-ARCHITECTURE.md` attributes that step to Supabase Storage. Supabase Storage does **not** strip metadata; `src/lib/storage.ts` only validates MIME type, size, and object path. Metadata therefore survives upload, including GPS coordinates that can reveal a worker's or client's location.
+`08-SECURITY-DOCUMENTATION.md` states that uploads are processed to strip EXIF location metadata before storage, and `03-SYSTEM-ARCHITECTURE.md` attributes that step to Supabase Storage. Supabase Storage does **not** strip metadata; `src/lib/storage.ts` only validates MIME type, size, and object path. Metadata therefore survived upload, including GPS coordinates that can reveal a worker's or client's location.
+
+Investigating this found the gap was wider than the entry assumed. `POST /api/v1/workers/proofs`, specified in `07-API-DOCUMENTATION.md`, was never implemented at all: `uploadWorkProofMedia` was dead code, there was no multipart parser, no media library, and the live project had no storage bucket. The smoke suite inserted proof rows with raw SQL, so no upload path existed to test. Implementing the scrubbing therefore meant building the ingestion endpoint with the scrubbing as its core, not adding a filter to something existing.
 
 ### Impact
-Location metadata is not yet removed from proof media. The documentation currently overstates the protection.
+Location metadata is now removed from proof media, and the documentation no longer claims more than the code does. Two promises were removed rather than implemented: synthetic-media detection (a Phase 3 item, recorded below) and Supabase Storage performing the scrubbing.
 
-### Planned resolution
-Phase 2, with the proof-ingestion endpoint: strip metadata server-side before upload (image re-encode, audio container rewrite), and treat the client's submitted GPS as the only trusted location source. Correct the wording in `03` and `08` in the same change.
+### Resolution
+`apps/api/src/lib/media-scrub.ts` removes metadata in memory before any byte is uploaded, and `uploadWorkProofMedia` calls it internally rather than exposing it as a step a caller could skip. The only route to the bucket runs through it, which is what makes the guarantee in `doc/08` a property of the system rather than of one code path.
+
+* **Images are re-encoded** with sharp, which drops EXIF, ICC, and embedded GPS by construction rather than by trying to enumerate every tag that might carry a location. This is why re-encoding was chosen over surgical segment removal: a re-encode cannot miss a tag format nobody thought of. EXIF orientation is applied and then discarded, so photos stay upright without retaining the value describing the device's orientation.
+* **Audio tag containers are cut out:** ID3v2 and ID3v1 from MP3, and the `udta`/`meta` atoms, including the `©xyz` location atom, from MP4-family containers.
+* **The declared content type is never trusted.** It selects the scrubber, and each scrubber confirms the bytes really are the container that type claims. A file cannot be smuggled past the allow-list by mislabelling itself.
+* **`submissionGps` is the only trusted location** for a proof, which is exactly why the file's own location data is removed. Coordinates are range-checked at the boundary, so `999,999` is rejected rather than stored to poison later proximity checks.
+* **`metadata_status` is always written as `pending`.** Scrubbing removes location data; it does not assess authenticity. Claiming `valid` would assert work that has not been done, so the honest status is recorded until the anti-fraud engine exists.
+
+### Sub-finding: WebM removed from the allow-list
+The allow-list previously included `audio/webm`. Its metadata lives in an EBML element that cannot be removed without re-muxing the whole container, which would require an external binary such as ffmpeg. Rather than store WebM audio with its location data intact under a promise of privacy the code could not keep, the format is refused. This narrows accepted formats deliberately; it is a decision, not an oversight.
+
+### Sub-finding: the bucket enforced nothing (E-017, now resolved)
+The bucket was created private, which is what matters for confidentiality. Supabase accepted `file_size_limit` and `allowed_mime_types` without complaint but silently applied neither: reading the bucket back showed both unset, and a direct `text/plain` upload and an oversized upload were both stored. The limits have since been applied and confirmed enforced; see E-017 for how. The API's own checks remain the first line regardless, because they reject a bad upload before any bytes leave the process.
+
+### Verification
+`scripts/scrub-check.ts` runs 24 assertions against constructed fixtures rather than mocks, including a hand-built EXIF block whose GPS IFD is spliced into a real JPEG, so the assertion that location data was present beforehand and absent afterwards is meaningful. The MP4 fixture deliberately places `moov` before `mdat`, the layout where sample offsets must be repointed after bytes are removed; the stored offset is confirmed to move earlier by exactly the number of bytes deleted. Without that fixture a broken implementation would still pass, because a faststart file needs no correction. All 24 pass.
+
+End-to-end against the live project, in the smoke suite: a GPS-tagged JPEG is uploaded, `hadGps` is `true`, and the object is read back out of the bucket to confirm no `Exif\0\0` segment survives in the stored bytes. Full suite: **80 passed, 0 failed**, 0 leftover test accounts, 0 leftover bucket objects.
+
+### Not covered
+* **Synthetic-media detection is not implemented.** `valid` and `flagged_ai_fake` are never written, and no authenticity assessment happens. Heuristics that cannot genuinely detect AI generation tend to produce false positives that block honest workers' uploads, which is worse than an honest `pending` status. `doc/02` Feature 2.3 and `doc/01` still describe this as a current capability and remain overstated; they are product requirements rather than security documentation, so they were left as written rather than rewritten.
+* **Audio was verified structurally, not by playback.** The MP4 assertions prove the container is intact and the offsets are correct, but no decoder was run to confirm audio output. A real m4a from a phone should be tested when one is available.
+* **HEIC is re-encoded as AV1-compressed HEIC**, which changes the file substantially to remove only metadata. The prebuilt sharp binary supports it and the round-trip was exercised, but if preserving HEIC exactly matters more than stripping metadata, that tradeoff should be revisited.
+* **Verification links are not dispatched.** The token is generated and returned once, but no SMS or WhatsApp provider is wired up, so a real client cannot yet receive it.
 
 ---
 
@@ -373,10 +398,18 @@ way. Neither belongs to the Phase 1 codebase, and neither is referenced by anyth
 ### Impact
 None on the application. They are untracked, so they are not in the repository.
 
+### Owner decision, 2026-10-04
+The owner has reviewed both and decided:
+
+* **`doc/others/` is to be kept and left permanently untouched.** It is someone's working
+  material, not project code. It stays untracked and must not be committed, moved, edited, or
+  deleted. Commits must continue to stage files by explicit path so it cannot be swept in.
+* **`doc/logo-data.txt` is still undecided.** No decision has been given for it.
+
 ### Planned resolution
-Owner decision: either move them out of `doc/`, commit them as design documentation, or
-delete them. Left untouched rather than guessed at, since they may be in active use
-elsewhere.
+None for `doc/others/`; the decision above is final, and this entry exists only so the files stop
+being raised as an open question on every future pass. `doc/logo-data.txt` still needs an owner
+decision: move it out of `doc/`, commit it as design documentation, or delete it.
 
 ---
 
@@ -434,12 +467,74 @@ provider rejection for each and identified the second mistake. After the fix, ag
 live project: `/auth/confirm` returns `200` with an 831-character access token for an
 account created either through `admin.createUser` or through `POST /auth/register`; the
 confirmed account then signs in with its password (`200`); replaying the same token returns
-`400 AUTH_CODE_INVALID`. Full suite: **50 passed, 0 failed**, 0 leftover test accounts.
+`400 AUTH_CODE_INVALID`. At the time of that fix the suite stood at **50 passed, 0 failed**; it
+now stands at **80 passed, 0 failed** after the E-008 work added the proof-ingestion checks and the E-017 work added the bucket-configuration checks.
 
 ### Not covered
 The numeric 6-digit OTP path still has not been exercised against a real delivered code,
 because that needs a working provider and a real inbox. Its behaviour rests on Supabase's
 documented contract for `verifyOtp` with a numeric `token`.
+
+---
+
+## E-018: Signing in silently disabled the service-role client
+
+* **Status:** Resolved 2026-10-04
+* **Found:** 2026-10-04, while implementing E-008. Every proof upload returned `500`.
+* **Related:** pre-existing defect in the E-007 implementation; invisible until something used the admin client for storage.
+
+### Description
+Every `POST /api/v1/workers/proofs` returned
+`500 {"code":"INTERNAL_ERROR","message":"The file could not be stored."}`. The underlying provider
+error was `new row violates row-level security policy` (`AccessDenied`, `statusCode: 403`) — yet the
+same bytes, path shape, bucket, and service-role key all uploaded successfully from a standalone
+script, and `service_role` was confirmed to hold `rolbypassrls`, so RLS could not have been the
+blocker for that role.
+
+### Root cause
+`login()` called `supabaseAdmin.auth.signInWithPassword(...)`. Any method that signs a user in
+stores the resulting session **on the client that performed it**, and from then on that client
+sends the user's access token instead of the service-role key. Because `supabaseAdmin` is a
+module-level singleton, the first successful login of the process permanently downgraded it: it
+kept working as an ordinary authenticated client while still looking like an admin client. Storage
+rejected the writes because `storage.objects` has RLS enabled and no policies, and the user role
+is subject to both.
+
+This was confirmed directly rather than inferred: in one process, an upload succeeded before a
+sign-in on `supabaseAdmin` and failed immediately after one, with the same client, bytes, and
+bucket. `verifyOtp` and `signInWithOtp` were already on the anon client and were not involved.
+
+### Impact
+The immediate symptom was a broken upload path. The underlying hazard is worse than the symptom:
+**after any user logged in, every later call to `supabaseAdmin` ran with that user's privileges
+instead of the service role.** Any code path reaching the admin client after a login would have
+executed with reduced privileges, reading or writing only what that one user could reach. Whether
+anything was actually exposed depends on the RLS policies in force at the time, but the guarantee
+that the admin client bypasses RLS was not being upheld after the first login. Login is the most
+frequently called endpoint in the system, so in practice the admin client was degraded almost
+immediately after start-up.
+
+### Resolution
+`login()` now signs in on `supabaseAuth`, the anon-key client. Signing in needs no elevated
+privilege, so nothing is lost, and it matches the two existing end-user auth calls. The hazard is
+documented at the definition of `supabaseAdmin` in `lib/supabase.ts`, naming the methods that must
+never be called on it and pointing at `supabaseAuth` instead.
+
+### Verification
+Against the live project, through the real HTTP path where the failure occurred: after a
+registration and password sign-in through the API, `POST /api/v1/workers/proofs` returns `201` with
+`hadGps: true`, and the stored object is read back out of the bucket to confirm no EXIF survives.
+Full suite: **80 passed, 0 failed**, 0 leftover accounts, 0 leftover bucket objects.
+
+### Note on diagnosability
+This took far longer than it should have, and the reason is worth recording. `uploadWorkProofMedia`
+collapsed every storage failure into one generic message, discarding the provider's reason
+entirely. The RLS error that pointed straight at the cause was being thrown away at the point of
+failure. `logger.error` with the provider's reason, bucket, path, and size now runs before the
+generic `AppError` is raised; the caller still receives only the generic message, since a storage
+error can quote the bucket name, object key, and internal reason. Making the failure visible in the
+log while keeping it out of the response is what turned an unanswerable question into a
+three-step diagnosis.
 
 ---
 
@@ -449,7 +544,65 @@ For context on what is confirmed working, recorded outside the error log:
 
 * 3 migrations applied to the live project (PostgreSQL 17.11).
 * 7 tables with RLS enabled; `FORCE ROW LEVEL SECURITY` on `work_proof_logs` and `verifications`; 19 policies; `users_id_auth_fkey` → `auth.users(id)`; both role triggers present.
-* 50/50 automated live API checks: health, registration, duplicate rejection, the confirmation challenge, request-code anti-enumeration, code validation, **the full confirmation success path** (a real token exchanged for a session, replay refused, password sign-in afterwards), confirmation gating, login, `/auth/me`, token-hash-only storage, verification view, single-use confirmation, replay refusal, input validation, and RLS posture. The success path uses `admin.generateLink`, so it needs no mail provider and no inbox.
+* **80/80 automated live API checks:** health, registration, duplicate rejection, the confirmation challenge, request-code anti-enumeration, code validation, **the full confirmation success path** (a real token exchanged for a session, replay refused, password sign-in afterwards), confirmation gating, login, `/auth/me`, **bucket configuration** (private, size cap and MIME allow-list recorded, and both an out-of-list type and an oversized object refused), **proof submission with live metadata scrubbing** (GPS detected and reported, the stored object read back out of the bucket to confirm no EXIF survives, token-hash-only storage, and refusal of WebM, mislabelled files, missing files, out-of-range coordinates, short descriptions, unauthenticated calls, and another worker's capability reference), verification view, single-use confirmation, replay refusal, input validation, and RLS posture. The confirmation success path uses `admin.generateLink`, so it needs no mail provider and no inbox.
+* **24/24 media-scrubbing assertions** in `scripts/scrub-check.ts`, run against constructed fixtures rather than mocks, including a hand-built GPS EXIF block and an MP4 laid out so that sample-offset repointing is genuinely required.
+* A private `work-proofs` Storage bucket now exists **with its size cap and MIME allow-list applied and confirmed enforced** (E-017). The management API silently discards both values, so `npm run storage:ensure-bucket` writes them directly to `storage.buckets` and verifies them. Six smoke checks guard this on every run.
+* Cleanup leaves nothing behind: 0 test accounts, 0 application rows, 0 bucket objects after a full run.
 * 20/21 automated web checks: production build, SSR of `/verify/{token}`, `no-referrer`, `noindex`, no sign-in redirect, CORS preflight and headers for the web origin, submission without GPS, persistence, and refusal of an unknown origin. The one failure was a harness cleanup bug, not a product defect; the leftover row was removed and the database confirmed empty.
 * Not covered: real browser execution of the confirmation page, and a genuinely delivered 6-digit OTP. No headless browser is available in this environment, so the page was verified through SSR output and browser-equivalent HTTP calls with an `Origin` header, not by clicking the button. A delivered code needs a working provider and a real inbox.
-* Reproduce with `npm run smoke -- --live --web` after `npm run build`. All checks are automated in `scripts/smoke.mjs`.
+* Reproduce with `npm run smoke -- --live --web` after `npm run build`. All API checks are automated in `scripts/smoke.mjs`; the scrubbing unit assertions run with `npm run scrub-check`, which needs no server, no database, and no live project.
+
+---
+
+## E-017: The proof bucket silently ignores its size and MIME-type limits
+
+* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Found:** 2026-10-04, while implementing E-008.
+* **Related:** sub-finding of E-008.
+
+### Description
+The `work-proofs` bucket was created private, which is the property that matters for
+confidentiality. `createBucket` and a follow-up `updateBucket` were both called with
+`file_size_limit` and `allowed_mime_types`, and **both calls reported success**. Reading the
+bucket back showed `size_limit` undefined and `allowed_mime_types` null. Uploading directly to
+confirm it rather than trusting the responses: a `text/plain` object was **accepted**, and an
+object one kilobyte over the configured 10 MB cap was **also accepted**.
+
+### Root cause
+Not a plan limitation, and not a missing dashboard step. The columns exist and work:
+`storage.buckets.file_size_limit` is a `bigint` and `allowed_mime_types` is a `text[]`, both
+nullable, both writable. A direct `UPDATE` of `storage.buckets` persists them and Storage then
+enforces them. The fault is in the **management API path**: `createBucket` and `updateBucket`
+accept both fields and return success, then discard them without raising an error. Because the
+call reports success, any script written against it appears to work.
+
+There are no triggers on `storage.buckets` that could reset the values, so nothing overrides a
+direct write.
+
+### Resolution
+`apps/api/scripts/ensure-proof-bucket.ts` writes the limits straight to `storage.buckets` instead
+of going through the management API, then reads them back and refuses to report success if either
+value did not persist. Run it with `npm run storage:ensure-bucket`. It is idempotent, converges
+on the configuration rather than assuming the current state, and never marks the bucket public.
+
+### Verification
+Against the live project on 2026-10-04, after applying the limits:
+
+| Attempt | Result |
+| --- | --- |
+| `image/jpeg` within the cap | accepted |
+| `text/plain` | refused — `mime type text/plain is not supported` |
+| `application/pdf` | refused — `mime type application/pdf is not supported` |
+| `audio/webm` | refused — `mime type audio/webm is not supported` |
+| `image/jpeg` over the cap | refused — `The object exceeded the maximum allowed size` |
+| `image/png` over the cap | refused — `The object exceeded the maximum allowed size` |
+
+All probe objects were removed afterwards. Six smoke checks now assert this on every run, so a
+bucket that loses its configuration cannot go unnoticed: privacy, the presence of a size limit,
+the MIME allow-list contents, and two refused uploads.
+
+### Note
+The bucket is a second layer, not the only one. `ALLOWED_CONTENT_TYPES` in `src/lib/storage.ts`
+and the multer size cap in `src/middleware/upload.ts` reject a bad upload before any bytes are
+sent, and the API-layer allow-list is deliberately kept in step with `allowed_mime_types` by hand.
+If a format is added to one it must be added to the other.

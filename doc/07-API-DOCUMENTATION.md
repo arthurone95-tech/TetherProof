@@ -115,9 +115,51 @@ Response (200 OK): Returns the caller's id, role, full name, location, organizat
     "submissionGps": "5.6037,-0.1870"
   }
   ```
-`media_file` is uploaded as multipart binary to a private Supabase Storage bucket. Only image and audio types on an allow-list are accepted, files are size-capped, and stored object paths use unpredictable random identifiers.
+`media_file` is uploaded as multipart binary to a private Supabase Storage bucket, and must be
+present. Accepted types are `image/jpeg`, `image/png`, `image/webp`, `image/heic`, `audio/mpeg`,
+`audio/mp4`, and `audio/aac`. Files are size-capped by `STORAGE_MAX_UPLOAD_BYTES`, and stored
+object paths use unpredictable random identifiers under the worker's own folder. The same
+allow-list and cap are applied a second time at the bucket, so a request that somehow bypassed
+the API would still be refused.
 
-Response (201 Created): Returns work proof ID, metadata check status, and generated verification token.
+Every upload is scrubbed of metadata before it is stored:
+
+* **Images are re-encoded** by sharp, which drops EXIF, ICC, and any embedded GPS block by
+  construction. The declared content type is not trusted on its own: the bytes must decode as the
+  container that type claims, so a file cannot be smuggled past the allow-list by mislabelling
+  itself.
+* **Audio tag containers are cut out** — ID3v2 and ID3v1 from MP3, and the `udta`/`meta` atoms,
+  including the `©xyz` location atom, from MP4-family containers. Sample offset tables are
+  repointed after removal so the audio still plays.
+* **WebM is not accepted.** Its metadata lives in an EBML element that cannot be removed without
+  re-muxing the container, which would require an external binary. Storing it with location data
+  intact would contradict the scrubbing guarantee, so the format is refused rather than stored
+  unsanitised.
+
+`submissionGps` is the only trusted location for a proof, which is precisely why the file's own
+location metadata is removed. Coordinates are range-checked, so `999,999` is rejected.
+
+Response (201 Created):
+
+```json
+{
+  "proofId": "uuid",
+  "skillTag": "Refrigeration Repair",
+  "capabilityBlockId": "uuid",
+  "metadataStatus": "pending",
+  "scrubbed": { "hadGps": true, "hadMetadata": true, "hadAudioTags": false },
+  "verificationToken": "returned-once-only",
+  "verificationExpiresAt": "2026-10-11T12:00:00.000Z"
+}
+```
+
+`metadataStatus` is always `pending`. Scrubbing removes location data; it does not assess whether
+the media is genuine. `valid` and `flagged_ai_fake` belong to the anti-fraud engine, which is not
+implemented (see `doc/13` E-008). `scrubbed` reports what was actually removed, so a caller can see
+the protection that was applied rather than take it on trust.
+
+Only the SHA-256 hash of `verificationToken` is stored, and it is returned exactly once. Delivering
+it by SMS or WhatsApp is not wired up yet; see `doc/13` E-008.
 
 ---
 

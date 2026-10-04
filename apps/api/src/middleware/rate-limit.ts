@@ -29,6 +29,23 @@ export const authRateLimiter = build(
 );
 
 /**
+ * Applies to proof media uploads.
+ *
+ * Uploads are the most expensive thing a signed-in caller can ask this API to do,
+ * in CPU and in storage: every accepted request is decoded and re-encoded to
+ * strip its metadata, then written to a bucket. The limit sits above
+ * `authRateLimiter` because a worker legitimately submits several proofs in a
+ * session, while remaining far below `globalRateLimiter` so one account cannot
+ * absorb the whole budget. Paired with the file-size cap in `middleware/upload.ts`,
+ * so the two together bound the cost of a single caller.
+ */
+export const mediaUploadRateLimiter = build(
+  20,
+  15 * 60 * 1000,
+  'Too many uploads. Please wait a few minutes and try again.',
+);
+
+/**
  * Applies to sending a one-time sign-in code.
  *
  * Deliberately the tightest limit in the project. Every accepted request can

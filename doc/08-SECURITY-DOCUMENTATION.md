@@ -23,14 +23,15 @@ This document outlines the security architecture, threat model mitigations, data
 * **Zero-Knowledge Principle:** Employer candidate searches return anonymized tokens, aggregate proof counts, and trust scores. Personal Identifying Information (PII) such as full names, phone numbers, and direct contact details are strictly masked until a direct offer is mutually accepted.
 * **Identity Data Ownership:** Credentials, email addresses, and phone numbers live in Supabase Auth and are not duplicated into application tables, which keeps identity data in one auditable place.
 * **Storage Encryption:** All sensitive user records and transactional database entries must be encrypted at rest.
-* **Media Sanitization:** Uploaded work proof images and audio files are stored in a private Supabase Storage bucket with EXIF location metadata and private organizational logos stripped before storage. Buckets are never public; access is granted through short-lived signed URLs, and object paths use unpredictable random identifiers.
+* **Media Sanitization:** Uploaded work proof images and audio files are stored in a private Supabase Storage bucket with EXIF location metadata and private organizational logos stripped before storage. Buckets are never public; access is granted through short-lived signed URLs, and object paths use unpredictable random identifiers. Uploaded content is restricted to an explicit type allow-list and a size cap, enforced in the API before any bytes are transmitted and again at the bucket itself.
 
 ---
 
 ## 4. Anti-Fraud & Trust Protocol Security
 * **Graph Centrality Engine:** Detects and mitigates closed-loop collusion (e.g., users mutually verifying friends). Verifications from isolated two-way loops are automatically down-weighted or discounted.
 * **Location & Proximity Telemetry:** Compares the GPS coordinates logged by the worker during task submission with the GPS telemetry of the client device when confirming via the verification link, preventing remote fake sign-offs.
-* **AI-Fake Media Scrubber:** Scans uploaded images and videos for synthetic generation signatures or scraped web assets, rejecting unverified media files instantly.
+* **Location Metadata Removal:** Uploaded proof media is scrubbed of EXIF, ICC, and embedded GPS data by the API before it reaches storage, so a photo cannot reveal where a worker or client was. Audio tag containers are stripped the same way. The worker's submitted coordinates are the only trusted location for a proof.
+* **Synthetic-Media Detection (not implemented):** Rejecting AI-generated or scraped media is planned but does not exist yet. Uploads are not currently assessed for authenticity, and every proof records `metadata_status = 'pending'`. See `doc/13` E-008.
 
 ---
 

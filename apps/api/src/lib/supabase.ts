@@ -7,6 +7,14 @@ import { env } from '../config/env.js';
  * Uses the service-role key, which bypasses Row Level Security, so every
  * function that touches it must perform its own authorization. This module is
  * server-only: the key must never be bundled, logged, or returned to a client.
+ *
+ * **Never call a session-setting method on this client.** Any method that signs
+ * someone in (`signInWithPassword`, `verifyOtp`, `signInWithOtp`, and the rest)
+ * stores the resulting session on the client itself, and from then on the client
+ * sends that user's access token instead of the service key. The client stops
+ * being an admin client while still looking like one, so storage writes start
+ * failing and, worse, server code would run with the signed-in user's privileges.
+ * Use `supabaseAuth` below for anything that signs a user in.
  */
 export const supabaseAdmin: SupabaseClient = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: {

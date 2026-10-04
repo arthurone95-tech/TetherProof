@@ -269,7 +269,12 @@ export async function login(input: LoginInput): Promise<AuthResponse> {
     ? { email: input.email, password: input.password }
     : { phone: input.phoneNumber!, password: input.password };
 
-  const { data, error } = await supabaseAdmin.auth.signInWithPassword(credentials);
+  // Signed in on the anon client, never the service-role one. Signing in stores a
+  // session on whichever client performed it, and that session then replaces the
+  // service key on every later request through it, silently reducing the shared
+  // admin client to an ordinary user session. Signing in requires no elevated
+  // privilege, so there is no reason to involve the admin client here.
+  const { data, error } = await supabaseAuth.auth.signInWithPassword(credentials);
 
   if (error || !data.user || !data.session) {
     throw AppError.unauthorized('Incorrect sign-in details.');

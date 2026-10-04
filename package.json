@@ -20,7 +20,9 @@
     "test": "npm run test --workspaces --if-present",
     "db:generate": "npm run db:generate --workspace @tetherproof/api",
     "db:migrate": "npm run db:migrate --workspace @tetherproof/api",
-    "smoke": "node scripts/smoke.mjs"
+    "storage:ensure-bucket": "npm run storage:ensure-bucket --workspace @tetherproof/api",
+    "smoke": "node scripts/smoke.mjs",
+    "scrub-check": "tsx scripts/scrub-check.ts"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

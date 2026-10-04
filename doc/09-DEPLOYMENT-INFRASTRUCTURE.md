@@ -12,7 +12,7 @@ This document outlines the cloud hosting environment, infrastructure topology, d
 * **Backend API Hosting:** Secure containerized or managed Node.js runtime environment (e.g., Railway, Render, or AWS ECS) capable of handling real-time telemetry processing and anti-fraud computations.
 * **Database & Storage:** 
   * *Primary Database:* Supabase-managed PostgreSQL (Auth, Database, and Storage) with automated daily backups and SSL encryption in transit.
-  * *Object Storage:* Supabase Storage private bucket configured with strict access control and PII scrubbing pipelines for media uploads. Public buckets are prohibited.
+  * *Object Storage:* Supabase Storage private bucket for media uploads. The bucket is created private by `apps/api/scripts/ensure-proof-bucket.ts` (`npm run storage:ensure-bucket`); public buckets are prohibited. PII scrubbing is performed by the API before upload, not by Storage. The bucket also carries a `file_size_limit` and an `allowed_mime_types` allow-list as a second layer. Supabase's management API accepts both settings and then silently discards them, so the script writes them directly to `storage.buckets` and verifies they persisted (`doc/13` E-017). The API's own type allow-list and size cap remain the first line, because they reject a bad upload before any bytes are transmitted.
 * **Messaging & Communication Gateway:** External third-party API integration (e.g., Twilio or local gateway) for dispatching SMS and WhatsApp verification links.
 
 ---
