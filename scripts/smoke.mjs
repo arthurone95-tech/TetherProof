@@ -287,6 +287,115 @@ async function main() {
     const dup = await api('POST', '/auth/register', { body: { email, password, role: 'worker' } });
     check('duplicate registration is rejected', dup.status === 409 || dup.status === 400, `status ${dup.status}`);
 
+    const challenge = unwrap(reg.json)?.confirmation;
+    check(
+      'register returns a confirmation challenge',
+      challenge?.channel === 'email' &&
+        typeof challenge?.destination === 'string' &&
+        typeof challenge?.delivered === 'boolean',
+      JSON.stringify(challenge),
+    );
+    check(
+      'challenge destination is masked, not the raw address',
+      challenge?.destination !== email,
+      challenge?.destination ?? '',
+    );
+
+    section('ACCOUNT CONFIRMATION');
+    // `.invalid` can never resolve, so these checks cannot deliver a message even
+    // once a provider is configured. They must not depend on receiving a code.
+    //
+    // The two `/confirm/request` calls share the 5-per-15-minutes
+    // `confirmationRateLimiter` budget for 127.0.0.1. The `/confirm` calls use
+    // the separate `codeVerificationRateLimiter` at 10, which is why the success
+    // path below can be covered without tripping a limit.
+    const unknown = `no-such-user-${Date.now()}@tetherproof.invalid`;
+    const requestRes = await api('POST', '/auth/confirm/request', { body: { email: unknown } });
+    check(
+      'confirm/request answers 202 for an unregistered address',
+      requestRes.status === 202,
+      `status ${requestRes.status}`,
+    );
+    check(
+      'confirm/request does not reveal that the account is unknown',
+      requestRes.json?.delivered === false && typeof requestRes.json?.destination === 'string',
+      JSON.stringify(requestRes.json),
+    );
+
+    const repeatRes = await api('POST', '/auth/confirm/request', { body: { email: unknown } });
+    check(
+      'repeated confirm/request answers identically',
+      JSON.stringify(repeatRes.json) === JSON.stringify(requestRes.json),
+      `${JSON.stringify(requestRes.json)} vs ${JSON.stringify(repeatRes.json)}`,
+    );
+
+    const wrongCode = await api('POST', '/auth/confirm', { body: { email: unknown, token: '000000' } });
+    check('a wrong code is refused', wrongCode.status === 400, `status ${wrongCode.status}`);
+    check(
+      'a wrong code returns AUTH_CODE_INVALID',
+      wrongCode.json?.error?.code === 'AUTH_CODE_INVALID',
+      JSON.stringify(wrongCode.json?.error),
+    );
+    check(
+      'a wrong code leaks no provider detail',
+      !/otp|token hash|expired|supabase/i.test(wrongCode.json?.error?.message ?? ''),
+      wrongCode.json?.error?.message ?? '',
+    );
+
+    const shortCode = await api('POST', '/auth/confirm', { body: { email: unknown, token: '12' } });
+    check('a too-short code fails validation', shortCode.status === 400, `status ${shortCode.status}`);
+    check(
+      'validation names the offending field',
+      shortCode.json?.error?.details?.some((d) => d.path === 'token'),
+      JSON.stringify(shortCode.json?.error?.details),
+    );
+
+    // The success path, without needing a real inbox: `generateLink` mints a
+    // genuine Supabase token without sending anything, so the code-to-session
+    // exchange can be asserted even when no mail provider is configured.
+    // This is what caught the token/token_hash mismatch recorded as E-016.
+    const linkEmail = `smoke.${Date.now()}.link@tetherproof.invalid`;
+    const linkPassword = 'SmokeTest123456';
+    const linkReg = await api('POST', '/auth/register', {
+      body: { email: linkEmail, password: linkPassword, role: 'worker' },
+    });
+    const linkUserId = unwrap(linkReg.json)?.user?.id;
+    if (linkUserId) createdUsers.push(linkUserId);
+
+    const { data: linkData, error: linkErr } = await admin.auth.admin.generateLink({
+      type: 'signup',
+      email: linkEmail,
+    });
+    check('a real confirmation token can be minted for tests', !linkErr, linkErr?.message ?? '');
+
+    const linkToken = linkData?.properties?.hashed_token;
+    const linkConfirm = await api('POST', '/auth/confirm', { body: { email: linkEmail, token: linkToken } });
+    check(
+      'a valid code is exchanged for a session',
+      linkConfirm.status === 200,
+      `status ${linkConfirm.status} ${linkConfirm.text.slice(0, 140)}`,
+    );
+    check(
+      'the issued session carries an access token',
+      typeof unwrap(linkConfirm.json)?.session?.accessToken === 'string',
+      JSON.stringify(unwrap(linkConfirm.json)?.session ?? {}).slice(0, 80),
+    );
+    check(
+      'a confirmed account no longer needs a challenge',
+      unwrap(linkConfirm.json)?.confirmation === null,
+      JSON.stringify(unwrap(linkConfirm.json)?.confirmation),
+    );
+
+    const linkReplay = await api('POST', '/auth/confirm', { body: { email: linkEmail, token: linkToken } });
+    check('replaying a used token is refused', linkReplay.status === 400, `status ${linkReplay.status}`);
+
+    const linkLogin = await api('POST', '/auth/login', { body: { email: linkEmail, password: linkPassword } });
+    check(
+      'an account confirmed via the endpoint can then sign in',
+      linkLogin.status === 200,
+      `status ${linkLogin.status} ${linkLogin.text.slice(0, 140)}`,
+    );
+
     section('LOGIN');
     const beforeConfirm = await api('POST', '/auth/login', { body: { email, password } });
     check('unconfirmed account cannot sign in', beforeConfirm.status === 401, `status ${beforeConfirm.status}`);

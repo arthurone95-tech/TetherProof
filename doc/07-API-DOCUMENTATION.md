@@ -35,11 +35,53 @@ Credentials are owned by Supabase Auth. These endpoints create accounts and exch
   ```
 At least one of `phoneNumber` or `email` is required. Passwords must be at least 12 characters and include an uppercase letter, a lowercase letter, and a number.
 
-Response (201 Created): Returns the user object and role. A session is not issued until the account is confirmed.
+Response (201 Created): Returns the user object and role, `session: null`, and a `confirmation` challenge. A session is not issued until the account is confirmed.
 
-### B. Login User
+```json
+{
+  "user": { "id": "...", "role": "worker", "email": "user@example.com", "phone": "+233241234567" },
+  "session": null,
+  "confirmation": { "channel": "phone", "destination": "***567", "delivered": true }
+}
+```
+
+`confirmation.channel` is `phone` when a phone number was supplied, otherwise `email`. `destination` is always masked. `delivered` is `false` when the messaging provider rejected the send; the account still exists and the caller can retry through **B**.
+
+### B. Request Confirmation Code
+* **Endpoint:** `POST /api/v1/auth/confirm/request`
+* **Description:** Sends, or re-sends, a one-time sign-in code to an account that has not yet been confirmed. Use this when `delivered` was `false` at registration, or when the member did not receive the code.
+* **Request Body:**
+  ```json
+  { "phoneNumber": "+233241234567" }
+  ```
+  A `phoneNumber` or an `email` is required, matching the value used at registration.
+* **Rate limit:** 5 requests per 15 minutes per IP, tighter than the credential endpoints because each accepted request can cost an SMS or email.
+
+Response (202 Accepted): Returns the masked destination and whether the message was dispatched. The status and shape are identical whether or not the account exists, so this endpoint cannot be used to discover which phone numbers or addresses are registered.
+
+### C. Confirm Account
+* **Endpoint:** `POST /api/v1/auth/confirm`
+* **Description:** Exchanges a one-time code for a session and marks the proven channel as confirmed. This is what removes the need for an administrator to confirm new accounts by hand.
+* **Request Body:**
+  ```json
+  { "phoneNumber": "+233241234567", "token": "123456" }
+  ```
+  `token` accepts either form of credential Supabase issues, because either Auth template may be enabled:
+
+  * a short numeric code (6 to 10 digits) from the **Email OTP** / SMS template, sent as-is;
+  * the longer token from a **Magic Link** email, which is also sent as-is.
+
+  The two are not interchangeable in Supabase's API, so the endpoint routes on the shape of the value rather than on any client-supplied type.
+
+* **Rate limit:** 10 requests per 15 minutes per IP. Looser than the send endpoint on purpose, so a mistyped 6-digit code does not lock someone out. Supabase additionally throttles verification attempts per token.
+
+Response (200 OK): Returns the user, role, and a session, with `confirmation: null`.
+
+Failure (400 `AUTH_CODE_INVALID`): A wrong, expired, or already-used token. Supabase reports all three identically and a single generic message is returned, so a caller cannot tell which they hit.
+
+### D. Login User
 * **Endpoint:** `POST /api/v1/auth/login`
-* **Description:** Authenticates an existing user through Supabase Auth and returns a session.
+* **Description:** Authenticates an existing, confirmed user through Supabase Auth and returns a session.
 * **Request Body:**
   ```json
   {
@@ -47,14 +89,16 @@ Response (201 Created): Returns the user object and role. A session is not issue
     "password": "SecurePassword123!"
   }
   ```
-Response (200 OK): Returns the user object, role, and a session containing the access token, refresh token, and expiry.
+Response (200 OK): Returns the user object, role, and a session containing the access token, refresh token, and expiry. An unconfirmed account is refused with `401` until **C** succeeds.
 
-### C. Current Profile
+### E. Current Profile
 * **Endpoint:** `GET /api/v1/auth/me`
 * **Description:** Returns the authenticated caller's profile and role.
 * **Authorization:** `Authorization: Bearer <access_token>`
 
 Response (200 OK): Returns the caller's id, role, full name, location, organization, and avatar.
+
+> **Prerequisite:** Endpoints **B** and **C** depend on an email or SMS provider being configured in the Supabase Auth dashboard. Without one, `delivered` is always `false` and codes are never received.
 
 ---
 

@@ -117,7 +117,7 @@ The harness now refuses to run if the port is occupied, asserts the spawned proc
 
 ## E-007: Registration creates unconfirmed accounts with no way to confirm them
 
-* **Status:** Resolved — decision taken 2026-10-04, implementation scheduled for Phase 2
+* **Status:** Resolved — implemented 2026-10-04 (Phase 2)
 * **Found:** 2026-10-04, live registration testing.
 
 ### Description
@@ -132,12 +132,61 @@ The product is not usable by a real member until this is resolved. It is not a s
 Rationale: it keeps proof of ownership, so nobody can register a colleague's phone number and intercept their verification links, and it matches the phone-first, low-literacy design in `01-PRD-PRODUCT-REQUIREMENTS.md`. It also removes the manual admin step entirely.
 
 ### Planned resolution
-First task of Phase 2:
-1. Add `POST /api/v1/auth/confirm` to exchange a one-time code for a session, and have `register` return a confirmation challenge instead of a bare user object.
-2. Enable the Supabase email and/or SMS template used for the code, and set `email_confirm`/`phone_confirm` from the verified result rather than at creation time.
-3. Update `07-API-DOCUMENTATION.md` with the confirmation endpoints and the resulting session behaviour.
+Implemented as described below. No administrator step is required to admit a new member.
 
-Until this ships, `register` continues to return `session: null` and sign-in stays blocked, which is logged here as a known limitation rather than a defect.
+### Resolution
+* `POST /api/v1/auth/confirm/request` sends or re-sends a one-time code.
+  `shouldCreateUser: false` is the load-bearing option: Supabase neither creates an
+  account nor spends provider quota on an unknown destination.
+* `POST /api/v1/auth/confirm` exchanges the code for a session and confirms the account,
+  removing the manual dashboard step.
+* `register` now returns a `confirmation` challenge (`channel`, masked `destination`,
+  `delivered`) instead of a bare `session: null`.
+* Only the channel the caller actually proved is marked confirmed. Writing `false` for the
+  other channel would revoke a confirmation already earned, and setting both would let
+  someone who signed up by email skip proving ownership of a registered phone number.
+* Codes are never stored or logged by this API. Delivery and verification are delegated to
+  Supabase Auth, which owns them.
+
+### Anti-enumeration and abuse controls
+* `/confirm/request` answers `202` with an identical body whether or not the account exists,
+  and `delivered` is also `false` when the provider is merely unhealthy, so the endpoint
+  cannot be used to enumerate registered phone numbers or addresses. The provider's real
+  error is logged server-side only.
+* A wrong, expired, or replayed code all return one generic `AUTH_CODE_INVALID` message,
+  because Supabase reports them identically.
+* Two dedicated limits, split by cost. `confirmationRateLimiter` allows 5 sends per 15
+  minutes per IP, tighter than the general credential limit, because each accepted request
+  can cost an SMS or email and could otherwise be used to message arbitrary numbers.
+  `codeVerificationRateLimiter` allows 10 redemptions per 15 minutes, loose enough that a
+  mistyped 6-digit code does not lock someone out for a quarter of an hour.
+* Known limitation: a registered destination answers marginally slower because the provider
+  is genuinely contacted. Closing that timing gap would require the API to issue codes itself.
+
+### Verification
+Confirmed 2026-10-04 against the live project with a test server on port 4100:
+`/confirm/request` returns `202` with a masked destination and `delivered: false` for an
+unregistered address, and the server log records `Signups not allowed for otp` without
+leaking it to the caller and without sending anything. A wrong code returns
+`400 AUTH_CODE_INVALID` on both the email and phone channels; a short token and a malformed
+email return `400 VALIDATION_ERROR` with the failing field; the sixth request in the window
+returns `429 RATE_LIMITED` in the standard error envelope. `npm run typecheck` and
+`npm run build` pass in all three workspaces.
+
+The success path was then verified end to end, which surfaced a real defect in the first
+implementation, recorded as **E-016**. `admin.generateLink` mints a genuine token without
+delivering anything, so the code-to-session exchange can be asserted without a mail provider
+or an inbox. A valid token now returns `200` with a session, the confirmed account signs in
+with its password, and replaying the token is refused. This is a permanent smoke check, so
+the exchange cannot silently regress again. Full suite: **50 passed, 0 failed**.
+
+### Remaining prerequisite
+Delivery requires an email or SMS provider configured in the Supabase Auth dashboard.
+Until one is configured, `delivered` is always `false` and no code is ever received. This
+is dashboard configuration, not a code change. The numeric 6-digit OTP branch is the one
+path still unproven, for the same reason; see the "Not covered" note under E-016.
+
+---
 
 ---
 
@@ -282,13 +331,125 @@ exercise the documented developer commands rather than inheriting a fully popula
 
 ---
 
+## E-014: A malformed JSON body is answered with 500 instead of 400
+
+* **Status:** Open — low severity, pre-existing
+* **Found:** 2026-10-04, while probing the new confirmation endpoints.
+
+### Description
+A request whose body is not valid JSON is answered with
+`500 {"error":{"code":"INTERNAL_ERROR",...}}` and logged as `Unhandled error` with a
+body-parser stack trace. For example, a body of `{'email':'a@b.com'}` (single quotes).
+
+### Root cause
+`express.json()` runs as application-level middleware, ahead of `validateBody`, so its
+`SyntaxError` never reaches the Zod schemas. The error handler treats anything that is not
+an `AppError` as an unexpected fault, which is the correct default, but a client-caused
+parse failure is not an unexpected fault.
+
+### Impact
+Low. No internal detail reaches the client, since the generic message is returned. The
+response is misleading though: a caller sending a malformed body is told the server broke,
+rather than that their request was invalid. It also pollutes the error log with
+body-parser stack traces, which can bury a genuine fault during triage.
+
+### Planned resolution
+Catch the parse failure at the JSON middleware boundary and translate it into
+`AppError.badRequest('Request body must be valid JSON.')`, so malformed input reports as a
+client error and stops polluting the error log. Add a smoke check for it.
+
+---
+
+## E-015: `doc/logo-data.txt` and `doc/others/` are untracked working files
+
+* **Status:** Open — needs a decision
+* **Found:** 2026-10-04, during the Phase 1 commit.
+
+### Description
+`doc/logo-data.txt`, a note about brand asset formats, appeared in the working tree during
+the Phase 1 commit and was deliberately left out of it. `doc/others/` then appeared the same
+way. Neither belongs to the Phase 1 codebase, and neither is referenced by anything.
+
+### Impact
+None on the application. They are untracked, so they are not in the repository.
+
+### Planned resolution
+Owner decision: either move them out of `doc/`, commit them as design documentation, or
+delete them. Left untouched rather than guessed at, since they may be in active use
+elsewhere.
+
+---
+
+## E-016: Magic-link tokens were rejected by `/auth/confirm`
+
+* **Status:** Resolved
+* **Found:** 2026-10-04, while verifying the E-007 success path.
+* **Related:** a defect in the E-007 implementation, surfaced by the new success-path check.
+
+### Description
+`POST /auth/confirm` answered `400 AUTH_CODE_INVALID` for every genuine token of the
+non-numeric form. The numeric 6-digit code path was assumed to work and was never
+exercised, but the token a magic-link email actually carries could never be redeemed. A
+member using the Magic Link template would have been unable to sign in, with no route
+forward except an administrator.
+
+### Root cause
+Supabase takes the two credential forms through different parameters, and neither is
+interchangeable with the other:
+
+* a short numeric code goes in `token`, alongside the address;
+* a magic-link token goes in `token_hash`, and must be sent **without** the address.
+
+Two separate mistakes were made in sequence:
+
+1. The implementation passed the magic-link token as `token`. The provider replied
+   `Token has expired or is invalid` for every verification type tried (`signup`, `email`,
+   `magiclink`).
+2. The first fix passed `{ email, token_hash, type }`. The provider replied
+   `Only the token_hash and type should be provided`, because the address must be omitted
+   once `token_hash` is used.
+
+The code was written from the documented shape of a numeric OTP and never run against a real
+link token. The API documentation compounded this by asserting the longer token was
+accepted, which was untrue.
+
+### Impact
+Registration itself worked and unconfirmed accounts were correctly refused, so nothing
+looked broken from the outside until someone tried to redeem an actual link.
+
+### Resolution
+`confirm()` now routes on the shape of the value: a 6-to-10-digit numeric value is sent as
+`token` with the address, anything else as `token_hash` with no address. The comments state
+why the two forms are not interchangeable.
+
+`codeVerificationRateLimiter` was added at 10 per 15 minutes, separate from the tighter
+5-per-15-minute `confirmationRateLimiter` on the send endpoint. Sending costs money and can
+target arbitrary third parties, so it stays the tightest limit; redeeming a mistyped code
+does not, and a quarter-hour lockout over a typo is the worse outcome. Guessing is still
+bounded here and again by Supabase.
+
+### Verification
+Isolated by calling `verifyOtp` directly with each parameter shape, which surfaced the exact
+provider rejection for each and identified the second mistake. After the fix, against the
+live project: `/auth/confirm` returns `200` with an 831-character access token for an
+account created either through `admin.createUser` or through `POST /auth/register`; the
+confirmed account then signs in with its password (`200`); replaying the same token returns
+`400 AUTH_CODE_INVALID`. Full suite: **50 passed, 0 failed**, 0 leftover test accounts.
+
+### Not covered
+The numeric 6-digit OTP path still has not been exercised against a real delivered code,
+because that needs a working provider and a real inbox. Its behaviour rests on Supabase's
+documented contract for `verifyOtp` with a numeric `token`.
+
+---
+
 ## Verification coverage achieved on 2026-10-04
 
 For context on what is confirmed working, recorded outside the error log:
 
 * 3 migrations applied to the live project (PostgreSQL 17.11).
 * 7 tables with RLS enabled; `FORCE ROW LEVEL SECURITY` on `work_proof_logs` and `verifications`; 19 policies; `users_id_auth_fkey` → `auth.users(id)`; both role triggers present.
-* 35/35 automated live API checks: health, registration, duplicate rejection, confirmation gating, login, `/auth/me`, token-hash-only storage, verification view, single-use confirmation, replay refusal, input validation, and RLS posture.
+* 50/50 automated live API checks: health, registration, duplicate rejection, the confirmation challenge, request-code anti-enumeration, code validation, **the full confirmation success path** (a real token exchanged for a session, replay refused, password sign-in afterwards), confirmation gating, login, `/auth/me`, token-hash-only storage, verification view, single-use confirmation, replay refusal, input validation, and RLS posture. The success path uses `admin.generateLink`, so it needs no mail provider and no inbox.
 * 20/21 automated web checks: production build, SSR of `/verify/{token}`, `no-referrer`, `noindex`, no sign-in redirect, CORS preflight and headers for the web origin, submission without GPS, persistence, and refusal of an unknown origin. The one failure was a harness cleanup bug, not a product defect; the leftover row was removed and the database confirmed empty.
-* Not covered: real browser execution of the confirmation page. No headless browser is available in this environment, so the page was verified through SSR output and browser-equivalent HTTP calls with an `Origin` header, not by clicking the button.
-* Reproduce with `npm run smoke -- --live --web` after `npm run build`. All 48 checks are now automated in `scripts/smoke.mjs`.
+* Not covered: real browser execution of the confirmation page, and a genuinely delivered 6-digit OTP. No headless browser is available in this environment, so the page was verified through SSR output and browser-equivalent HTTP calls with an `Origin` header, not by clicking the button. A delivered code needs a working provider and a real inbox.
+* Reproduce with `npm run smoke -- --live --web` after `npm run build`. All checks are automated in `scripts/smoke.mjs`.

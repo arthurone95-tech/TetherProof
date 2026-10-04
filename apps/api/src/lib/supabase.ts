@@ -17,6 +17,22 @@ export const supabaseAdmin: SupabaseClient = createClient(env.SUPABASE_URL, env.
 });
 
 /**
+ * Supabase client for end-user authentication operations.
+ *
+ * Uses the anon key deliberately. Operations such as sending a one-time code
+ * and exchanging it for a session are end-user flows, so they must run under
+ * the same Row Level Security boundary a browser would get rather than
+ * bypassing it with the service-role key. Never returns this client to a caller.
+ */
+export const supabaseAuth: SupabaseClient = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
+});
+
+/**
  * Verifies a caller-supplied Supabase access token and returns the associated
  * user when it is valid and unexpired.
  *

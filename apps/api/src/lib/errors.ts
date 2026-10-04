@@ -57,4 +57,15 @@ export class AppError extends Error {
   static internal(message = 'An unexpected error occurred. Please try again.'): AppError {
     return new AppError({ code: ERROR_CODES.INTERNAL_ERROR, message, status: 500, expose: true });
   }
+
+  /**
+   * Builds an error with a specific contract code and status.
+   *
+   * Used where the meaning matters to a client branching on `code`, such as a
+   * rejected one-time sign-in code, which is neither a schema problem nor an
+   * authentication failure of an existing session.
+   */
+  static coded(code: ErrorCode, message: string, status: number): AppError {
+    return new AppError({ code, message, status });
+  }
 }
