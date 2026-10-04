@@ -34,6 +34,27 @@ This document defines the phased development plan, milestones, and delivery time
   * Build lightweight mobile web client verification page ("Yes/No" confirmation page).
   * Implement the Trust & Anti-Fraud Engine: Graph Centrality collusion filter, GPS proximity checks, and AI-fake media detection.
 
+### Status as of 2026-10-04
+
+| Task | State |
+| --- | --- |
+| Mobile web confirmation page | **Complete.** `/verify/[token]`, verified through SSR and browser-equivalent HTTP. Not yet clicked in a real browser — no headless browser in this environment. |
+| Graph centrality collusion filter | **Complete.** Verifier identified by salted phone hash; network-diversity weighting with concentration and mutual-endorsement findings. Exercised live: five endorsements build a history, a sixth off-site confirmation is independently blocked. |
+| GPS proximity checks | **Complete.** Haversine distance with `within` / `outside` / `unavailable`. A missing location is scored neutral, never as a failure, so withholding data cannot defeat the check. |
+| Media detection | **Delivered as provenance signals, not AI-fake detection.** See below. |
+| Twilio dispatch | **Adapter built, not yet run against Twilio.** Implemented with `fetch` against the Messages REST API — no vendor SDK added. The provider interface, the log adapter, and the full dispatch path are verified live; no Twilio account exists yet, so the Twilio adapter itself is unexercised. WhatsApp was dropped: Twilio reaches WhatsApp through the same Messages endpoint, so a second channel would add no capability. |
+
+**AI-fake media detection was deliberately not implemented as specified.** The specification asks a
+detector to read camera signatures and timestamps from files that Phase 2 exists to destroy, and
+no metadata check can reliably distinguish a generated image from a real one. What is delivered is
+three provenance booleans derived while the metadata still exists, then discarded — no make, model,
+serial, or timestamp is retained. The full reasoning, and why the specification had to be
+corrected in `doc/01` and `doc/02`, is recorded in `doc/13` E-019. `metadata_status` remains
+`pending` and `flagged_ai_fake` is written nowhere.
+
+**Outstanding before Phase 3 can be called done:** a Twilio account and credentials, verified
+end-to-end for a real delivered SMS.
+
 ---
 
 ## 5. Phase 4: Employer & Training Provider Modules (Weeks 7 - 8)

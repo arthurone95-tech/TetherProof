@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { VERIFICATION_RESPONSES } from '@tetherproof/shared';
+import { gpsSchema } from '../../lib/geo.js';
 
 export const tokenParamSchema = z.object({
   token: z
@@ -13,11 +14,15 @@ export const confirmSchema = z.object({
   response: z.enum(VERIFICATION_RESPONSES).refine((value) => value !== 'none', {
     message: 'Response must be either confirmed or rejected.',
   }),
-  verifierGps: z
-    .string()
-    .trim()
-    .regex(/^-?\d{1,3}(\.\d+)?,-?\d{1,3}(\.\d+)?$/, 'Location coordinates are malformed.')
-    .optional(),
+  /**
+   * Where the client was when they tapped.
+   *
+   * Uses the same validator as the submission endpoint. It previously had its own
+   * copy that checked only the `lat,lon` shape, so `999,999` was accepted here
+   * while being rejected on submission. One laxer endpoint is enough to poison
+   * the proximity calculation this value feeds.
+   */
+  verifierGps: gpsSchema.optional(),
 });
 
 export type ConfirmInput = z.infer<typeof confirmSchema>;

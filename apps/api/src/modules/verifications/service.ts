@@ -1,8 +1,18 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull, ne } from 'drizzle-orm';
 import { ERROR_CODES } from '@tetherproof/shared';
+import { env } from '../../config/env.js';
 import { db } from '../../db/client.js';
 import { capabilityBlocks, verifications, workProofLogs } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
+import { assessCollusion, type Endorsement } from '../../lib/fraud/collusion.js';
+import { evaluateProximity } from '../../lib/fraud/proximity.js';
+import {
+  assertUsableThresholds,
+  assess,
+  proofStatusFor,
+  type FraudAssessment,
+} from '../../lib/fraud/score.js';
+import type { MediaSignals } from '../../lib/media-scrub.js';
 import { hashVerificationToken } from '../../lib/token.js';
 import type { ConfirmInput } from './schemas.js';
 
@@ -28,9 +38,12 @@ async function loadByTokenHash(tokenHash: string) {
       response: verifications.response,
       expiresAt: verifications.expiresAt,
       completedAt: verifications.completedAt,
+      verifierPhoneHash: verifications.verifierPhoneHash,
       workProofId: workProofLogs.id,
-      description: workProofLogs.description,
       workerId: workProofLogs.workerId,
+      description: workProofLogs.description,
+      submissionGps: workProofLogs.submissionGps,
+      createdAt: workProofLogs.createdAt,
       skillTag: capabilityBlocks.skillTag,
     })
     .from(verifications)
@@ -94,7 +107,117 @@ export async function getVerificationSummary(rawToken: string): Promise<Verifica
 }
 
 /**
- * Records the client's answer.
+ * Every completed endorsement by an identifiable verifier, except the one being
+ * scored.
+ *
+ * The exclusion is load-bearing. Including the row under assessment would make
+ * a verifier's very first approval look like a second one, which is exactly the
+ * signal the isolated-verifier check looks for, so every new verifier would be
+ * treated as a returning one.
+ *
+ * Bounded deliberately. A growing network would otherwise mean an unbounded read
+ * on the hot path of every confirmation, and the weights only distinguish "a few"
+ * from "many" anyway.
+ */
+const COLLUSION_HISTORY_LIMIT = 1000;
+
+async function loadEndorsementHistory(excludeVerificationId: string): Promise<Endorsement[]> {
+  const rows = await db
+    .select({
+      workerId: workProofLogs.workerId,
+      verifierKey: verifications.verifierPhoneHash,
+    })
+    .from(verifications)
+    .innerJoin(workProofLogs, eq(verifications.workProofId, workProofLogs.id))
+    .where(
+      and(
+        isNotNull(verifications.verifierPhoneHash),
+        // Rejections are excluded: a client saying work did not happen is not an
+        // endorsement, and letting them count as one would inflate a colluding
+        // verifier's apparent reach.
+        eq(verifications.response, 'confirmed'),
+        ne(verifications.id, excludeVerificationId),
+      ),
+    )
+    .limit(COLLUSION_HISTORY_LIMIT);
+
+  return rows.map((row) => ({ workerId: row.workerId, verifierKey: row.verifierKey }));
+}
+
+/** Provenance signals for a proof, or null if the row predates this feature. */
+async function loadMediaSignals(workProofId: string): Promise<MediaSignals | null> {
+  const rows = await db
+    .select({
+      evaluated: workProofLogs.mediaSignalEvaluated,
+      hasCameraSignature: workProofLogs.mediaHasCameraSignature,
+      timestampPlausible: workProofLogs.mediaTimestampPlausible,
+      encoderKnown: workProofLogs.mediaEncoderKnown,
+    })
+    .from(workProofLogs)
+    .where(eq(workProofLogs.id, workProofId))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row?.evaluated) return null;
+
+  return {
+    hasCameraSignature: row.hasCameraSignature,
+    timestampPlausible: row.timestampPlausible,
+    encoderKnown: row.encoderKnown,
+  };
+}
+
+/**
+ * Runs the trust engine over one completed endorsement.
+ *
+ * Split out from `submitVerification` because it is pure of the write: the score
+ * is computed first, and only then applied. The order is what stops a
+ * `fraud_blocked` verdict from overwriting itself with `verified` a moment later.
+ */
+async function evaluateTrust(
+  record: NonNullable<LoadedVerification>,
+  response: 'confirmed' | 'rejected',
+  verifierGps: string | null,
+): Promise<FraudAssessment> {
+  const thresholds = {
+    proximityKm: env.FRAUD_PROXIMITY_KM,
+    blockBelow: env.FRAUD_BLOCK_BELOW,
+  };
+  assertUsableThresholds(thresholds);
+
+  const [history, media] = await Promise.all([
+    loadEndorsementHistory(record.id),
+    loadMediaSignals(record.workProofId),
+  ]);
+
+  const proximity = evaluateProximity(
+    record.submissionGps,
+    verifierGps,
+    thresholds.proximityKm,
+  );
+
+  const collusion = assessCollusion(
+    { workerId: record.workerId, verifierKey: record.verifierPhoneHash },
+    history,
+  );
+
+  return assess(
+    {
+      response,
+      proximity,
+      collusion,
+      media,
+      // The capture timestamp was discarded by the scrubber, so the engine cannot
+      // re-derive this. The provenance column already records the verdict as a
+      // boolean, and an implausible capture time is the case that matters.
+      captureTimeConflict: media?.timestampPlausible === false,
+    },
+    thresholds,
+  );
+}
+
+/**
+ * Records the client's answer, scores it, and applies the verdict.
  *
  * The transition from `none` to a terminal response happens inside a single
  * conditional UPDATE, so two simultaneous taps cannot both be accepted.
@@ -102,18 +225,37 @@ export async function getVerificationSummary(rawToken: string): Promise<Verifica
 export async function submitVerification(
   rawToken: string,
   input: ConfirmInput,
-): Promise<{ status: 'confirmed' | 'rejected'; skillTag: string | null }> {
+): Promise<{
+  status: 'confirmed' | 'rejected';
+  skillTag: string | null;
+  fraudScore: number | null;
+  verificationStatus: 'verified' | 'rejected' | 'fraud_blocked';
+}> {
   const tokenHash = hashVerificationToken(rawToken);
   const record = await loadByTokenHash(tokenHash);
   assertUsable(record);
+
+  const response = input.response;
+  const verifierGps = input.verifierGps ?? null;
+
+  // Scored before the write, so the verdict is known when the proof status is
+  // set. Reversing these two would write `verified` and then immediately
+  // overwrite it, leaving a blocked proof counted as verified in between.
+  const assessment = await evaluateTrust(record, response, verifierGps);
 
   const completedAt = new Date();
   const updated = await db
     .update(verifications)
     .set({
-      response: input.response,
-      verifierGps: input.verifierGps ?? null,
+      response,
+      verifierGps,
       completedAt,
+      proximityKm: assessment.detail.proximity
+        ? (assessment.detail.proximity as { distanceKm: number | null }).distanceKm
+        : null,
+      proximityStatus: proximityStatusFrom(assessment),
+      fraudScore: assessment.score,
+      fraudScoreDetail: assessment.detail,
     })
     .where(and(eq(verifications.tokenHash, tokenHash), eq(verifications.response, 'none')))
     .returning({ id: verifications.id });
@@ -126,10 +268,28 @@ export async function submitVerification(
     });
   }
 
+  // A rejection is reported as a rejection. A confirmed endorsement that trips
+  // the gate is reported as confirmed to the client, because the client did
+  // confirm it, but the proof is blocked from counting as verified.
+  const proofStatus =
+    response === 'rejected' ? 'rejected' : proofStatusFor(assessment);
+
   await db
     .update(workProofLogs)
-    .set({ verificationStatus: input.response === 'confirmed' ? 'verified' : 'rejected' })
+    .set({ verificationStatus: proofStatus })
     .where(eq(workProofLogs.id, record.workProofId));
 
-  return { status: input.response, skillTag: record.skillTag };
+  return {
+    status: response,
+    skillTag: record.skillTag,
+    fraudScore: assessment.score,
+    verificationStatus: proofStatus,
+  };
+}
+
+/** Pulls the proximity enum value back out of the stored detail blob. */
+function proximityStatusFrom(assessment: FraudAssessment): 'within' | 'outside' | 'unavailable' {
+  const detail = assessment.detail.proximity as { status?: string } | undefined;
+  if (detail?.status === 'within' || detail?.status === 'outside') return detail.status;
+  return 'unavailable';
 }

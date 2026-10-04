@@ -44,21 +44,41 @@ Stores individual task completions, media proofs, and telemetry data.
 * `capability_block_id` (UUID, Foreign Key referencing `capability_blocks.id`)
 * `description` (TEXT)
 * `media_url` (VARCHAR, Secure object storage path with stripped PII)
-* `metadata_status` (ENUM: `pending`, `valid`, `flagged_ai_fake`)
+* `metadata_status` (ENUM: `pending`, `valid`, `flagged_ai_fake`. **Only `pending` is ever written.** The other two values exist in the type but no code path sets them, because detecting synthetic media is not implemented and is not claimed. The provenance signals below are consistency checks, not AI-generation detection)
+* `media_signal_evaluated` (BOOLEAN, False when the file could not be examined for provenance)
+* `media_has_camera_signature` (BOOLEAN, True when the discarded EXIF named a capture device)
+* `media_timestamp_plausible` (BOOLEAN, True when the discarded capture time was consistent with the submission)
+* `media_encoder_known` (BOOLEAN, True when the container is structurally what its declared type claims)
 * `submission_gps` (VARCHAR)
 * `verification_status` (ENUM: `pending`, `verified`, `rejected`, `fraud_blocked`)
 * `created_at` (TIMESTAMP)
 
+The four `media_*` columns are booleans only, derived from metadata the scrubber destroyed
+before storage. There is deliberately no column anywhere for a camera make, model, serial
+number, or capture time — that absence is what lets a provenance signal exist without
+weakening the retention promise in the security documentation. A `NULL` means "not
+applicable or not determinable", which is the correct value for audio; see `doc/13` E-019.
+
 ### E. Verifications Table (`verifications`)
-Stores external client/supervisor confirmation records linked via SMS/WhatsApp tokens.
+Stores external client/supervisor confirmation records linked via SMS tokens.
 * `id` (UUID, Primary Key)
 * `work_proof_id` (UUID, Foreign Key referencing `work_proof_logs.id`)
-* `verifier_phone` (VARCHAR)
+* `verifier_phone_hash` (VARCHAR, Salted SHA-256 of the client's phone number. The number itself is never stored. Null when the worker supplied none, which the engine reads as identity-unknown and scores neutrally)
 * `token_hash` (VARCHAR, Unique SHA-256 hash of the single-use verification token; the raw token is returned to the worker once at generation time and is never stored)
 * `response` (ENUM: `none`, `confirmed`, `rejected`)
-* `verifier_gps` (VARCHAR, For location proximity check)
-* `fraud_score` (FLOAT, Calculated by graph centrality engine)
+* `verifier_gps` (VARCHAR, Where the client was when they tapped; feeds the proximity check)
+* `proximity_km` (FLOAT, Great-circle distance between the submission point and the tap. Null when either side supplied no location)
+* `proximity_status` (ENUM: `within`, `outside`, `unavailable`)
+* `fraud_score` (FLOAT, 0..1. Null for a rejection, which is not scored)
+* `fraud_score_detail` (JSONB, Per-signal breakdown behind `fraud_score`, so a blocked proof is explainable from stored data rather than from server logs)
+* `dispatch_status` (VARCHAR, `sent`, `failed`, or `not_attempted`)
+* `dispatch_detail` (VARCHAR, Short non-identifying reason a dispatch did not succeed)
+* `expires_at` (TIMESTAMP)
 * `completed_at` (TIMESTAMP)
+
+`unavailable` is an absence of evidence and is never scored as either a pass or a failure.
+It is kept as a distinct enum value rather than folded into `outside` so that a client who
+declined to share a location is never conflated with one at the job site.
 
 ### F. Employer Capability Specs Table (`employer_specs`)
 Stores job requirements created by employers instead of traditional job descriptions.

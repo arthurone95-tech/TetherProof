@@ -33,6 +33,21 @@ This document outlines the cloud hosting environment, infrastructure topology, d
 * **Prohibition:** Never hardcode sensitive secrets in configuration files or commit `.env` files to version control.
 * **Key Separation:** The Supabase anon key is public configuration and may be shipped to the browser. The service-role key bypasses Row Level Security and must exist only in the API server environment, never in the client bundle.
 
+### 4.1 Trust engine and messaging variables
+
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `VERIFIER_PHONE_SALT` | **Yes, in production** | Salt for the verifier phone hash. At least 16 characters. The process **refuses to start** without it when `NODE_ENV=production`, because a generated salt would change on every restart and previously hashed numbers would stop matching — quietly resetting the collusion history with nothing in the logs to say why. Outside production a random per-process salt is used with a warning. A default is deliberately not provided: a committed salt is a published salt, and phone numbers have too little entropy for an unsalted digest to be protective. |
+| `WEB_BASE_URL` | For SMS dispatch | Public origin of the web client, used to build the link a client taps. Left unset, dispatch is skipped and the worker receives the link in the API response instead. |
+| `FRAUD_PROXIMITY_KM` | No (default `2`) | Distance still treated as the same site. |
+| `FRAUD_BLOCK_BELOW` | No (default `0.25`) | Score at or below which a confirmed proof is marked `fraud_blocked`. Validated at startup to fall strictly between 0 and 1. |
+| `MESSAGING_PROVIDER` | No (default `log`) | `twilio` sends real SMS. `log` writes the link to the server log and sends nothing, which is the safe default. |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | If `twilio` | Setting `MESSAGING_PROVIDER=twilio` without all three **refuses to start**, rather than looking healthy while quietly never sending. |
+
+Keep `FRAUD_BLOCK_BELOW` generous. A false block costs an honest worker a real verification, which
+is a worse outcome than letting a mediocre case through; the gate should only fire when several
+signals agree. Recalibrate it once real usage data exists.
+
 ---
 
 ## 5. Monitoring, Logging, and Reliability

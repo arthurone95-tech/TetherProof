@@ -315,17 +315,22 @@ async function main() {
         );
       }
 
-      // Scoped to this run's worker. These deletes used to be unscoped, which
-      // would have destroyed a real member's proofs, capability blocks, and
-      // verifications if the suite were ever run against live data.
-      if (workerId) {
+      // Scoped to the workers THIS RUN created, tracked by id. These deletes
+      // used to be unscoped, which would have destroyed a real member's proofs,
+      // capability blocks, and verifications if the suite were ever run against
+      // live data. They then narrowed too far, to a single worker: the `--web`
+      // path creates a second one, and scoping to only the first left its rows
+      // behind, which made the auth delete fail on a surviving foreign key and
+      // leaked an account on every web run.
+      const owned = createdUsers.length > 0 ? createdUsers : [workerId].filter(Boolean);
+      if (owned.length > 0) {
         await pool.query(
           `delete from public.verifications where work_proof_id in
-             (select id from public.work_proof_logs where worker_id = $1)`,
-          [workerId],
+             (select id from public.work_proof_logs where worker_id = any($1::uuid[]))`,
+          [owned],
         );
-        await pool.query('delete from public.work_proof_logs where worker_id = $1', [workerId]);
-        await pool.query('delete from public.capability_blocks where worker_id = $1', [workerId]);
+        await pool.query('delete from public.work_proof_logs where worker_id = any($1::uuid[])', [owned]);
+        await pool.query('delete from public.capability_blocks where worker_id = any($1::uuid[])', [owned]);
       }
 
       for (const id of createdUsers) {
@@ -333,16 +338,42 @@ async function main() {
         if (del.error) console.log(`   warning: could not delete ${id}: ${del.error.message}`);
       }
 
-      const usersLeft = (await pool.query('select count(*)::int n from auth.users')).rows[0].n;
+      // Scoped to the test address pattern rather than counting every row in the
+      // table. Counting all of `auth.users` fails for the wrong reason the moment
+      // the project has a real member, which trains you to ignore this check.
+      const usersLeft = (
+        await pool.query(`select email from auth.users where email ~ '^(smoke|web-smoke)\\.@'`)
+      ).rows.length;
       check('test accounts removed from auth.users', usersLeft === 0, `${usersLeft} rows`);
 
       const { rows: proofRows } = await pool.query(
-        workerId
-          ? 'select count(*)::int n from public.work_proof_logs where worker_id = $1'
-          : 'select count(*)::int n from public.work_proof_logs',
-        workerId ? [workerId] : [],
+        `select count(*)::int n from public.work_proof_logs
+          where worker_id = any($1::uuid[])`,
+        [owned.length > 0 ? owned : ['00000000-0000-0000-0000-000000000000']],
       );
       check('test rows removed from the application tables', proofRows[0].n === 0, `${proofRows[0].n} rows`);
+
+      // The check above is scoped to the workers this run created, so it cannot see a
+      // row belonging to a worker the harness forgot to track. These catch
+      // exactly that, but without false-alarming on real data: a row is an
+      // orphan only if its owner no longer exists in `auth.users`. A real
+      // member's rows always have a live owner, so they are never counted.
+      for (const t of ['work_proof_logs', 'capability_blocks']) {
+        const { rows } = await pool.query(
+          `select count(*)::int n from public.${t} t
+             where not exists (select 1 from auth.users u where u.id = t.worker_id)`,
+        );
+        check(`no orphaned rows left in public.${t}`, rows[0].n === 0, `${rows[0].n} rows`);
+      }
+      const { rows: orphanVerifications } = await pool.query(
+        `select count(*)::int n from public.verifications v
+           where not exists (select 1 from public.work_proof_logs t where t.id = v.work_proof_id)`,
+      );
+      check(
+        'no orphaned rows left in public.verifications',
+        orphanVerifications[0].n === 0,
+        `${orphanVerifications[0].n} rows`,
+      );
 
       const { data: bucketLeft } = await admin.storage
         .from(process.env.STORAGE_PROOFS_BUCKET || 'work-proofs')
@@ -801,10 +832,15 @@ async function main() {
 
       rawToken = randomBytes(32).toString('base64url');
       const tokenHash = createHash('sha256').update(rawToken, 'utf8').digest('hex');
+      // A salted hash, as the API now writes. The smoke script cannot compute the
+      // real one without the operator's salt, so this row carries a
+      // well-formed placeholder: the point of the check below is the column's
+      // shape, and a real salted hash is verified by the submission path further
+      // down, which goes through the API.
       await pool.query(
-        `insert into public.verifications (work_proof_id, verifier_phone, token_hash, expires_at)
-         values ($1,'+233241234567',$2, now() + interval '3 days')`,
-        [proof.id, tokenHash],
+        `insert into public.verifications (work_proof_id, verifier_phone_hash, token_hash, expires_at)
+         values ($1,$2,$3, now() + interval '3 days')`,
+        [proof.id, 'a'.repeat(64), tokenHash],
       );
 
       const stored = (
@@ -838,11 +874,327 @@ async function main() {
       ).rows[0];
       check('confirmation persisted and proof marked verified', row?.response === 'confirmed' && row?.proof_status === 'verified', JSON.stringify(row));
 
+      // The proximity check ran and recorded a distance, not just a status.
+      const proximityRow = (
+        await pool.query(
+          `select proximity_status, proximity_km, fraud_score, fraud_score_detail
+             from public.verifications where work_proof_id=$1`,
+          [proof.id],
+        )
+      ).rows[0];
+      check(
+        'a near-site tap is recorded as within the threshold',
+        proximityRow?.proximity_status === 'within',
+        String(proximityRow?.proximity_status),
+      );
+      check(
+        'the distance between the two points is recorded',
+        typeof proximityRow?.proximity_km === 'number' && proximityRow.proximity_km < 2,
+        `${proximityRow?.proximity_km} km`,
+      );
+      check(
+        'a clean confirmation scores above the block threshold',
+        typeof proximityRow?.fraud_score === 'number' && proximityRow.fraud_score > 0.25,
+        String(proximityRow?.fraud_score),
+      );
+      check(
+        'the score is explainable from stored data, not just logs',
+        Boolean(proximityRow?.fraud_score_detail?.proximity)
+        && Boolean(proximityRow?.fraud_score_detail?.collusion)
+        && proximityRow?.fraud_score_detail?.proximity?.distanceKm !== undefined,
+        JSON.stringify(proximityRow?.fraud_score_detail ?? {}).slice(0, 160),
+      );
+
       const replay = await api('POST', `/verifications/${rawToken}`, { body: { response: 'confirmed' } });
       check('replayed link is refused', replay.status === 409, `status ${replay.status}`);
       check(
         'invalid response value is rejected',
         [400, 409].includes((await api('POST', `/verifications/${rawToken}`, { body: { response: 'maybe' } })).status),
+      );
+
+      // Proves the fix for the missing range check. Before, the confirm endpoint
+      // validated only the `lat,lon` shape, so this value was accepted here while
+      // being rejected on submission. One laxer endpoint is enough to poison the
+      // proximity calculation.
+      const badGpsBlock = (
+        await pool.query(
+          `insert into public.work_proof_logs (worker_id, capability_block_id, description, metadata_status, submission_gps)
+           select worker_id, capability_block_id, 'Range check fixture.', 'valid', '5.6,-0.18'
+             from public.work_proof_logs where id=$1 returning id`,
+          [proof.id],
+        )
+      ).rows[0];
+      const badGpsToken = randomBytes(32).toString('base64url');
+      await pool.query(
+        `insert into public.verifications (work_proof_id, token_hash, expires_at)
+         values ($1,$2, now() + interval '3 days')`,
+        [
+          badGpsBlock.id,
+          createHash('sha256').update(badGpsToken, 'utf8').digest('hex'),
+        ],
+      );
+      check(
+        'out-of-range coordinates are refused on the confirm endpoint too',
+        (await api('POST', `/verifications/${badGpsToken}`, {
+          body: { response: 'confirmed', verifierGps: '999,999' },
+        })).status === 400,
+      );
+    }
+
+    // ---------------------------------------------------------------------
+    section('TRUST AND ANTI-FRAUD ENGINE');
+    // ---------------------------------------------------------------------
+    // The collusion graph is only meaningful if real endorsements build it up, so
+    // this drives the whole loop through the public API rather than writing rows
+    // directly. Each submission is confirmed at a real distance, which is what
+    // gives the engine a history to weigh the next one against.
+    if (userId && token) {
+      // A phone number used nowhere else in the run, so its hash is unique to
+      // this verifier and the history below belongs to it alone.
+      const RING_PHONE = '+233550000001';
+      const ACCRA = '5.6037,-0.1870';
+      const LONDON = '51.5074,-0.1278';
+
+      // Declared out here because the privacy checks below read it after the
+      // block that fills it in has closed.
+      let offsiteRow = null;
+      let dispatchUnexpected = false;
+
+      /** Submits a proof and returns the body, or null if it was refused. */
+      const submit = async (skillTag, overrides = {}) => {
+        const result = await uploadProof(
+          {
+            description: `Verified job site attendance for ${skillTag}, logged by the site supervisor.`,
+            skillTag,
+            submissionGps: ACCRA,
+            verifierPhone: RING_PHONE,
+            ...overrides,
+          },
+          { field: 'media_file', filename: 'p.jpg', contentType: 'image/jpeg', buffer: gpsJpeg() },
+          token,
+        );
+        return result.status === 201 ? unwrap(result.json) : null;
+      };
+
+      // Five confirmations by one verifier, all for one worker, all on site. This
+      // is what a site supervisor legitimately looks like, and it is also the
+      // shape a ring takes, so it is the only way to reach the engine's
+      // concentration check.
+      const ringProofs = [];
+      for (let i = 0; i < 5; i += 1) {
+        const body = await submit(`Boiler Servicing ${i}`);
+        if (!body) break;
+
+        if (body.verificationLinkSent !== false) {
+          dispatchUnexpected = true;
+        }
+
+        const confirmed = await api('POST', `/verifications/${body.verificationToken}`, {
+          body: { response: 'confirmed', verifierGps: '5.6040,-0.1871' },
+        });
+        if (confirmed.status === 200) ringProofs.push(body.proofId);
+      }
+      check('five endorsements build a history for one verifier', ringProofs.length === 5, `${ringProofs.length} of 5`);
+
+      // A sixth confirmation by the same verifier, this one from another continent.
+      const offsite = await submit('Boiler Servicing offsite');
+      check('a sixth proof is accepted', offsite !== null);
+
+      if (offsite) {
+        const offsiteConfirm = await api('POST', `/verifications/${offsite.verificationToken}`, {
+          body: { response: 'confirmed', verifierGps: LONDON },
+        });
+        check('an off-site confirmation is still accepted as a response', offsiteConfirm.status === 200, `status ${offsiteConfirm.status}`);
+
+        offsiteRow = (
+          await pool.query(
+            `select v.proximity_status, v.proximity_km, v.fraud_score, v.fraud_score_detail,
+                    (select verification_status from public.work_proof_logs where id=$1) as proof_status
+               from public.verifications v where v.work_proof_id=$1`,
+            [offsite.proofId],
+          )
+        ).rows[0];
+
+        check(
+          'a confirmation from another continent is recorded as outside the threshold',
+          offsiteRow?.proximity_status === 'outside',
+          String(offsiteRow?.proximity_status),
+        );
+        check(
+          'the recorded distance is a real one, not null',
+          typeof offsiteRow?.proximity_km === 'number' && offsiteRow.proximity_km > 1000,
+          `${offsiteRow?.proximity_km} km`,
+        );
+        check(
+          'the concentration of this verifier is detected',
+          offsiteRow?.fraud_score_detail?.collusion?.findings?.some((f) => f.includes('unusually large share')) === true,
+          JSON.stringify(offsiteRow?.fraud_score_detail?.collusion?.findings ?? []),
+        );
+        check(
+          'the score falls below the block threshold',
+          typeof offsiteRow?.fraud_score === 'number' && offsiteRow.fraud_score <= 0.25,
+          String(offsiteRow?.fraud_score),
+        );
+        check(
+          'the proof is blocked from counting as verified',
+          offsiteRow?.proof_status === 'fraud_blocked',
+          String(offsiteRow?.proof_status),
+        );
+
+        // The client is told what actually happened: they did confirm it.
+        check(
+          'the client is told their response was recorded as a confirmation',
+          unwrap(offsiteConfirm.json)?.status === 'confirmed',
+          JSON.stringify(offsiteConfirm.json).slice(0, 120),
+        );
+      }
+
+      // A client who declines to share a location. Absence of evidence must not
+      // read as a finding, or anyone could defeat the engine by withholding data.
+      const noLocation = await submit('Boiler Servicing no location');
+      if (noLocation) {
+        await api('POST', `/verifications/${noLocation.verificationToken}`, {
+          body: { response: 'confirmed' },
+        });
+        const row = (
+          await pool.query(
+            `select v.proximity_status, v.proximity_km, v.fraud_score, v.fraud_score_detail,
+                    (select verification_status from public.work_proof_logs where id=$1) as proof_status
+               from public.verifications v where v.work_proof_id=$1`,
+            [noLocation.proofId],
+          )
+        ).rows[0];
+        check('a client who shares no location is unavailable, not failing', row?.proximity_status === 'unavailable', String(row?.proximity_status));
+        check('unavailable records no distance', row?.proximity_km === null, String(row?.proximity_km));
+        check(
+          'withholding a location does not block the proof',
+          row?.proof_status === 'verified',
+          String(row?.proof_status),
+        );
+        check(
+          'the reason it was unavailable is recorded for explanation',
+          String(row?.fraud_score_detail?.proximity?.status ?? '') === 'unavailable',
+          JSON.stringify(row?.fraud_score_detail?.proximity ?? {}).slice(0, 120),
+        );
+      }
+
+      // A rejection is a client saying the work did not happen. That is not
+      // fraud, so it must never be scored or blocked however bad the other
+      // signals look.
+      const rejected = await submit('Boiler Servicing rejected');
+      if (rejected) {
+        await api('POST', `/verifications/${rejected.verificationToken}`, {
+          body: { response: 'rejected', verifierGps: LONDON },
+        });
+        const row = (
+          await pool.query(
+            `select v.fraud_score, v.fraud_score_detail,
+                    (select verification_status from public.work_proof_logs where id=$1) as proof_status
+               from public.verifications v where v.work_proof_id=$1`,
+            [rejected.proofId],
+          )
+        ).rows[0];
+        check('a rejection is never scored', row?.fraud_score === null, String(row?.fraud_score));
+        check('a rejection is never marked fraud_blocked', row?.proof_status === 'rejected', String(row?.proof_status));
+      }
+
+      // Media provenance: what the scrubber derived must be on the row as
+      // booleans, and nothing identifying beside it.
+      const signalRow = (
+        await pool.query(
+          `select media_signal_evaluated, media_has_camera_signature,
+                  media_timestamp_plausible, media_encoder_known
+             from public.work_proof_logs where id=$1`,
+          [offsite?.proofId ?? ringProofs[0]],
+        )
+      ).rows[0];
+      check('provenance signals are recorded on the proof', signalRow?.media_signal_evaluated === true, String(signalRow?.media_signal_evaluated));
+      check(
+        'the container check found a structurally sound file',
+        signalRow?.media_encoder_known === true,
+        String(signalRow?.media_encoder_known),
+      );
+      check(
+        'the GPS-only fixture claims no capture device',
+        signalRow?.media_has_camera_signature === false,
+        String(signalRow?.media_has_camera_signature),
+      );
+      check(
+        'a file with no capture time makes no timestamp claim',
+        signalRow?.media_timestamp_plausible === null,
+        String(signalRow?.media_timestamp_plausible),
+      );
+
+      // Dispatch outcome must be visible, so a worker whose link never arrived is
+      // not left guessing.
+      const dispatchRow = (
+        await pool.query(
+          'select dispatch_status from public.verifications where work_proof_id = $1',
+          [offsite?.proofId ?? ringProofs[0]],
+        )
+      ).rows[0];
+      check(
+        'the dispatch outcome is recorded rather than left blank',
+        ['sent', 'failed', 'not_attempted'].includes(dispatchRow?.dispatch_status),
+        String(dispatchRow?.dispatch_status),
+      );
+      check(
+        'no link claims to have been sent without a provider',
+        dispatchUnexpected === false,
+        dispatchUnexpected ? 'a link was reported sent' : '',
+      );
+
+      // These submissions stored real objects in the bucket. They have to be tracked
+      // for removal, or the stray-object check at the end fails on media this run
+      // created and nobody has cleaned up.
+      const { rows: engineMedia } = await pool.query(
+        'select media_url from public.work_proof_logs where worker_id = $1 and media_url is not null',
+        [userId],
+      );
+      for (const m of engineMedia) {
+        if (!storedPaths.includes(m.media_url)) storedPaths.push(m.media_url);
+      }
+      check(
+        'every proof this run submitted has its media tracked for removal',
+        engineMedia.every((m) => storedPaths.includes(m.media_url)),
+        `${engineMedia.length} object(s)`,
+      );
+
+      // The privacy promise, checked against the live table rather than the code.
+      const phoneColumns = await pool.query(
+        `select column_name from information_schema.columns
+          where table_schema='public' and table_name='verifications'
+            and (column_name like '%phone%' or column_name like '%mobile%' or column_name like '%tel%')`,
+      );
+      check(
+        'no plaintext phone column remains on verifications',
+        phoneColumns.rows.length === 1 && phoneColumns.rows[0].column_name === 'verifier_phone_hash',
+        phoneColumns.rows.map((r) => r.column_name).join(', '),
+      );
+
+      const hashes = await pool.query(
+        `select distinct verifier_phone_hash from public.verifications
+          where work_proof_id = any($1::uuid[]) and verifier_phone_hash is not null`,
+        [ringProofs],
+      );
+      check(
+        'every endorsement by this verifier produced the same hash',
+        hashes.rows.length === 1 && /^[a-f0-9]{64}$/.test(hashes.rows[0]?.verifier_phone_hash ?? ''),
+        `${hashes.rows.length} distinct value(s)`,
+      );
+
+      // The raw number must not be recoverable from any column in the row.
+      const raw = (
+        await pool.query('select row_to_json(v)::text as j from public.verifications v where work_proof_id = any($1::uuid[]) limit 1', [ringProofs])
+      ).rows[0]?.j ?? '';
+      check(
+        'the verifier phone number appears nowhere in the stored row',
+        !raw.includes('233550000001'),
+        raw ? `${raw.length} bytes inspected` : 'no row to inspect',
+      );
+      check(
+        'the phone number appears nowhere in the fraud score breakdown',
+        !JSON.stringify(offsiteRow?.fraud_score_detail ?? {}).includes('233550000001'),
       );
     }
 
@@ -920,10 +1272,12 @@ async function runWebChecks({ pool, admin, createdUsers }) {
     )
   ).rows[0];
   const rawToken = randomBytes(32).toString('base64url');
+  // A well-formed placeholder hash, not a real one: this fixture needs a token,
+  // and the API cannot be consulted for a salt it holds itself. Shape only.
   await pool.query(
-    `insert into public.verifications (work_proof_id, verifier_phone, token_hash, expires_at)
-     values ($1,'+233241234567',$2, now() + interval '3 days')`,
-    [proof.id, createHash('sha256').update(rawToken, 'utf8').digest('hex')],
+    `insert into public.verifications (work_proof_id, verifier_phone_hash, token_hash, expires_at)
+     values ($1,$2,$3, now() + interval '3 days')`,
+    [proof.id, 'b'.repeat(64), createHash('sha256').update(rawToken, 'utf8').digest('hex')],
   );
 
   const server = spawn(process.execPath, [resolveNextBin(), 'start', '-p', String(WEB_PORT)], {

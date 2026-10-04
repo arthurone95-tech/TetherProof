@@ -22,7 +22,8 @@
     "db:migrate": "npm run db:migrate --workspace @tetherproof/api",
     "storage:ensure-bucket": "npm run storage:ensure-bucket --workspace @tetherproof/api",
     "smoke": "node scripts/smoke.mjs",
-    "scrub-check": "tsx scripts/scrub-check.ts"
+    "scrub-check": "tsx scripts/scrub-check.ts",
+    "fraud-check": "tsx scripts/fraud-check.ts"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

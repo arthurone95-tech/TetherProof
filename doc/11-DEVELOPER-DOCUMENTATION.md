@@ -44,8 +44,13 @@ This document provides technical instructions for developers and AI agents setti
   * `npm run smoke -- --live` — API, database, Auth trigger, and Row Level Security.
   * `npm run smoke -- --live --web` — additionally the client confirmation page and the browser CORS path. Serves the web app on the origin listed in `CORS_ORIGINS`, so free that port first.
   * `--live` is mandatory and the script prompts before touching anything: it creates and deletes real accounts. Only ever point it at a development Supabase project, never production. In CI add `--yes`.
+  * **The smoke suite runs `apps/api/dist/index.js`, not `src`.** A source change is not under test until `npm run build` has been run. This has already caused a full run to report 20 failures against code that typechecked cleanly.
+  * **`--web` derives its port from the first entry in `CORS_ORIGINS`**, because the CORS assertions are meant to exercise the origin the API actually trusts rather than an invented host. If that port is busy the run aborts at the start of the web section. Free it, or point `CORS_ORIGINS` at a free port for the run — the API child inherits the same value, so the assertions stay meaningful.
+  * Cleanup deletes by owner, never unscoped, and the leak checks are scoped by predicate rather than by the run's own id list. If you add a fixture that inserts application rows, register the owning account in `createdUsers` or the orphan checks will fail — that is the intended signal, not a false alarm.
+  * The trust-engine section builds a genuine collusion history by submitting and confirming five proofs through the public API before testing the sixth. It needs `VERIFIER_PHONE_SALT` set, or the API falls back to a per-process salt and the history still works within a run — but set it so results are reproducible.
 * **Unit Tests:** Execute unit and integration suites using the project test runner (`npm test`).
 * **Media Scrubbing:** Run `npm run scrub-check`. It asserts the metadata scrubber against constructed fixtures rather than mocks and needs no server, database, or live project.
+* **Trust Engine:** Run `npm run fraud-check`. Covers coordinate validation, haversine distance, the three proximity outcomes, collusion weighting, media sub-scoring, the reject-never-blocks rule, and phone normalisation. Also needs no server or database.
 * **Manual Verification:** Before submitting changes, verify UI layouts across mobile and desktop breakpoints, and confirm the confirmation page in a real browser at a phone viewport.
 * **Security Checks:** Ensure no private secrets, API keys, or unmasked database credentials are introduced into source files. Confirm `.env` remains untracked and the service-role key appears only in server-side code.
 

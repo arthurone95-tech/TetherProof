@@ -112,7 +112,8 @@ Response (200 OK): Returns the caller's id, role, full name, location, organizat
   {
     "skillTag": "Refrigeration Repair",
     "description": "Replaced commercial compressor and fixed electrical fault.",
-    "submissionGps": "5.6037,-0.1870"
+    "submissionGps": "5.6037,-0.1870",
+    "verifierPhone": "+233241234567"
   }
   ```
 `media_file` is uploaded as multipart binary to a private Supabase Storage bucket, and must be
@@ -139,6 +140,10 @@ Every upload is scrubbed of metadata before it is stored:
 `submissionGps` is the only trusted location for a proof, which is precisely why the file's own
 location metadata is removed. Coordinates are range-checked, so `999,999` is rejected.
 
+`verifierPhone` is optional. It is the number the confirmation link is sent to. **Only a salted
+hash is stored** — the number itself is used once, to address the message, and is never written
+to any table or log. See `doc/08` §4.
+
 Response (201 Created):
 
 ```json
@@ -149,27 +154,36 @@ Response (201 Created):
   "metadataStatus": "pending",
   "scrubbed": { "hadGps": true, "hadMetadata": true, "hadAudioTags": false },
   "verificationToken": "returned-once-only",
-  "verificationExpiresAt": "2026-10-11T12:00:00.000Z"
+  "verificationExpiresAt": "2026-10-11T12:00:00.000Z",
+  "verificationLinkSent": false
 }
 ```
 
 `metadataStatus` is always `pending`. Scrubbing removes location data; it does not assess whether
-the media is genuine. `valid` and `flagged_ai_fake` belong to the anti-fraud engine, which is not
-implemented (see `doc/13` E-008). `scrubbed` reports what was actually removed, so a caller can see
-the protection that was applied rather than take it on trust.
+the media is genuine. Detecting synthetic media is not implemented and is not claimed — see
+`doc/02` Feature 2.4. `scrubbed` reports what was actually removed, so a caller can see the
+protection that was applied rather than take it on trust.
 
-Only the SHA-256 hash of `verificationToken` is stored, and it is returned exactly once. Delivering
-it by SMS or WhatsApp is not wired up yet; see `doc/13` E-008.
+Only the SHA-256 hash of `verificationToken` is stored, and it is returned exactly once.
+
+`verificationLinkSent` reports whether a messaging provider accepted the link. **A `false` here is
+not an error and does not fail the request.** Dispatch is skipped when no `verifierPhone` was
+supplied, when `WEB_BASE_URL` is unset so no link can be built, or when the provider declined; all
+three are indistinguishable from the worker's side, which is the point. The token is in the
+response either way, so share it manually. The outcome is recorded on the verification row
+(`dispatch_status`), so a link that never arrived is visible rather than mysterious.
 
 ---
 
-## 5. Verification Endpoints (SMS / WhatsApp Loop)
+## 5. Verification Endpoints (SMS Loop)
 
 ### A. Get Verification Details
 * **Endpoint:** `GET /api/v1/verifications/{token}`
-* **Description:** Public endpoint accessed via SMS/WhatsApp web link by clients to view task confirmation details.
+* **Description:** Public endpoint accessed via the SMS web link by clients to view task confirmation details.
 
 Response (200 OK): Returns task summary and worker skill category without exposing private PII.
+Deliberately excludes worker identity, the verifier's phone number, GPS telemetry, the fraud
+score, and media URLs, which would leak PII or let a link holder probe the trust engine.
 
 ### B. Submit Client Confirmation
 * **Endpoint:** `POST /api/v1/verifications/{token}`
@@ -181,11 +195,38 @@ Response (200 OK): Returns task summary and worker skill category without exposi
     "verifierGps": "5.6039,-0.1872"
   }
   ```
-`response` must be `confirmed` or `rejected`.
+`response` must be `confirmed` or `rejected`. `verifierGps` is optional and range-checked by the
+same validator used on submission, so `999,999` is refused here too. Omitting it is normal: a
+client who declined to share a location yields `proximity_status = 'unavailable'`, which is an
+absence of evidence and is never scored as either a pass or a failure.
 
-Response (200 OK): Returns success status and triggers background anti-fraud score calculation.
+Response (200 OK):
 
-Possible errors: `404` invalid link, `409` link already used, `410` link expired.
+```json
+{
+  "status": "confirmed",
+  "skillTag": "Refrigeration Repair",
+  "fraudScore": 0.75,
+  "verificationStatus": "verified"
+}
+```
+
+The trust engine runs synchronously **before** the proof status is written, so a `fraud_blocked`
+verdict is never briefly overwritten with `verified`. The score combines proximity (strongest,
+being the only signal grounded in an independent physical fact), endorsement diversity, and
+media provenance (weakest, since both rest on data a motivated party controls). Missing signals
+contribute nothing in either direction, so withholding data is not a way to defeat the engine.
+
+`verificationStatus` is `verified`, `rejected`, or `fraud_blocked`. Note that `status` reports what
+the **client** did, which is not always what happened to the **proof**: a client confirming from
+another continent gets `status: "confirmed"` — they did confirm it — alongside
+`verificationStatus: "fraud_blocked"`, because the endorsement does not count.
+
+A `rejected` response is never scored and never blocked, whatever the other signals say.
+Scoring rejections would let colluding clients manufacture free disputes against real workers.
+
+Possible errors: `400` invalid response or malformed coordinates, `404` invalid link, `409` link
+already used, `410` link expired.
 
 ---
 

@@ -31,10 +31,10 @@ The platform is an infrastructure-grade capability and verification network desi
 * **Privacy Controls:** Ability to control data sharing and remain anonymous during initial employer discovery phases.
 
 ### B. Verification & Anti-Fraud Module (Trust Protocol)
-* **Frictionless External Verification:** SMS/WhatsApp web verification links for clients and supervisors to confirm work completions without downloading an app.
-* **Graph Centrality Filtering:** Automated algorithms to detect and neutralize closed-loop collusion (e.g., users verifying friends).
-* **Device & Location Anchoring:** GPS and metadata checks to ensure verifications match real physical/digital execution contexts.
-* **AI-Fake Protection:** Metadata validation on uploads to reject synthetic or downloaded images/videos.
+* **Frictionless External Verification:** SMS web verification links for clients and supervisors to confirm work completions without downloading an app.
+* **Graph Centrality Filtering:** Automated algorithms to detect and neutralize closed-loop collusion (e.g., users verifying friends), weighting each endorsement by how diverse the verifier's network is.
+* **Device & Location Anchoring:** GPS comparison between the worker's recorded position and the client's position when they confirm, so a remote confirmation is visible. A party that shares no location is treated as neutral, not as failing.
+* **Media Provenance Signals:** Metadata is inspected while it exists to establish whether a capture device was identified, whether the capture time was consistent, and whether the container matches its type — then the metadata is destroyed and only those three conclusions are kept. **AI-generated media is not and cannot be detected by these checks; no such claim is made.** See `doc/02` Feature 2.4 and `doc/13` E-019.
 
 ### C. Employer Module (Capability Matching)
 * **Capability Specs:** Granular requirement builders replacing traditional job descriptions with verified skill and proof thresholds.

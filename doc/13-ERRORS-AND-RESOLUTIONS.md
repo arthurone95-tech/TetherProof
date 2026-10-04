@@ -224,10 +224,16 @@ The bucket was created private, which is what matters for confidentiality. Supab
 End-to-end against the live project, in the smoke suite: a GPS-tagged JPEG is uploaded, `hadGps` is `true`, and the object is read back out of the bucket to confirm no `Exif\0\0` segment survives in the stored bytes. Full suite: **80 passed, 0 failed**, 0 leftover test accounts, 0 leftover bucket objects.
 
 ### Not covered
-* **Synthetic-media detection is not implemented.** `valid` and `flagged_ai_fake` are never written, and no authenticity assessment happens. Heuristics that cannot genuinely detect AI generation tend to produce false positives that block honest workers' uploads, which is worse than an honest `pending` status. `doc/02` Feature 2.3 and `doc/01` still describe this as a current capability and remain overstated; they are product requirements rather than security documentation, so they were left as written rather than rewritten.
+* **Synthetic-media detection is not implemented.** `valid` and `flagged_ai_fake` are never written, and no authenticity assessment happens. Heuristics that cannot genuinely detect AI generation tend to produce false positives that block honest workers' uploads, which is worse than an honest `pending` status.
+  * **Superseded in part by E-019.** When this was written, `doc/01` and `doc/02` still described this as a current capability and were left as written rather than rewritten, on the grounds that they are product requirements rather than security documentation. That judgement was reversed once Phase 3 forced the issue: `doc/01` and `doc/02` Feature 2.4 are now corrected to describe provenance signals and to state plainly that AI-generation detection is not implemented. E-019 also explains why the original specification was unbuildable rather than merely unimplemented.
+  * The honest answer is unchanged: **there is no AI-generation detection, and no such claim is made.** What Phase 3 added is three consistency booleans derived before the metadata is destroyed.
 * **Audio was verified structurally, not by playback.** The MP4 assertions prove the container is intact and the offsets are correct, but no decoder was run to confirm audio output. A real m4a from a phone should be tested when one is available.
 * **HEIC is re-encoded as AV1-compressed HEIC**, which changes the file substantially to remove only metadata. The prebuilt sharp binary supports it and the round-trip was exercised, but if preserving HEIC exactly matters more than stripping metadata, that tradeoff should be revisited.
-* **Verification links are not dispatched.** The token is generated and returned once, but no SMS or WhatsApp provider is wired up, so a real client cannot yet receive it.
+* ~~**Verification links are not dispatched.**~~ **Superseded by Phase 3.** Dispatch is now implemented behind a `MessageProvider` interface with a Twilio adapter and a log adapter, and the dispatch outcome is recorded on the verification row. The link is still not dispatched anywhere real, because no Twilio account exists — the Twilio adapter itself is unexercised. See `doc/09` §4.1.
+
+The assertion counts in the Verification section above were current when E-008 was written and are
+preserved as the historical record. The current counts are in *Verification coverage achieved on
+2026-10-04* at the end of this document.
 
 ---
 
@@ -538,19 +544,276 @@ three-step diagnosis.
 
 ---
 
+## E-019: Feature 2.4's "AI-fake detector" requires metadata that Phase 2 destroys
+
+* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Found:** 2026-10-04, while implementing Phase 3.
+* **Related:** E-008.
+
+### Description
+Feature 2.4 specifies an "AI-Fake Image/Video Detector" that "inspects file metadata
+(timestamps, camera signatures, and device data) to reject fake or AI-synthesized upload
+attempts." Phase 2, at E-008, deliberately strips all of that metadata before the object
+reaches storage.
+
+The two requirements cannot both be met as written. A detector cannot read camera
+signatures from a file that no longer has any.
+
+### Root cause
+Not a coding defect. The specification was written as though scrubbing and detection were
+independent features, when one is defined as the destruction of the other's input. Nothing
+in the codebase claimed this worked, and `metadata_status` was honestly left at `pending`,
+so no user was misled — but `doc/01` and `doc/02` described a capability that cannot exist as
+specified.
+
+### Resolution
+Signals are derived **while the metadata still exists**, inside the scrubber, and only the
+conclusions leave it. Three booleans are persisted on `public.work_proof_logs`:
+
+| Column | True when | Never stored |
+| --- | --- | --- |
+| `media_has_camera_signature` | the discarded EXIF named a capture device (Make **and** Model, or a lens tag, body serial, or vendor maker note) | the make, model, lens, or serial |
+| `media_timestamp_plausible` | the discarded capture time was internally consistent with the submission | the capture time |
+| `media_encoder_known` | the container is structurally what its declared type claims | — |
+
+A `NULL` in any of the three means "not applicable or not determinable", which is honest for
+audio: an MP3 carries no camera and no capture time, so reporting `false` would assert that
+the absence of a camera signature was a finding.
+
+`media-scrub.ts` now reads what it previously discarded, and the values still leave the
+process with the metadata. The privacy promise in `doc/08` is unchanged, and two checks
+assert that the camera make, model, and timestamp are absent from the stored bytes.
+
+### What this deliberately does not do
+It does **not** detect AI-generated media, and nothing claims it does. No metadata check can
+reliably distinguish a generated image from a real one. What these checks actually establish
+is narrower:
+
+* absence of a camera signature, which capture devices reliably write;
+* an internally contradictory capture time (after submission, or before 2005, which is where
+  an unset clock and the 1970 epoch both land);
+* a container that does not match its declared type, which catches hand-assembled files.
+
+These are consistency checks. They are scored as weak evidence, they can only **lower** a
+score and never raise it above neutral, and a clean file earns nothing. That is deliberate:
+a heuristic that rewarded plausible-looking files could be gamed, and one that punished
+unusual files would block honest workers whose cameras behave differently.
+
+`metadata_status` remains `pending` and `flagged_ai_fake` is still written nowhere. The
+detection gap is real and stays documented rather than papered over.
+
+### Verification
+`npm run scrub-check` — **51/51**, including a hand-built EXIF block with `DateTimeOriginal`
+in the Exif sub-IFD (the tag a parser that only walks IFD0 silently misses), a make-without-model
+block, epoch and pre-2005 timestamps, a future timestamp, a legitimate photo from the previous
+week, and assertions that the make, model, and timestamp are absent from the output bytes.
+27 smoke checks cover the live path. 91 further assertions in `npm run fraud-check` pin the
+scoring, including that a clean file scores exactly neutral and that withholding every signal
+never blocks a worker.
+
+---
+
+## E-020: The confirm endpoint accepted out-of-range coordinates
+
+* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Found:** 2026-10-04, while implementing Phase 3.
+* **Related:** made exploitable by E-019's proximity check.
+
+### Description
+`POST /api/v1/verifications/{token}` accepted `verifierGps: "999,999"`. The submission
+endpoint rejected the same value.
+
+### Root cause
+Two endpoints shared a validation rule by copy-paste rather than by reference. The copy on
+the submission side had a range check; the copy on the confirmation side checked only the
+`latitude,longitude` shape, and `999,999` matches that shape.
+
+This was harmless while the value was stored and never read. Proximity scoring is the first
+consumer, and a nonsense coordinate fed into a haversine calculation yields a confident,
+wrong distance rather than an error — so the laxer endpoint was a live data-integrity defect
+the moment Phase 3 landed.
+
+### Resolution
+Both schemas now import `gpsSchema` from `src/lib/geo.ts`, so there is one definition.
+`geo.ts` also centralises parsing and haversine distance for the same reason.
+
+### Verification
+`npm run fraud-check` — 91/91, asserting `999,999` is rejected, that the rejection message
+names the range, that latitude ±90 and longitude ±180 are accepted as boundaries while
+`90.1` is refused, and that `parseCoordinate` returns `null` rather than throwing for every
+malformed shape. One live smoke check confirms the confirm endpoint refuses it.
+
+---
+
+## E-021: A missing location could be used to defeat the trust engine
+
+* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Found:** 2026-10-04, while designing the scoring.
+
+### Description
+The engine's inputs are a worker's recorded position, the client's position when they tap,
+the endorsement graph, and media provenance. Three of the four are client- or
+worker-controlled, and one of them — the client's location — is trivially withheld.
+
+Treating "no location supplied" as either a pass or a failure makes the check a toggle: a
+worker who omits `submissionGps` converts a hard proximity signal into an absent one.
+
+### Resolution
+`unavailable` is a first-class `proximity_status` value, distinct from `within`, and scores
+**exactly 0.5** — the neutral midpoint. The same holds for every other unavailable signal: an
+unidentified verifier scores neutral, and an audio file's null provenance signals score
+neutral.
+
+The design consequence is deliberate and worth stating plainly: **an adversary who supplies
+no data at all is not scored as suspicious.** That costs the engine real detection power on
+exactly the inputs an adversary would withhold, and it is the correct trade, because the
+alternative hands a motivated party a switch that disables the check.
+
+The other half is that absence may not be free either. A confirmed endorsement with nothing
+behind it scores ~0.5, which is above the 0.25 block threshold, so the engine does not
+punish — but it also cannot be gamed into a pass, because a *real* on-site confirmation with
+a clean history scores ~0.75.
+
+### Verification
+`npm run fraud-check` asserts, directly: withholding a location scores exactly 0.5;
+withholding scores lower than being present; an all-null signal set is exactly neutral and is
+never read as a finding; a null set is never worse than a genuinely bad one; and submitting
+every signal as withheld does not get a worker blocked. Two live smoke checks confirm
+`proximity_status` is `unavailable` with a null distance and the proof still reaches
+`verified`.
+
+---
+
+## E-022: `verifier_phone` stored client phone numbers in plaintext
+
+* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Found:** 2026-10-04, while implementing the collusion filter.
+* **Related:** contradicts the retention promise in `doc/08`.
+
+### Description
+`public.verifications.verifier_phone` held the client's phone number as plaintext, written on
+every proof submission that supplied one. It was never read by any code path. It was the only
+piece of client PII the product retained, and it contradicted the scrubbing effort in E-008:
+location metadata is stripped from a photo, while the same worker's contact number sits in
+the database in the clear.
+
+### Root cause
+Phase 2 added the column for SMS dispatch, which was never wired up. A dormant column
+collecting a value nothing consumes is the worst kind — it looks like a feature and carries
+pure risk.
+
+### Resolution
+The column is dropped. What replaces it is `verifier_phone_hash`: a salted SHA-256 of the
+normalised number, held in memory only long enough to dispatch the message.
+
+The salt comes from `VERIFIER_PHONE_SALT`, required in production. This is not ceremony —
+phone numbers have very little entropy, so an unsalted digest is reversible by brute force
+over the reachable number space in minutes. A default salt would be a published salt, which is
+why the schema has none and a missing value outside production generates a random per-process
+salt with a warning.
+
+`normalizePhone` strips separators and reduces a `00` international prefix, because the same
+number reaches the server as `+233241234567`, `0234 123 4567`, and `233-241-234567`, and
+hashing the raw string would treat those as three different people — quietly disabling the
+collusion filter it exists to serve.
+
+### Deliberate non-backfill
+Pre-existing rows lose the number rather than having it converted. A correct backfill needs
+the operator's salt, which does not belong in a migration, and hashing without it would write
+a weak digest into a column named `_hash` — worse than the plaintext it replaces, because it
+would look protected. The rows are read as identity-unknown, which scores neutral. The table
+held no non-test data.
+
+### Verification
+Live, against the running project: five submissions by one verifier produce **one** distinct
+hash value; the column list for `verifications` contains exactly one phone-related column and
+it is `verifier_phone_hash`; the literal number appears nowhere in a 1149-byte
+`row_to_json()` of a verification row; and it appears nowhere in the stored fraud-score
+breakdown. `npm run fraud-check` asserts the three formatting variants of one number collapse
+to a single hash input while two different numbers stay distinct.
+
+---
+
+## E-023: The `--web` smoke run leaked an account on every invocation
+
+* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Found:** 2026-10-04, while extending the smoke suite for Phase 3.
+* **Related:** a repeat of the cleanup scoping issue already noted against the web checks.
+
+### Description
+Every `npm run smoke -- --live --web` left behind one Auth account and its four application
+rows. The API-only path was clean, so the leak was invisible unless the web checks ran.
+
+The symptom was a single warning in the cleanup output:
+
+```
+warning: could not delete fb7d82c4-…: Database error deleting user
+FAIL  test accounts removed from auth.users  (1 rows)
+```
+
+### Root cause
+Two defects, and the second is the one that mattered.
+
+**Cleanup deleted application rows for one worker only.** The deletes were scoped to
+`worker_id = workerId` — the worker registered in the API section. The `--web` path registers
+a *second* account and inserts its own capability block, proof, and verification directly. Those
+rows were never deleted.
+
+**The check that should have caught it was scoped identically.** `test rows removed from the
+application tables` counted `work_proof_logs where worker_id = workerId`. It was checking the
+same narrow slice as the delete, so the rows that leaked were, by construction, invisible to it.
+It reported PASS while the database filled up. A leak check that shares its scope with the
+operation it is verifying verifies nothing.
+
+The visible failure was downstream of this: `deleteUser` failed because the `public.users` row
+still referenced the account, so the harness reported an auth error for what was actually a
+data-cleanup gap.
+
+### Resolution
+
+* Cleanup now deletes for **every** account the run created, tracked by id in one list, rather
+  than a single `workerId`.
+* `test accounts removed from auth.users` now filters on the test address pattern
+  (`^(smoke|web-smoke)\.`) instead of counting the whole table. Counting every row in
+  `auth.users` fails for the wrong reason the moment the project has a real member, which
+  teaches you to ignore the check.
+* Three **orphan** checks were added, and they are scoped by *predicate* rather than by a list
+  of ids this run happened to track: a row counts as a leak only if its owner no longer exists
+  in `auth.users`. A real member's rows always have a live owner, so they are never counted, and
+  a fixture inserted through an untracked path is caught regardless. Combined with the
+  test-pattern check this is complete — an undeleted account is caught by pattern, and a deleted
+  account whose rows survive is caught as an orphan.
+
+The general lesson is recorded deliberately: **a verification scoped the same way as the
+operation it verifies is not a verification.**
+
+### Verification
+Re-ran `--live --web` against the live project: **128 passed, 0 failed**, cleanup reporting 0
+test accounts, 0 application rows, and 0 orphans across `work_proof_logs`, `capability_blocks`,
+and `verifications`, and 0 objects in the bucket. The API-only path: **114 passed, 0 failed**.
+The leaked account found before the fix was removed and the database confirmed empty.
+
+Note this bug only became reachable in Phase 3. `--web` previously aborted early on a port
+conflict, so the web section's fixtures were never created and the leak never ran.
+
+---
+
 ## Verification coverage achieved on 2026-10-04
 
 For context on what is confirmed working, recorded outside the error log:
 
-* 3 migrations applied to the live project (PostgreSQL 17.11).
+* 4 migrations applied to the live project (PostgreSQL 17.11).
 * 7 tables with RLS enabled; `FORCE ROW LEVEL SECURITY` on `work_proof_logs` and `verifications`; 19 policies; `users_id_auth_fkey` → `auth.users(id)`; both role triggers present.
-* **80/80 automated live API checks:** health, registration, duplicate rejection, the confirmation challenge, request-code anti-enumeration, code validation, **the full confirmation success path** (a real token exchanged for a session, replay refused, password sign-in afterwards), confirmation gating, login, `/auth/me`, **bucket configuration** (private, size cap and MIME allow-list recorded, and both an out-of-list type and an oversized object refused), **proof submission with live metadata scrubbing** (GPS detected and reported, the stored object read back out of the bucket to confirm no EXIF survives, token-hash-only storage, and refusal of WebM, mislabelled files, missing files, out-of-range coordinates, short descriptions, unauthenticated calls, and another worker's capability reference), verification view, single-use confirmation, replay refusal, input validation, and RLS posture. The confirmation success path uses `admin.generateLink`, so it needs no mail provider and no inbox.
-* **24/24 media-scrubbing assertions** in `scripts/scrub-check.ts`, run against constructed fixtures rather than mocks, including a hand-built GPS EXIF block and an MP4 laid out so that sample-offset repointing is genuinely required.
+* **114/114 automated live API checks** (`npm run smoke -- --live`), and **128/128** with the client confirmation page and browser CORS path (`--live --web`): health, registration, duplicate rejection, the confirmation challenge, request-code anti-enumeration, code validation, **the full confirmation success path** (a real token exchanged for a session, replay refused, password sign-in afterwards), confirmation gating, login, `/auth/me`, **bucket configuration** (private, size cap and MIME allow-list recorded, and both an out-of-list type and an oversized object refused), **proof submission with live metadata scrubbing** (GPS detected and reported, the stored object read back out of the bucket to confirm no EXIF survives, token-hash-only storage, and refusal of WebM, mislabelled files, missing files, out-of-range coordinates, short descriptions, unauthenticated calls, and another worker's capability reference), verification view, single-use confirmation, replay refusal, input validation, and RLS posture. The confirmation success path uses `admin.generateLink`, so it needs no mail provider and no inbox.
+* **Cleanup is verified, not assumed.** Zero test accounts, zero application rows, zero orphans, zero bucket objects — with the orphan checks scoped by *predicate* (a row whose owner no longer exists in `auth.users`) rather than by the list of ids the run tracked, so they catch a fixture inserted through an untracked path. See E-023 for the leak this replaced and why the previous check proved nothing.
+* **Web checks: 14 assertions** on the confirmation page — SSR of `/verify/{token}`, `no-referrer`, `noindex`, unknown tokens still rendering the page shell, CORS preflight and headers for the configured web origin, submission without GPS, persistence into the live database, revisiting an answered link, and refusal of an unknown origin. The web server must run on a port the API trusts, since the suite derives it from `CORS_ORIGINS` and deliberately exercises the *configured* origin rather than an invented host; override that variable if the port is busy.
+* **31/31 trust-engine checks run live against the real project**, driving the whole loop through the public API rather than writing rows directly. Five endorsements by one verifier are submitted and confirmed to build a genuine graph history; a sixth from another continent is then confirmed and the engine independently arrives at `proximity_status = outside`, 5104 km, the concentration finding, a score of 0.125, and `verification_status = fraud_blocked` — while still telling the client their response was recorded. A client who shares no location is recorded `unavailable` with a null distance and the proof still reaches `verified`; a rejection is never scored and never blocked. Provenance booleans are asserted on the row, and the verifier's number is shown absent from a 1149-byte `row_to_json()` of the stored verification.
+* **51/51 media-scrubbing assertions** in `scripts/scrub-check.ts`, run against constructed fixtures rather than mocks, including a hand-built GPS EXIF block, an MP4 laid out so that sample-offset repointing is genuinely required, and a hand-built EXIF block carrying `DateTimeOriginal` in the Exif sub-IFD to exercise the provenance parser.
+* **91/91 trust-engine unit assertions** in `scripts/fraud-check.ts`, covering coordinate validation, haversine distance, the three proximity outcomes, collusion weighting including the concentration and mutual-endorsement cases, media sub-scoring, the reject-never-blocks rule, and phone normalisation.
 * A private `work-proofs` Storage bucket now exists **with its size cap and MIME allow-list applied and confirmed enforced** (E-017). The management API silently discards both values, so `npm run storage:ensure-bucket` writes them directly to `storage.buckets` and verifies them. Six smoke checks guard this on every run.
-* Cleanup leaves nothing behind: 0 test accounts, 0 application rows, 0 bucket objects after a full run.
-* 20/21 automated web checks: production build, SSR of `/verify/{token}`, `no-referrer`, `noindex`, no sign-in redirect, CORS preflight and headers for the web origin, submission without GPS, persistence, and refusal of an unknown origin. The one failure was a harness cleanup bug, not a product defect; the leftover row was removed and the database confirmed empty.
-* Not covered: real browser execution of the confirmation page, and a genuinely delivered 6-digit OTP. No headless browser is available in this environment, so the page was verified through SSR output and browser-equivalent HTTP calls with an `Origin` header, not by clicking the button. A delivered code needs a working provider and a real inbox.
-* Reproduce with `npm run smoke -- --live --web` after `npm run build`. All API checks are automated in `scripts/smoke.mjs`; the scrubbing unit assertions run with `npm run scrub-check`, which needs no server, no database, and no live project.
+* Not covered: real browser execution of the confirmation page, a genuinely delivered 6-digit OTP, and a real outbound SMS. No headless browser is available in this environment, so the page was verified through SSR output and browser-equivalent HTTP calls with an `Origin` header, not by clicking the button. A delivered code needs a working provider and a real inbox. The Twilio adapter is unverified against Twilio's live API — it is exercised only through the provider interface with the log adapter active, because no account exists yet.
+* Reproduce with `npm run smoke -- --live --web` after `npm run build`. All API checks are automated in `scripts/smoke.mjs`; the scrubbing and trust-engine unit assertions run with `npm run scrub-check` and `npm run fraud-check`, neither of which needs a server, a database, or a live project.
+* **The smoke suite runs `apps/api/dist/index.js`, not the TypeScript source.** A change to `src` is not under test until `npm run build` has been run. This was discovered the hard way: a full run reported 20 failures against code that typechecked cleanly, and every one of them was the compiled output being stale.
 
 ---
 

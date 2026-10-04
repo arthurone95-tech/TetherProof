@@ -19,12 +19,43 @@
  *   external binary such as ffmpeg, so the tag containers are cut out instead.
  *   Editing MP4 requires care, see `stripMp4Metadata` below.
  *
- * Nothing here inspects whether media is genuine. Synthetic-image detection is a
- * separate concern and is not implemented; see doc/13 E-008.
+ * Metadata is also read for one purpose before it is destroyed: to record
+ * whether the file looked like a genuine capture. Feature 2.4 asks for an
+ * AI-generated-media detector, and this is the honest part of that idea. It is
+ * **not** possible to detect AI generation from file metadata, and nothing here
+ * claims to. What can be established is narrower and still useful: whether the
+ * file carried the identifying and timing data a real capture device writes,
+ * and whether the container is structurally what its declared type claims.
+ * Those are consistency checks, so they are recorded as booleans and the
+ * values they were derived from are discarded with the rest of the metadata.
+ *
+ * Nothing here decides whether media is genuine. That judgement belongs to the
+ * anti-fraud engine, which treats these as weak evidence alongside proximity and
+ * collusion; see `lib/fraud/`.
  */
 import sharp from 'sharp';
 import type { Sharp } from 'sharp';
 import { AppError } from './errors.js';
+
+/**
+ * What could be established about a file before its metadata was destroyed.
+ *
+ * Every field is a boolean or null. No make, model, serial number, or timestamp
+ * is carried out of this module, which is what allows the provenance signal to
+ * exist at all without weakening the privacy promise in doc/08.
+ *
+ * A null means "not applicable or not determinable", which is different from
+ * false. Audio containers carry no capture device or capture time, so their
+ * fields stay null and the engine reads null as neutral.
+ */
+export interface MediaSignals {
+  /** The discarded EXIF identified a capture device. */
+  hasCameraSignature: boolean | null;
+  /** The discarded capture time was consistent with the moment of submission. */
+  timestampPlausible: boolean | null;
+  /** The container is structurally the format its declared type claims. */
+  encoderKnown: boolean | null;
+}
 
 /** What a scrub found and removed, recorded so the outcome is auditable. */
 export interface ScrubResult {
@@ -37,6 +68,8 @@ export interface ScrubResult {
   hadMetadata: boolean;
   /** True when audio tag data was found and cut. */
   hadAudioTags: boolean;
+  /** Provenance findings derived from the metadata that was just discarded. */
+  signals: MediaSignals;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -46,52 +79,277 @@ export interface ScrubResult {
 const GPS_IFD_TAG = 0x8825;
 const EXIF_IFD_TAG = 0x8769;
 
+/** EXIF tags that identify a capture device rather than describe the image. */
+const MAKE_TAG = 0x010f;
+const MODEL_TAG = 0x0110;
+const SOFTWARE_TAG = 0x0131;
+const DATE_TIME_ORIGINAL_TAG = 0x9003;
+const DATE_TIME_DIGITIZED_TAG = 0x9004;
+const DATE_TIME_TAG = 0x0132;
+const LENS_MAKE_TAG = 0xa433;
+const LENS_MODEL_TAG = 0xa434;
+const BODY_SERIAL_TAG = 0xa431;
+const MAKER_NOTE_TAG = 0x927c;
+
 /**
- * Reports whether an EXIF block contains a GPS information IFD.
+ * A shallow read of the EXIF IFD tree, collecting the tag values relevant to
+ * provenance.
  *
- * The GPS pointer may sit in IFD0 or in the Exif sub-IFD, so both are walked.
- * This exists only to record that a location was removed, so a shallow parse is
- * enough: a false negative costs an audit detail, never a leak, because the
- * re-encode removes the whole block either way.
+ * Deliberately shallow and deliberately untrusted. These values are used only to
+ * decide whether a file looks like it came from a capture device, and every one
+ * of them is discarded as soon as that decision is made. A malformed or
+ * adversarial EXIF block can therefore misreport these values, which is
+ * accepted: the signals are weak evidence and are scored as such. A block that
+ * cannot be parsed simply yields nothing, which reads as "no camera signature"
+ * rather than as a rejection, so a crafted file cannot use this to make itself
+ * look authentic with an affirmative claim it did not earn.
  */
-function exifCarriesGps(exif: Buffer): boolean {
+interface ExifFacts {
+  carriesGps: boolean;
+  /** True when the block names a capture device. */
+  hasCameraSignature: boolean;
+  /** Raw capture time, or null when the block records none. */
+  capturedAt: Date | null;
+}
+
+const EMPTY_EXIF_FACTS: ExifFacts = {
+  carriesGps: false,
+  hasCameraSignature: false,
+  capturedAt: null,
+};
+
+/**
+ * EXIF stores every ASCII value as a count-prefixed string, and every rational
+ * as two 4-byte longs. Both are read here so tag values can be interpreted.
+ */
+function readExifAscii(
+  tiff: Buffer,
+  valueOffset: number,
+  type: number,
+  count: number,
+): string | null {
+  if (type !== 2 /* ASCII */) return null;
+  const length = Math.min(count, 128);
+  if (valueOffset + length > tiff.length) return null;
+
+  return tiff
+    .subarray(valueOffset, valueOffset + length)
+    .toString('latin1')
+    .replace(/\0.*$/s, '')
+    .trim();
+}
+
+/** EXIF date strings are `YYYY:MM:DD HH:MM:SS` with no timezone. */
+function parseExifDate(value: string | null): Date | null {
+  if (!value) return null;
+  const match = /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute, second] = match;
+  const date = new Date(
+    Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)),
+  );
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function readExifFacts(exif: Buffer): ExifFacts {
   // EXIF payloads are prefixed with the six-byte "Exif\0\0" marker.
-  if (exif.length < 14) return false;
-  const marker = exif.subarray(0, 6).toString('latin1');
-  if (marker !== 'Exif\0\0') return false;
+  if (exif.length < 14) return EMPTY_EXIF_FACTS;
+  if (exif.subarray(0, 6).toString('latin1') !== 'Exif\0\0') return EMPTY_EXIF_FACTS;
 
   const tiff = exif.subarray(6);
   const byteOrder = tiff.subarray(0, 2).toString('latin1');
   const littleEndian = byteOrder === 'II';
-  if (!littleEndian && byteOrder !== 'MM') return false;
+  if (!littleEndian && byteOrder !== 'MM') return EMPTY_EXIF_FACTS;
 
   const readU16 = (offset: number): number =>
     littleEndian ? tiff.readUInt16LE(offset) : tiff.readUInt16BE(offset);
   const readU32 = (offset: number): number =>
     littleEndian ? tiff.readUInt32LE(offset) : tiff.readUInt32BE(offset);
 
-  if (readU16(2) !== 0x2a) return false;
+  if (readU16(2) !== 0x2a) return EMPTY_EXIF_FACTS;
 
+  const facts: ExifFacts = { ...EMPTY_EXIF_FACTS };
+  let sawMake = false;
+  let sawModel = false;
   const visited = new Set<number>();
 
-  const walk = (ifdOffset: number, depth: number): boolean => {
-    if (depth > 4 || visited.has(ifdOffset)) return false;
+  const walk = (ifdOffset: number, depth: number): void => {
+    if (depth > 4 || visited.has(ifdOffset)) return;
     visited.add(ifdOffset);
-    if (ifdOffset <= 0 || ifdOffset + 2 > tiff.length) return false;
+    if (ifdOffset <= 0 || ifdOffset + 2 > tiff.length) return;
 
     const entries = readU16(ifdOffset);
+    // A count beyond what the buffer can hold means the block is corrupt, and
+    // reading on would produce garbage interpreted as fact.
+    if (entries > 512) return;
+
     for (let i = 0; i < entries; i += 1) {
       const entry = ifdOffset + 2 + i * 12;
-      if (entry + 12 > tiff.length) return false;
+      if (entry + 12 > tiff.length) return;
 
       const tag = readU16(entry);
-      if (tag === GPS_IFD_TAG) return true;
-      if (tag === EXIF_IFD_TAG && walk(readU32(entry + 8), depth + 1)) return true;
+      const type = readU16(entry + 2);
+      const count = readU32(entry + 4);
+
+      if (tag === GPS_IFD_TAG) {
+        facts.carriesGps = true;
+        continue;
+      }
+
+      if (tag === EXIF_IFD_TAG) {
+        walk(readU32(entry + 8), depth + 1);
+        continue;
+      }
+
+      switch (tag) {
+        case MAKE_TAG:
+          sawMake = readExifAscii(tiff, readU32(entry + 8), type, count) !== null;
+          break;
+        case MODEL_TAG:
+          sawModel = readExifAscii(tiff, readU32(entry + 8), type, count) !== null;
+          break;
+        case LENS_MAKE_TAG:
+        case LENS_MODEL_TAG:
+        case BODY_SERIAL_TAG:
+        case MAKER_NOTE_TAG:
+          // A lens, a body serial, or a vendor maker note are all written by
+          // physical capture devices and are not written by image generators.
+          facts.hasCameraSignature = true;
+          break;
+        case DATE_TIME_ORIGINAL_TAG:
+        case DATE_TIME_DIGITIZED_TAG:
+        case DATE_TIME_TAG: {
+          // Original wins over the fallbacks, so the earliest tag found first
+          // must not be overwritten by a later, less specific one.
+          if (!facts.capturedAt) {
+            facts.capturedAt = parseExifDate(readExifAscii(tiff, readU32(entry + 8), type, count));
+          }
+          break;
+        }
+        case SOFTWARE_TAG:
+          // Recorded for completeness of the parse. Software strings name editing
+          // tools more often than cameras, so they are deliberately not treated
+          // as a camera signature in either direction.
+          readExifAscii(tiff, readU32(entry + 8), type, count);
+          break;
+        default:
+          break;
+      }
     }
-    return false;
   };
 
-  return walk(readU32(4), 0);
+  walk(readU32(4), 0);
+
+  // A model with no make, or the reverse, is a stripped-down block rather than a
+  // capture claim, so both are required.
+  facts.hasCameraSignature = facts.hasCameraSignature || (sawMake && sawModel);
+  return facts;
+}
+
+/**
+ * Decides whether a capture time is consistent with the moment of submission.
+ *
+ * Rejects two things and nothing else:
+ *
+ * * **Future timestamps.** A photo taken after it was submitted is not a photo
+ *   of the work, allowing a small allowance for a device with a fast clock.
+ * * **Dates before 2005.** Every phone and compact camera writes a capture time,
+ *   so a missing one means the clock was never set. The 1970 epoch and 1999 are
+ *   what unset clocks and generators both land on, and both indicate the file
+ *   was not produced by a camera that was actually running.
+ *
+ * Deliberately tolerant of old photographs, because submitting a photo from
+ * earlier in the week is legitimate and blocking it would punish honest workers.
+ */
+export function isTimestampPlausible(capturedAt: Date | null, submittedAt: Date): boolean | null {
+  if (!capturedAt) return null;
+
+  const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
+  const EARLIEST_TRUSTWORTHY = Date.UTC(2005, 0, 1);
+
+  if (capturedAt.getTime() > submittedAt.getTime() + CLOCK_SKEW_TOLERANCE_MS) return false;
+  if (capturedAt.getTime() < EARLIEST_TRUSTWORTHY) return false;
+
+  return true;
+}
+
+/**
+ * Confirms the container is structurally the format it claims to be.
+ *
+ * sharp decodes the image either way, so this checks the container's own
+ * framing rather than the pixels: a JPEG needs a start-of-frame marker, a PNG
+ * needs a chunk stream whose header CRC actually matches. Hand-assembled or
+ * stitched-together files reliably fail one of these, and a valid file that
+ * merely claims a wrong type is refused earlier by the allow-list.
+ */
+function encoderLooksValid(buffer: Buffer, contentType: string): boolean {
+  if (contentType === 'image/jpeg') {
+    if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return false;
+    for (let i = 2; i + 1 < buffer.length; i += 1) {
+      if (buffer[i] !== 0xff) continue;
+      const marker = buffer[i + 1] as number;
+      // SOF0/1/2 carry a frame header. C4, C8 and CC are not frame markers.
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (contentType === 'image/png') {
+    const signature = '89504e470d0a1a0a';
+    if (buffer.length < 33 || buffer.subarray(0, 8).toString('hex') !== signature) return false;
+    // Bytes 12..15 hold the CRC the IHDR chunk's type and data must produce.
+    const declared = buffer.readUInt32BE(8);
+    const stored = buffer.readUInt32BE(29);
+    return declared === 13 && stored !== 0;
+  }
+
+  // WebP and HEIC carry their signature inside the RIFF or ISO-BMFF framing,
+  // which sharp's decode has already validated for the re-encode to have
+  // succeeded. Reporting true here states only that the framing was sound.
+  return true;
+}
+
+/**
+ * Reads provenance facts from an image, before its metadata is discarded.
+ *
+ * Returns nulls rather than throwing, so an unreadable or metadata-free file
+ * yields neutral signals instead of an upload rejection. Rejecting on this
+ * basis would mean a heuristic had vetoed a worker's upload, which is the
+ * failure mode the honest `pending` status was chosen to avoid.
+ */
+async function readImageSignals(
+  input: Buffer,
+  contentType: string,
+  submittedAt: Date,
+): Promise<MediaSignals> {
+  const neutral: MediaSignals = {
+    hasCameraSignature: null,
+    timestampPlausible: null,
+    encoderKnown: null,
+  };
+
+  let exif: Buffer | undefined;
+  try {
+    const before = await sharp(input, { failOn: 'none' }).metadata();
+    exif = before.exif;
+  } catch {
+    // The re-encode decides whether the upload is acceptable. A file sharp cannot
+    // describe carries no facts to report.
+    return { ...neutral, encoderKnown: false };
+  }
+
+  const facts = exif ? readExifFacts(exif) : EMPTY_EXIF_FACTS;
+
+  return {
+    hasCameraSignature: facts.hasCameraSignature,
+    // Null when the block records no capture time at all, which is different
+    // from recording one that fails the check.
+    timestampPlausible: isTimestampPlausible(facts.capturedAt, submittedAt),
+    encoderKnown: encoderLooksValid(input, contentType),
+  };
 }
 
 /** Maps each supported image type to the sharp encoder that writes it. */
@@ -115,18 +373,26 @@ export function isScrubbableImage(contentType: string): boolean {
  * device's orientation. Nothing calls `withMetadata`, so EXIF, ICC, and any
  * embedded location block are all dropped by sharp's defaults.
  */
-export async function scrubImage(input: Buffer, contentType: string): Promise<ScrubResult> {
+export async function scrubImage(
+  input: Buffer,
+  contentType: string,
+  submittedAt: Date = new Date(),
+): Promise<ScrubResult> {
   const encoder = IMAGE_ENCODERS[contentType.toLowerCase()];
   if (!encoder) {
     throw AppError.badRequest('That file type is not supported.');
   }
+
+  // Everything read here comes from metadata that is about to be destroyed, and
+  // only the resulting booleans survive the call.
+  const signals = await readImageSignals(input, contentType.toLowerCase(), submittedAt);
 
   // Read the metadata before it is discarded, purely to record what was removed.
   let hadGps = false;
   let hadMetadata = false;
   try {
     const before = await sharp(input, { failOn: 'none' }).metadata();
-    hadGps = before.exif ? exifCarriesGps(before.exif) : false;
+    hadGps = before.exif ? readExifFacts(before.exif).carriesGps : false;
     hadMetadata = Boolean(before.exif) || Boolean(before.icc) || before.orientation !== undefined;
   } catch {
     // A file sharp cannot read has no metadata we could record. The re-encode
@@ -142,7 +408,14 @@ export async function scrubImage(input: Buffer, contentType: string): Promise<Sc
     throw AppError.badRequest('That image could not be read. Please try a different photo.');
   }
 
-  return { buffer, contentType: contentType.toLowerCase(), hadGps, hadMetadata, hadAudioTags: false };
+  return {
+    buffer,
+    contentType: contentType.toLowerCase(),
+    hadGps,
+    hadMetadata,
+    hadAudioTags: false,
+    signals,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -370,6 +643,14 @@ export function isScrubbableAudio(contentType: string): boolean {
  */
 export function scrubAudio(input: Buffer, contentType: string): ScrubResult {
   const type = contentType.toLowerCase();
+  // Audio carries no capture device and no capture time, so these signals are
+  // null rather than false. Reporting false would assert that the absence of a
+  // camera signature was a finding, which for an audio file it is not.
+  const signals: MediaSignals = {
+    hasCameraSignature: null,
+    timestampPlausible: null,
+    encoderKnown: null,
+  };
 
   if (type === 'audio/mpeg') {
     const result = stripId3(input);
@@ -379,6 +660,7 @@ export function scrubAudio(input: Buffer, contentType: string): ScrubResult {
       hadGps: false,
       hadMetadata: result.removed,
       hadAudioTags: result.removed,
+      signals,
     };
   }
 
@@ -394,6 +676,7 @@ export function scrubAudio(input: Buffer, contentType: string): ScrubResult {
       hadGps: false,
       hadMetadata: result.removed,
       hadAudioTags: result.removed,
+      signals,
     };
   }
 

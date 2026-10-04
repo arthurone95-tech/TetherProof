@@ -23,21 +23,42 @@ This document outlines the detailed functional requirements and feature specific
 ---
 
 ## 3. Module 2: Frictionless Verification & Anti-Fraud Engine
+
+The four features below run as one engine. A confirmed endorsement is scored on proximity,
+endorsement diversity, and media provenance, and is either counted as verified or marked
+`fraud_blocked`. The per-signal breakdown is stored so a blocked proof can be explained from
+data rather than from logs.
+
+Two properties hold throughout, and they constrain everything else:
+
+* **A missing signal is neutral.** A client who declines geolocation, a proof with no
+  supplied number, and an audio recording all yield an absent signal rather than a failing
+  one. Otherwise anyone could defeat the engine by withholding data, and privacy-respecting
+  users would be penalised for it.
+* **A rejection is never scored.** A client reporting that work did not happen is not
+  evidence of fraud, and blocking on it would let colluding clients generate free disputes
+  against real workers.
+
 ### Feature 2.1: SMS/WhatsApp Web Verification Links
 * **Description:** Zero-friction verification request system for clients, supervisors, or managers.
-* **Behavior:** Generates a secure, one-time mobile-web link sent via SMS or WhatsApp. The recipient can confirm completed work with a single tap ("Yes / No") without needing to download any mobile application.
+* **Behavior:** Generates a secure, one-time mobile-web link sent via SMS. The recipient can confirm completed work with a single tap ("Yes / No") without needing to download any mobile application.
+* **Implementation:** The link is rendered and dispatched through a `MessageProvider` interface with a Twilio adapter and a log adapter. Twilio's Messages API is called with `fetch`, so no vendor SDK is added. An unconfigured deployment does not fail a proof submission: the worker receives the link in the API response and shares it manually, and the dispatch outcome is recorded on the verification row so a link that never arrived is visible rather than mysterious.
 
 ### Feature 2.2: Graph Centrality Collusion Filter
 * **Description:** Automated anti-cheat algorithm to prevent closed-loop endorsement rings (e.g., friends mutually verifying each other).
 * **Behavior:** Weights verifications based on network diversity. Verifications originating from isolated or repeated two-way connections are automatically down-weighted or discounted.
+* **Implementation:** What makes an endorsement trustworthy is network diversity — a confirmation from someone who sees a wide range of workers carries more information than one confined to a single worker, and a ring defeats that by construction. A verifier is identified by a salted hash of their phone number; the number itself is never stored. Findings are: approvals confined to one worker, an unusually large share of a worker's proofs coming from one verifier, and mutual endorsement in both directions. A verifier seen for the first time is neutral, not suspicious — penalising new verifiers would punish exactly the growth the product wants.
 
 ### Feature 2.3: Device & GPS Location Anchoring
 * **Description:** Spatial validation to ensure real-world proximity during physical job sign-offs.
 * **Behavior:** Compares the GPS coordinate logged when the worker submits a task with the GPS coordinate of the client's device when the confirmation link is tapped.
+* **Implementation:** Great-circle distance via the haversine formula, compared against a configurable threshold (default 2 km). The outcome is one of `within`, `outside`, or `unavailable`, kept distinct so a client who declined to share a location is never conflated with one standing at the job site. Both endpoints apply the same range validation; `999,999` is refused on submission and on confirmation.
 
-### Feature 2.4: AI-Fake Image/Video Detector
-* **Description:** Synthetic media scanner protecting the network from AI-generated or scraped portfolio elements.
-* **Behavior:** Inspects file metadata (timestamps, camera signatures, and device data) to reject fake or AI-synthesized upload attempts.
+### Feature 2.4: Media Provenance Signals
+* **Description:** Provenance checks protecting the network from mislabelled or stitched-together upload attempts.
+* **Behavior:** Derives three conclusions from file metadata **while that metadata still exists**, then discards the metadata and keeps only the conclusions: whether a capture device was identified, whether the capture time was internally consistent with the moment of submission, and whether the container is structurally what its declared type claims. No make, model, serial number, or timestamp is retained.
+* **Explicitly not implemented: detection of AI-generated media.** No metadata check can reliably distinguish a generated image from a real one, and nothing in the system claims to do so. What the signals do establish is narrower and still useful: the absence of a camera signature (which capture devices reliably write), a contradictory capture time (after submission, or before 2005, where an unset clock and the 1970 epoch both land), and a container that does not match its type. These are weak evidence, scored as such. They can only lower a score, never raise it above neutral, so a clean-looking file earns nothing and no honest worker's upload is ever refused on their basis.
+* **Consequence:** `metadata_status` remains `pending` and `flagged_ai_fake` is written nowhere. See `doc/13` E-019 for why this specification had to be corrected.
 
 ---
 

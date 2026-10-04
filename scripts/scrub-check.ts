@@ -40,6 +40,109 @@ function buildGpsJpeg(): Buffer {
   return Buffer.concat([app1, payload]);
 }
 
+/**
+ * An EXIF APP1 segment carrying the fields a phone camera writes.
+ *
+ * Built by hand rather than with sharp's `withMetadata`, so the fixture is an
+ * independent description of the format. If the fixture and the parser were both
+ * produced by the same library, a shared misunderstanding would pass unnoticed.
+ *
+ * Laid out explicitly rather than generically, because the interesting part is
+ * that `DateTimeOriginal` (0x9003) belongs in the Exif sub-IFD reached through
+ * the 0x8769 pointer, not in IFD0 next to Make and Model. A parser that only
+ * looked at IFD0 would find the make and model and miss the timestamp, and this
+ * fixture is what makes that failure visible.
+ *
+ * @param make Camera make. When absent, Model is written alone.
+ * @param model Camera model.
+ * @param capturedAt EXIF `DateTimeOriginal`, as `YYYY:MM:DD HH:MM:SS`.
+ */
+function buildExifSegment(make: string | null, model: string | null, capturedAt: string | null): Buffer {
+  // Offsets within the TIFF block.
+  const IFD0 = 8;
+
+  const ifd0Count = (make ? 1 : 0) + (model ? 1 : 0) + (capturedAt ? 1 : 0);
+  let cursor = IFD0 + 2 + ifd0Count * 12 + 4;
+
+  // Values must begin on a word boundary, so pad odd lengths.
+  const align = () => {
+    if (cursor % 2 !== 0) cursor += 1;
+    return cursor;
+  };
+
+  const makeOffset = make ? align() : -1;
+  if (make) cursor += Buffer.byteLength(make, 'latin1') + 1;
+
+  const modelOffset = model ? align() : -1;
+  if (model) cursor += Buffer.byteLength(model, 'latin1') + 1;
+
+  const capturedOffset = capturedAt ? align() : -1;
+  if (capturedAt) cursor += Buffer.byteLength(capturedAt, 'latin1') + 1;
+
+  // The Exif sub-IFD, holding DateTimeOriginal.
+  const subIfd = capturedAt ? cursor : -1;
+  if (capturedAt) cursor += 2 + 12 + 4;
+
+  const tiff = Buffer.alloc(cursor);
+  tiff.write('II', 0, 'latin1');
+  tiff.writeUInt16LE(0x2a, 2);
+  tiff.writeUInt32LE(IFD0, 4);
+
+  tiff.writeUInt16LE(ifd0Count, IFD0);
+
+  /** Writes one IFD entry, pointing at an external offset when the value is long. */
+  const writeEntry = (at: number, tag: number, inline: string | null, external: number): void => {
+    tiff.writeUInt16LE(tag, at);
+    tiff.writeUInt16LE(2, at + 2); // ASCII
+    if (inline === null) {
+      tiff.writeUInt32LE(Buffer.byteLength('x', 'latin1') + 1, at + 4);
+      tiff.writeUInt32LE(external, at + 8);
+    } else {
+      tiff.writeUInt32LE(Buffer.byteLength(inline, 'latin1') + 1, at + 4);
+      if (Buffer.byteLength(inline, 'latin1') + 1 <= 4) tiff.write(inline, at + 8, 'latin1');
+      else tiff.writeUInt32LE(external, at + 8);
+    }
+    // The unused half of an inline value field.
+    if (inline !== null && Buffer.byteLength(inline, 'latin1') + 1 <= 4) {
+      tiff.fill(0, at + 8 + Buffer.byteLength(inline, 'latin1') + 1, at + 12);
+    }
+  };
+
+  let i = 0;
+  const next = () => IFD0 + 2 + i * 12;
+
+  if (make) writeEntry(next(), 0x010f, make.length <= 3 ? make : null, makeOffset);
+  if (make && make.length > 3) tiff.write(make, makeOffset, 'latin1');
+  i += 1;
+
+  if (model) writeEntry(next(), 0x0110, model.length <= 3 ? model : null, modelOffset);
+  if (model && model.length > 3) tiff.write(model, modelOffset, 'latin1');
+  i += 1;
+
+  if (capturedAt) {
+    writeEntry(next(), 0x8769, null, subIfd);
+    i += 1;
+    tiff.writeUInt32LE(0, IFD0 + 2 + ifd0Count * 12); // no next IFD
+
+    tiff.writeUInt16LE(1, subIfd);
+    tiff.writeUInt16LE(0x9003, subIfd + 2);
+    tiff.writeUInt16LE(2, subIfd + 4);
+    tiff.writeUInt32LE(Buffer.byteLength(capturedAt, 'latin1') + 1, subIfd + 6);
+    tiff.writeUInt32LE(capturedOffset, subIfd + 10);
+    tiff.writeUInt32LE(0, subIfd + 14);
+    tiff.write(capturedAt, capturedOffset, 'latin1');
+  } else {
+    tiff.writeUInt32LE(0, IFD0 + 2 + ifd0Count * 12);
+  }
+
+  const payload = Buffer.concat([Buffer.from('Exif\0\0', 'latin1'), tiff]);
+  const app1 = Buffer.alloc(4);
+  app1.writeUInt16BE(0xffe1, 0);
+  app1.writeUInt16BE(payload.length + 2, 2);
+
+  return Buffer.concat([app1, payload]);
+}
+
 function mp4Box(type: string, payload: Buffer): Buffer {
   const head = Buffer.alloc(8);
   head.writeUInt32BE(payload.length + 8, 0);
@@ -171,6 +274,83 @@ async function run(): Promise<void> {
     console.log(`  NOTE  HEIC round-trip not exercised: ${(error as Error).message.slice(0, 80)}`);
   }
 
+  console.log('\n=== provenance signals (derived, then discarded) ===');
+
+  // A fixed submission time, so the plausibility check is deterministic.
+  const submittedAt = new Date(Date.UTC(2026, 9, 4, 12, 0, 0));
+  const withSegment = (segment: Buffer) =>
+    Buffer.concat([Buffer.from([0xff, 0xd8]), segment, plainJpeg.subarray(2)]);
+
+  // A file shaped like a phone camera capture: a named device, taken a minute
+  // before it was submitted.
+  const genuineCapture = withSegment(
+    buildExifSegment('ACME', 'Snapper 12', '2026:10:04 11:59:00'),
+  );
+  const genuineSignals = (await scrubImage(genuineCapture, 'image/jpeg', submittedAt)).signals;
+  check('a named capture device is detected', genuineSignals.hasCameraSignature === true, String(genuineSignals.hasCameraSignature));
+  check(
+    'a capture time just before submission is plausible',
+    genuineSignals.timestampPlausible === true,
+    String(genuineSignals.timestampPlausible),
+  );
+  check('a well-formed JPEG is structurally sound', genuineSignals.encoderKnown === true);
+
+  // The sub-IFD is the part a shallow parser gets wrong, so assert it was read.
+  check(
+    'DateTimeOriginal is read from the Exif sub-IFD, not just IFD0',
+    genuineSignals.timestampPlausible === true,
+  );
+
+  // A file with a make but no model is a stripped-down block, not a capture claim.
+  const halfBlock = withSegment(buildExifSegment('ACME', null, '2026:10:04 11:59:00'));
+  const halfSignals = (await scrubImage(halfBlock, 'image/jpeg', submittedAt)).signals;
+  check('a make without a model is not a camera signature', halfSignals.hasCameraSignature === false, String(halfSignals.hasCameraSignature));
+
+  // Unset clocks and generators both land on the epoch.
+  const epoch = withSegment(buildExifSegment('ACME', 'Snapper 12', '1970:01:01 00:00:00'));
+  const epochSignals = (await scrubImage(epoch, 'image/jpeg', submittedAt)).signals;
+  check('an epoch capture time is implausible', epochSignals.timestampPlausible === false, String(epochSignals.timestampPlausible));
+
+  const pre2005 = withSegment(buildExifSegment('ACME', 'Snapper 12', '1999:12:31 23:59:59'));
+  check(
+    'a pre-2005 capture time is implausible',
+    (await scrubImage(pre2005, 'image/jpeg', submittedAt)).signals.timestampPlausible === false,
+  );
+
+  const future = withSegment(buildExifSegment('ACME', 'Snapper 12', '2027:01:01 00:00:00'));
+  check(
+    'a capture time after submission is implausible',
+    (await scrubImage(future, 'image/jpeg', submittedAt)).signals.timestampPlausible === false,
+  );
+
+  // A photo from earlier in the week is legitimate and must not be flagged.
+  const lastWeek = withSegment(buildExifSegment('ACME', 'Snapper 12', '2026:09:27 09:00:00'));
+  check(
+    'an older photo is still plausible',
+    (await scrubImage(lastWeek, 'image/jpeg', submittedAt)).signals.timestampPlausible === true,
+  );
+
+  // No EXIF at all: absence of a signature is a finding, absence of a time is not.
+  const bareSignals = (await scrubImage(plainJpeg, 'image/jpeg', submittedAt)).signals;
+  check('a file with no EXIF has no camera signature', bareSignals.hasCameraSignature === false, String(bareSignals.hasCameraSignature));
+  check('a file with no EXIF has no timestamp claim', bareSignals.timestampPlausible === null, String(bareSignals.timestampPlausible));
+  check('a plain JPEG is still structurally sound', bareSignals.encoderKnown === true);
+
+  // A PNG must never be reported as having read a camera block it cannot hold.
+  const pngSignals = (await scrubImage(png, 'image/png', submittedAt)).signals;
+  check('a PNG is structurally sound', pngSignals.encoderKnown === true);
+
+  // The whole point: the conclusions survive, the values do not.
+  const afterProvenance = await sharp(genuineCapture, { failOn: 'none' }).metadata();
+  const scrubbedProvenance = await scrubImage(genuineCapture, 'image/jpeg', submittedAt);
+  const scrubbedMeta = await sharp(scrubbedProvenance.buffer, { failOn: 'none' }).metadata();
+  check('a signal-bearing file is still scrubbed clean', !scrubbedMeta.exif, scrubbedMeta.exif ? `${scrubbedMeta.exif.length} bytes left` : 'clean');
+  check('the camera make does not survive', !scrubbedProvenance.buffer.includes(Buffer.from('ACME', 'latin1')));
+  check('the camera model does not survive', !scrubbedProvenance.buffer.includes(Buffer.from('Snapper 12', 'latin1')));
+  check('the capture timestamp does not survive', !scrubbedProvenance.buffer.includes(Buffer.from('2026:10:04', 'latin1')));
+  check('the signals are booleans only', Object.values(genuineSignals).every((v) => typeof v === 'boolean'));
+  check('the fixture really did carry EXIF to read', Boolean(afterProvenance.exif));
+
   console.log('\n=== audio: mp3 ===');
 
   // ID3v2 block with a GEOB frame, then real MPEG data.
@@ -195,6 +375,13 @@ async function run(): Promise<void> {
 
   const bare = scrubAudio(frames, 'audio/mpeg');
   check('a bare MP3 reports no tags', bare.hadAudioTags === false);
+
+  // Audio carries no capture device and no capture time. Reporting false would
+  // assert that the absence of a camera signature was a finding, which for an
+  // audio file it is not, so these must be null.
+  check('audio reports no camera signal', scrubbedMp3.signals.hasCameraSignature === null, String(scrubbedMp3.signals.hasCameraSignature));
+  check('audio reports no timestamp signal', scrubbedMp3.signals.timestampPlausible === null, String(scrubbedMp3.signals.timestampPlausible));
+  check('audio reports no encoder signal', scrubbedMp3.signals.encoderKnown === null, String(scrubbedMp3.signals.encoderKnown));
 
   console.log('\n=== audio: mp4 / m4a ===');
 

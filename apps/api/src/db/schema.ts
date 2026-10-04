@@ -1,8 +1,9 @@
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import {
   boolean,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   real,
@@ -23,6 +24,7 @@ export const verificationStatus = pgEnum('verification_status', [
 ]);
 export const verificationResponse = pgEnum('verification_response', ['none', 'confirmed', 'rejected']);
 export const offerStatus = pgEnum('offer_status', ['pending', 'accepted', 'declined']);
+export const proximityStatus = pgEnum('proximity_status', ['within', 'outside', 'unavailable']);
 
 const createdAt = timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 const updatedAt = timestamp('updated_at', { withTimezone: true }).notNull().defaultNow();
@@ -96,6 +98,17 @@ export const workProofLogs = pgTable(
     description: text('description').notNull(),
     mediaUrl: varchar('media_url', { length: 512 }),
     metadataStatus: metadataStatus('metadata_status').notNull().default('pending'),
+    /**
+     * Provenance findings, derived from metadata the scrubber destroyed.
+     *
+     * Booleans only. There is no column anywhere for a camera make, a model, a
+     * serial number, or a capture time, which is what allows a fraud signal to
+     * exist without weakening the retention promise in doc/08.
+     */
+    mediaSignalEvaluated: boolean('media_signal_evaluated').notNull().default(false),
+    mediaHasCameraSignature: boolean('media_has_camera_signature'),
+    mediaTimestampPlausible: boolean('media_timestamp_plausible'),
+    mediaEncoderKnown: boolean('media_encoder_known'),
     submissionGps: varchar('submission_gps', { length: 64 }),
     verificationStatus: verificationStatus('verification_status').notNull().default('pending'),
     createdAt,
@@ -113,7 +126,16 @@ export const verifications = pgTable(
     workProofId: uuid('work_proof_id')
       .notNull()
       .references(() => workProofLogs.id, { onDelete: 'restrict' }),
-    verifierPhone: varchar('verifier_phone', { length: 32 }),
+    /**
+     * Salted SHA-256 of the verifier's phone number, used only to recognise that
+     * the same party confirmed several proofs. The number itself is never
+     * stored; it would be the one piece of client PII this table would hold, and
+     * the collusion filter does not need it.
+     *
+     * Null means the worker supplied no number, so network diversity could not
+     * be assessed for this endorsement.
+     */
+    verifierPhoneHash: varchar('verifier_phone_hash', { length: 64 }),
     /**
      * SHA-256 hash of the single-use verification token. The raw token is
      * returned once when the record is created and is never stored, so a
@@ -122,7 +144,21 @@ export const verifications = pgTable(
     tokenHash: varchar('token_hash', { length: 64 }).notNull(),
     response: verificationResponse('response').notNull().default('none'),
     verifierGps: varchar('verifier_gps', { length: 64 }),
+    /** Great-circle distance between the submission point and the client's tap. */
+    proximityKm: real('proximity_km'),
+    /**
+     * `unavailable` is an absence of evidence, not a pass. Kept distinct from
+     * `within` so a client who declined geolocation is never conflated with one
+     * who was standing at the job site.
+     */
+    proximityStatus: proximityStatus('proximity_status'),
+    /** 0..1 where 1 is fully supported. Null for a rejection, which is not scored. */
     fraudScore: real('fraud_score'),
+    /** Per-signal breakdown behind fraudScore, so a blocked proof is explainable. */
+    fraudScoreDetail: jsonb('fraud_score_detail'),
+    /** Whether the link was accepted by a messaging provider, and why not if not. */
+    dispatchStatus: varchar('dispatch_status', { length: 32 }),
+    dispatchDetail: varchar('dispatch_detail', { length: 200 }),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     createdAt,
@@ -130,6 +166,9 @@ export const verifications = pgTable(
   (table) => [
     uniqueIndex('verifications_token_hash_unique').on(table.tokenHash),
     index('verifications_work_proof_id_idx').on(table.workProofId),
+    index('verifications_verifier_phone_hash_idx')
+      .on(table.verifierPhoneHash)
+      .where(sql`${table.verifierPhoneHash} is not null`),
   ],
 );
 

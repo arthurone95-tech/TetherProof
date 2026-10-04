@@ -1,9 +1,11 @@
 import { and, eq } from 'drizzle-orm';
+import { env } from '../../config/env.js';
 import { db } from '../../db/client.js';
-import { capabilityBlocks, users, verifications, workProofLogs } from '../../db/schema.js';
+import { capabilityBlocks, profiles, users, verifications, workProofLogs } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
+import { sendVerificationLink } from '../../lib/messaging/index.js';
 import { deleteWorkProofMedia, uploadWorkProofMedia } from '../../lib/storage.js';
-import { generateVerificationToken, hashVerificationToken } from '../../lib/token.js';
+import { generateVerificationToken, hashVerificationToken, hashVerifierPhone } from '../../lib/token.js';
 import type { UploadedMedia } from '../../middleware/upload.js';
 import type { ProofSubmissionInput } from './schemas.js';
 
@@ -33,10 +35,13 @@ export interface ProofSubmissionResult {
    * The single-use confirmation token, returned exactly once.
    *
    * Only its SHA-256 digest is stored, so this value cannot be recovered from the
-   * database later. Delivering it by SMS is not wired up; see doc/13.
+   * database later. Also sent to `verifierPhone` when one was supplied and a
+   * provider is configured.
    */
   verificationToken: string;
   verificationExpiresAt: string;
+  /** Whether the link was accepted for delivery. False means share it manually. */
+  verificationLinkSent: boolean;
 }
 
 /**
@@ -106,9 +111,13 @@ export async function submitProof(
 ): Promise<ProofSubmissionResult> {
   // The access token has already been verified, but the proof row references
   // `public.users`, and that row is what the foreign key and RLS are anchored to.
+  // The profile is read here so the message names the worker from stored data.
+  // Taking the name from the request instead would let a worker put arbitrary
+  // text into a message sent to someone else's phone.
   const worker = await db
-    .select({ id: users.id })
+    .select({ id: users.id, fullName: profiles.fullName })
     .from(users)
+    .leftJoin(profiles, eq(profiles.userId, users.id))
     .where(eq(users.id, workerId))
     .limit(1);
 
@@ -119,11 +128,14 @@ export async function submitProof(
   const block = await resolveCapabilityBlock(workerId, input);
 
   // Scrubbing happens inside the store call, so there is no way to reach the
-  // bucket without it.
+  // bucket without it. The signals it derives are only meaningful against the
+  // moment of submission, so the time is captured here rather than inside.
+  const submittedAt = new Date();
   const stored = await uploadWorkProofMedia(workerId, {
     buffer: media.buffer,
     contentType: media.contentType,
     size: media.size,
+    submittedAt,
   });
 
   const rawToken = generateVerificationToken();
@@ -141,8 +153,17 @@ export async function submitProof(
         // cannot be turned into a media link.
         mediaUrl: stored.path,
         // Scrubbing removes location data; it does not assess authenticity.
+        // Nothing has assessed this media yet, so `pending` remains the only
+        // honest value and `flagged_ai_fake` is not written anywhere.
         metadataStatus: 'pending',
         submissionGps: input.submissionGps ?? null,
+        // Provenance booleans derived from the metadata the scrubber destroyed.
+        // The values themselves were never retained, so there is nothing here
+        // that could identify a device or place a person at a time.
+        mediaSignalEvaluated: true,
+        mediaHasCameraSignature: stored.signals.hasCameraSignature,
+        mediaTimestampPlausible: stored.signals.timestampPlausible,
+        mediaEncoderKnown: stored.signals.encoderKnown,
       })
       .returning({ id: workProofLogs.id });
 
@@ -150,11 +171,31 @@ export async function submitProof(
       throw AppError.internal('The proof could not be recorded.');
     }
 
-    await db.insert(verifications).values({
-      workProofId: proof.id,
-      verifierPhone: input.verifierPhone ?? null,
-      tokenHash: hashVerificationToken(rawToken),
+    // Only the salted hash is retained. The number is used once, to address the
+    // message, and never written down.
+    const verifierPhoneHash = input.verifierPhone ? hashVerifierPhone(input.verifierPhone) : null;
+
+    const [verification] = await db
+      .insert(verifications)
+      .values({
+        workProofId: proof.id,
+        verifierPhoneHash,
+        tokenHash: hashVerificationToken(rawToken),
+        expiresAt,
+      })
+      .returning({ id: verifications.id });
+
+    if (!verification) {
+      throw AppError.internal('The verification could not be prepared.');
+    }
+
+    const dispatch = await dispatchLink({
+      to: input.verifierPhone ?? null,
+      rawToken,
       expiresAt,
+      skillTag: block.skillTag,
+      workerName: worker[0].fullName ?? '',
+      verificationId: verification.id,
     });
 
     return {
@@ -165,10 +206,68 @@ export async function submitProof(
       scrubbed: stored.scrubbed,
       verificationToken: rawToken,
       verificationExpiresAt: expiresAt.toISOString(),
+      verificationLinkSent: dispatch,
     };
   } catch (error) {
     // Never leave a stored object that no row references.
     await deleteWorkProofMedia(stored.path).catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * Sends the confirmation link and records whether it went.
+ *
+ * Three separate things can each prevent this, and all three are recorded the
+ * same way, because from the worker's side they are indistinguishable: no
+ * number was given, no public web origin is configured, or the provider refused.
+ *
+ * Never throws. The proof is already stored by this point, so failing the
+ * request would discard a real piece of work over a delivery problem. The
+ * worker still receives the token in the response and can share it manually,
+ * which is what `verificationLinkSent: false` is telling them.
+ */
+async function dispatchLink(input: {
+  to: string | null;
+  rawToken: string;
+  expiresAt: Date;
+  skillTag: string;
+  workerName: string;
+  verificationId: string;
+}): Promise<boolean> {
+  const record = async (status: string, detail?: string) => {
+    await db
+      .update(verifications)
+      .set({ dispatchStatus: status, dispatchDetail: detail ?? null })
+      .where(eq(verifications.id, input.verificationId));
+  };
+
+  if (!input.to) {
+    await record('not_attempted', 'No client phone number was supplied.');
+    return false;
+  }
+
+  if (!env.WEB_BASE_URL) {
+    await record('not_attempted', 'WEB_BASE_URL is not configured, so no link could be built.');
+    return false;
+  }
+
+  const link = `${env.WEB_BASE_URL.replace(/\/$/, '')}/verify/${input.rawToken}`;
+  const result = await sendVerificationLink({
+    to: input.to,
+    workerName: input.workerName,
+    skillTag: input.skillTag,
+    link,
+    expiresAt: input.expiresAt,
+  });
+
+  if (result.sent) {
+    await record('sent');
+    return true;
+  }
+
+  // The provider's own wording is deliberately not stored; it can echo the
+  // recipient's number. The generic reason plus the server log is the record.
+  await record('failed', result.reason ?? 'The messaging provider did not accept the message.');
+  return false;
 }

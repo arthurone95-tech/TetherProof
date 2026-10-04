@@ -1,28 +1,5 @@
 import { z } from 'zod';
-
-/**
- * Validates a `latitude,longitude` pair.
- *
- * The format check alone would accept `999,999`, which would later poison the
- * proximity checks that compare a worker's submission against a client's tap.
- * Both components are therefore range-checked here, at the boundary, so an
- * out-of-range coordinate never reaches the database.
- */
-const gpsSchema = z
-  .string()
-  .trim()
-  .regex(/^-?\d{1,3}(\.\d+)?,-?\d{1,3}(\.\d+)?$/, 'Location coordinates are malformed.')
-  .refine((value) => {
-    const [latitude, longitude] = value.split(',').map(Number);
-    return (
-      latitude !== undefined &&
-      longitude !== undefined &&
-      Number.isFinite(latitude) &&
-      Number.isFinite(longitude) &&
-      Math.abs(latitude) <= 90 &&
-      Math.abs(longitude) <= 180
-    );
-  }, 'Location coordinates are out of range.');
+import { gpsSchema } from '../../lib/geo.js';
 
 export const proofSubmissionSchema = z.object({
   /** Free-text summary of the work, shown to the client confirming it. */
@@ -47,7 +24,13 @@ export const proofSubmissionSchema = z.object({
    */
   submissionGps: gpsSchema.optional(),
 
-  /** Phone number the confirmation link will be sent to. Dispatch is not wired up yet. */
+  /**
+   * Phone number the confirmation link will be sent to.
+   *
+   * Only a salted hash is stored, and the number itself is never written down.
+   * Optional: with no number the worker receives the link in the API response and
+   * shares it themselves, which is the same outcome as a dispatch failure.
+   */
   verifierPhone: z
     .string()
     .trim()

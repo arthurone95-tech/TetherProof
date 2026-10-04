@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { logger } from '../config/logger.js';
 import { env } from '../config/env.js';
 import { AppError } from './errors.js';
-import { scrubAudio, scrubImage } from './media-scrub.js';
+import { scrubAudio, scrubImage, type MediaSignals } from './media-scrub.js';
 import { supabaseAdmin } from './supabase.js';
 
 /**
@@ -41,6 +41,11 @@ export interface StoredMedia {
     hadMetadata: boolean;
     hadAudioTags: boolean;
   };
+  /**
+   * Provenance findings, derived from the metadata that was just discarded.
+   * Booleans only; no identifying value leaves the scrubber.
+   */
+  signals: MediaSignals;
 }
 
 export function isAllowedMediaType(contentType: string): boolean {
@@ -66,7 +71,7 @@ export function isAllowedMediaType(contentType: string): boolean {
  */
 export async function uploadWorkProofMedia(
   workerId: string,
-  file: { buffer: Buffer; contentType: string; size: number },
+  file: { buffer: Buffer; contentType: string; size: number; submittedAt?: Date },
 ): Promise<StoredMedia> {
   const declaredType = file.contentType.toLowerCase();
   const extension = ALLOWED_CONTENT_TYPES.get(declaredType);
@@ -87,7 +92,7 @@ export async function uploadWorkProofMedia(
 
   const scrubbed =
     declaredType.startsWith('image/')
-      ? await scrubImage(file.buffer, declaredType)
+      ? await scrubImage(file.buffer, declaredType, file.submittedAt)
       : scrubAudio(file.buffer, declaredType);
 
   if (scrubbed.buffer.length === 0) {
@@ -132,6 +137,7 @@ export async function uploadWorkProofMedia(
       hadMetadata: scrubbed.hadMetadata,
       hadAudioTags: scrubbed.hadAudioTags,
     },
+    signals: scrubbed.signals,
   };
 }
 
