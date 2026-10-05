@@ -4,6 +4,7 @@ import { authRateLimiter, codeVerificationRateLimiter, confirmationRateLimiter }
 import { validateBody } from '../../middleware/validate.js';
 import {
   confirm,
+  deleteAccount,
   getProfile,
   login,
   register,
@@ -108,6 +109,34 @@ authRouter.patch('/profile', authenticate, validateBody(updateProfileSchema), as
   try {
     const updated = await updateProfile(req.auth!.userId, req.body);
     res.status(200).json(updated);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Deletes the caller's own account.
+ *
+ * `DELETE` rather than a `POST` to some action path, because the effect is the
+ * account's non-existence and a verb that describes it makes the semantics
+ * legible to anyone reading a log.
+ *
+ * Scoped to `req.auth.userId` and to no id in the body. A deletion endpoint that
+ * accepts a target would be an account-takeover primitive the moment one
+ * identifier were guessed, and there is no self-service variant that needs one.
+ *
+ * Open to any authenticated role: a worker, an employer, and an administrator all
+ * hold records worth releasing.
+ *
+ * The response reports what was actually removed rather than a bare success, so a
+ * caller is never told the account and its media are gone when only the account
+ * is. `201` is not used: the account existed and now does not, which is not the
+ * creation of a resource.
+ */
+authRouter.delete('/account', authenticate, async (req, res, next) => {
+  try {
+    const result = await deleteAccount(req.auth!.userId);
+    res.status(200).json(result);
   } catch (error) {
     next(error);
   }

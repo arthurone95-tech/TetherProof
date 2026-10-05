@@ -39,9 +39,10 @@ the profile page down the wrong path. See `doc/13` E-027.
 ### C. Capability Blocks Table (`capability_blocks`)
 Stores the verifiable skills and execution milestones owned by workers.
 * `id` (UUID, Primary Key)
-* `worker_id` (UUID, Foreign Key referencing `users.id`)
+* `worker_id` (UUID, **nullable**, Foreign Key referencing `users.id`, `ON DELETE set null`)
 * `skill_tag` (VARCHAR, Indexed - e.g., `Refrigeration Repair`, `React State Management`)
 * `skill_level` (INTEGER)
+* `anonymised_at` (TIMESTAMP, **NULL** except on a block retained after its owner deleted their account)
 
 `proof_count` and `last_verified_at` were dropped in migration `0004`. Both were dormant
 columns that no code path ever incremented, so every read returned `0` and `NULL`. Nothing
@@ -54,10 +55,11 @@ repairing on every write path.
 ### D. Work Proof Logs Table (`work_proof_logs`)
 Stores individual task completions, media proofs, and telemetry data.
 * `id` (UUID, Primary Key)
-* `worker_id` (UUID, Foreign Key referencing `users.id`)
+* `worker_id` (UUID, **nullable**, Foreign Key referencing `users.id`, `ON DELETE set null`)
 * `capability_block_id` (UUID, Foreign Key referencing `capability_blocks.id`)
 * `description` (TEXT)
 * `media_url` (VARCHAR, Secure object storage path with stripped PII)
+* `anonymised_at` (TIMESTAMP, **NULL** except on a record retained after its owner deleted their account. Non-null means the row was scrubbed by the `0005` trigger, which is stated explicitly because inferring it from `worker_id IS NULL` would make an absence of evidence the evidence)
 * `metadata_status` (ENUM: `pending`, `valid`, `flagged_ai_fake`. **Only `pending` is ever written.** The other two values exist in the type but no code path sets them, because detecting synthetic media is not implemented and is not claimed. The provenance signals below are consistency checks, not AI-generation detection)
 * `media_signal_evaluated` (BOOLEAN, False when the file could not be examined for provenance)
 * `media_has_camera_signature` (BOOLEAN, True when the discarded EXIF named a capture device)
@@ -174,7 +176,10 @@ answer independently.
 
 ## 3. Data Integrity & Security Rules
 * **Row Level Security:** Enabled **and forced** on every table, so it applies to the table owner as well as to `anon` and `authenticated`. Because Supabase exposes the database to the browser through PostgREST, RLS is the boundary that keeps one user from reading another's data. Policies restrict each table to its owner (and, for direct offers, to both parties). Employers cannot read worker work proofs directly; that data is only reachable through the zero-knowledge search service. Neither `anon` nor `authenticated` holds any grant on these tables, so the API's service role is the real boundary and RLS is defence in depth behind it.
-* **Foreign Key Constraints:** Cascading rules are deliberately inconsistent, and the reason matters. Deleting an account cascades to `profiles`, `employer_specs`, `employer_approvals`, `candidate_handles`, and `direct_offers` — nothing derived from a user should outlive them. But `capability_blocks.worker_id` and `work_proof_logs.worker_id` are `ON DELETE restrict`, which **makes any worker who has ever logged a job impossible to delete**. Deleting them through the auth admin API fails with a generic `Database error deleting user`, and the failure message names neither the table nor the constraint. This is logged as `doc/13` E-025 and is unresolved: correcting it means a migration, and the retention intent behind the restriction needs a decision rather than a guess.
+* **Foreign Key Constraints:** Cascading rules follow what each row *is*, not a single habit. Deleting an account cascades to `profiles`, `employer_specs`, `employer_approvals`, `candidate_handles`, and `direct_offers` - nothing derived from a user should outlive them. `capability_blocks.worker_id` and `work_proof_logs.worker_id` are `ON DELETE set null` (migration `0005`), which detaches the evidence from the person while keeping the record. They were `ON DELETE restrict` until then, which made any worker who had ever logged a job impossible to delete; that defect is `doc/13` E-025 and its resolution is E-029.
+* **Anonymisation on deletion (`0005`):** A `BEFORE DELETE` trigger on `users`, named `users_anonymise_on_delete`, runs `anonymise_account_on_delete()`. It overwrites `description`, nulls `submission_gps` and `media_url` on the worker's proofs, nulls `verifier_gps` on their verifications, and stamps `anonymised_at` on both proof tables. It fires through the cascade from `auth.users`, which is the path the auth admin API takes - verified rather than assumed. The function is `SECURITY DEFINER` with a pinned `search_path` and `REVOKE ... FROM PUBLIC`; because it is a trigger function PostgreSQL will not allow it to be called directly, so it needs no grant and cannot be granted by mistake.
+* **A nullable `worker_id` is not an oversight:** on a deliberately retained anonymised record, a non-null `worker_id` would be a contradiction. Code reading these tables must exclude `worker_id IS NULL` explicitly rather than rely on a join dropping the rows. `doc/13` E-029 records the two places that had to change - the candidate aggregate and the collusion graph - and both exclusions are deliberate rather than incidental.
+* **`orphaned_proof_media`:** SQL cannot delete storage objects. `storage.protect_delete()` refuses it, verified against the live project, so the trigger records the bucket and path of every object still stored at deletion time, read back from `storage.objects` rather than assumed so the record survives a bucket rename. This is an auditable queue, not a record of what happened: the bytes are still there until something drains it. An object path is `<user_id>/<YYYY-MM-DD>/<uuid>.<ext>`, so the prefix still identifies the person who asked to be removed; holding that path is acceptable only because the row is written at deletion time, when the user id in the prefix has just been deleted from `auth.users`.
 * **Encryption:** Sensitive personal data and authentication secrets must be encrypted at rest.
 * **PII Isolation:** Verifier phone numbers and raw client details are isolated from public worker profiles to preserve privacy.
 * **Token Hashing:** Verification links are the live capability to confirm work, so only a SHA-256 hash of the token is persisted. The raw token exists once, in the response that creates the record, and is never written to the database or to logs. Lookup by `token_hash` ensures a database disclosure is insufficient to forge a confirmation.

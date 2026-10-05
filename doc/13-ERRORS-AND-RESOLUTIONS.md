@@ -1046,6 +1046,11 @@ Making the smoke suite's pre-flight resilient to an interrupted predecessor run 
 restricted rows in order rather than calling `deleteUser` and swallowing the failure — is a
 follow-up that belongs with the migration.
 
+**That follow-up is no longer needed, and the migration resolved it rather than needing it.** With
+the foreign keys on `set null`, `deleteUser` succeeds on an account that has logged work, so the
+pre-flight's existing call now works. The suite additionally drains `orphaned_proof_media` and
+refuses to count anonymised rows as orphans, both of which E-029 introduced.
+
 ---
 
 ## E-026: Accounts provisioned outside registration had no profile row
@@ -1159,3 +1164,130 @@ of continuous use is a small cost; failing a render over it would be a large one
 A stack trace. `next start` logs only the error summary, so the production path cannot produce
 one without either a development server or an error-reporting hook. Neither was added, since
 adding infrastructure for a defect that has not reproduced in sixty attempts is a poor trade.
+
+---
+
+## E-029: Account deletion had no mechanism that a trigger could complete
+
+* **Status:** Resolved — 2026-10-05, verified live against the running project
+* **Found:** 2026-10-05, while implementing the E-025 resolution.
+* **Related:** implements E-025; `doc/08` data retention; migration `0005`.
+
+### Description
+The E-025 fix has two halves, and only the first is a schema change. The database can detach a
+worker's proof records from the worker; it cannot delete the file the worker uploaded.
+
+That file matters more than it looks. The object path is
+`<user_id>/<YYYY-MM-DD>/<uuid>.<ext>`, so the **path prefix is the worker's own user id**. Nulling
+`media_url` removes the pointer but leaves an object in the bucket that still identifies the person
+who has just asked to be removed — to anyone able to list the bucket.
+
+The obvious implementation is a trigger that deletes the object. It cannot work, and this was
+established empirically rather than assumed:
+
+```
+delete from storage.objects where bucket_id = 'work-proofs' and …
+  42501  Direct deletion from storage tables is not allowed. Use the Storage API instead.
+         raised by storage.protect_delete()
+```
+
+Refused with the row genuinely present, from a direct database connection, as the table owner. It is
+a deliberate guard against accidental data loss from orphaned objects, not a permissions gap. The
+same probe confirmed the Storage API does remove the object, after which a signed URL for it is
+refused. So a `BEFORE DELETE` trigger can scrub every column and still leave the bytes behind, and
+nothing in SQL can close that gap.
+
+### What the migration does instead
+1. **Scrub what SQL can scrub.** A `BEFORE DELETE` trigger on `public.users` overwrites the
+   description, nulls `submission_gps` and `media_url`, nulls `verifications.verifier_gps`, and
+   stamps `anonymised_at` on both proof tables. `BEFORE` because a referential action fires as an
+   `AFTER` trigger on the parent, so this runs before the new `ON DELETE set null` empties the
+   column it has to search on. It fires for rows deleted by the cascade from `auth.users` too, which
+   is the path Supabase's `deleteUser` takes — verified, not assumed.
+2. **Record what SQL cannot delete.** `public.orphaned_proof_media` receives the bucket and path of
+   every object still stored at deletion time, read back from `storage.objects` rather than
+   assumed so it stays correct if the bucket is ever renamed. This turns an invisible leak into an
+   auditable queue: an untracked object is indistinguishable from one that was never created.
+3. **Leave removal to the Storage API**, which the smoke suite exercises end to end and then drains.
+
+### Why `SECURITY DEFINER` and `REVOKE ... FROM PUBLIC`
+The deleting role should not need `UPDATE` on the proof tables in order to scrub them, so the
+function is `SECURITY DEFINER` with a pinned `search_path`. It is a *trigger* function, which
+PostgreSQL will not let you call directly from SQL, so unlike a helper function it cannot be
+granted to anything by mistake — which is why no `GRANT` accompanies the revoke.
+
+### `verifier_phone_hash` is deliberately retained
+It is a salted hash of a **third party's** number, not the worker's, and it is what lets the
+collusion filter still recognise one client approving many proofs. Scrubbing it would make every
+verifier look new and silently disable a fraud check. The coordinate beside it is retained by no
+such argument and is nulled.
+
+### Consequences for reads, and the two that were easy to get wrong
+* `aggregateCandidateMetrics` groups by `worker_id`. Anonymised rows would have grouped into a
+  single candidate with a null identity and then failed `candidate_handles`' foreign key. Excluded
+  explicitly. No live worker's numbers change: each row is grouped by its own worker, so dropping
+  one worker's anonymised rows removes only their own contribution.
+* `loadEndorsementHistory` feeds the collusion graph, which keys on worker identity. A null there
+  would collapse **every deleted worker into one node**, making a verifier look more diverse than
+  they are — the filter would fail open on exactly the rings it exists to catch. Excluded.
+
+The known limit of that second choice: a verifier who built their apparent reach through workers
+who have since deleted their accounts now looks narrower than they are. Correcting for it needs
+approvals counted per distinct deleted account, which the retention policy deliberately does not
+keep. Recorded rather than papered over.
+
+A verification link for an anonymised proof is refused as already spent (`409`). The link was
+dispatched while the worker was on the platform; letting a year-old link write a verification
+outcome and a fraud score onto a record the worker asked to be released from them would undermine
+the retention the change exists to provide. It is reported as spent rather than as an error about
+the worker, so a client is not told that an account was deleted.
+
+### A bug this introduced, and the shape of it
+Making `worker_id` nullable broke the smoke suite's own orphan check, which read:
+
+```sql
+where not exists (select 1 from auth.users u where u.id = t.worker_id)
+```
+
+A null `worker_id` satisfies that predicate **by construction**, so every deliberately retained
+record would have been counted as a leak — and then, by being ignored, the check would have stopped
+meaning anything. The fix is `t.worker_id is not null and not exists (…)`.
+
+This is the third time in this project that an absence has been read as a measurement. E-025 itself
+was misdiagnosed twice from a `head: true` count that returned `null` and was guarded as if it were
+zero. The general rule, now written down: **where a null decides whether something is safe to
+delete or safe to report, the query has to distinguish "no rows" from "the count failed", or it has
+to ask a question whose answer cannot be null.**
+
+### Verification
+`npm run smoke -- --live --web`, two new sections against the live database.
+
+`ACCOUNT DELETION BY ANONYMISATION` — 22 assertions. It provisions a worker carrying a profile, a
+capability block, a verified proof with stored media, and a confirmation, then issues `DELETE
+/auth/account` as that member. It asserts the delete succeeds and reports `mediaRemoved: 1,
+mediaPending: 0`; the auth user, `public.users` row, and profile are gone; the proof, capability
+block, and confirmation are retained with the identifying columns cleared and `anonymised_at`
+set; **the skill tag survives and the record still aggregates under it**; the verifier phone hash
+survives; the stored object the trigger could not reach is gone from the bucket and its signed URL
+is refused; and `orphaned_proof_media` is drained to zero rows. The retained rows are cleaned up
+by id afterwards, since they carry a null `worker_id` and the owner-scoped cleanup cannot see
+them.
+
+`SELF-SERVICE ACCOUNT DELETION` — 4 assertions on the refusal path: no session is `401`, a forged
+token is `401`, and `DELETE /auth/account/someone-elses-id` is `404` because no such route exists
+— asserted through a refusal rather than by reading the source.
+
+Suite total: **243 passed, 0 failed**, bucket at **0 objects**. Separately verified in a real
+browser: a worker with a logged proof signed in through the form, read `/settings/account`,
+confirmed the form holds the button with no nested form and no link inside it, deleted, landed on
+`/?deleted=1` with the plain-language confirmation, and was redirected to `/login` when returning
+to `/settings/account` — so the session really was gone rather than the page merely having moved.
+Post-walkthrough probe: account, `public.users`, and profile all zero rows; proof retained with
+`worker_id` null and `anonymised_at` set; block retained with its skill tag; **0 objects stored
+under the account**; signed URL refused; 0 queue rows; and the retained proof still counted in
+its skill aggregate.
+
+### Known limit
+An operator deleting an account through the Supabase dashboard bypasses the endpoint. The trigger
+still runs and the row still lands in `orphaned_proof_media`, but nothing removes the object, so
+those rows wait to be drained by hand. The endpoint closes the gap only on the path it sits on.

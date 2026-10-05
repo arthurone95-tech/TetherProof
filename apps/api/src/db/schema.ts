@@ -75,11 +75,23 @@ export const capabilityBlocks = pgTable(
   'capability_blocks',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    workerId: uuid('worker_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'restrict' }),
+    /**
+     * Null only after the worker deleted their account.
+     *
+     * The row is retained rather than cascaded, so the skill tag and level keep
+     * contributing to aggregate counts. Migration 0005 makes this nullable and
+     * swaps the restrict for `ON DELETE set null`; before that, a worker who had
+     * ever logged work could not be deleted at all (doc/13 E-025).
+     */
+    workerId: uuid('worker_id').references(() => users.id, { onDelete: 'set null' }),
     skillTag: varchar('skill_tag', { length: 160 }).notNull(),
     skillLevel: integer('skill_level').notNull().default(1),
+    /**
+     * Marks the detached state positively rather than inferring it from
+     * `workerId` being null, which cannot distinguish a deletion from a bad
+     * write.
+     */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     // There is deliberately no cached proof count or last-verified timestamp
     // here. Both were dropped in migration 0004: nothing had ever written them,
     // so they always read zero, and an employer search ranking on a cached
@@ -89,6 +101,9 @@ export const capabilityBlocks = pgTable(
   (table) => [
     index('capability_blocks_worker_id_idx').on(table.workerId),
     index('capability_blocks_skill_tag_idx').on(table.skillTag),
+    // Anonymised rows have a null worker_id, which PostgreSQL treats as distinct,
+    // so several deleted workers can each retain a block for the same skill.
+    // Collapsing them would destroy a count.
     uniqueIndex('capability_blocks_worker_skill_unique').on(table.workerId, table.skillTag),
   ],
 );
@@ -97,9 +112,15 @@ export const workProofLogs = pgTable(
   'work_proof_logs',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    workerId: uuid('worker_id')
-      .notNull()
-      .references(() => users.id, { onDelete: 'restrict' }),
+    /**
+     * Null only after the worker deleted their account; see `capabilityBlocks`.
+     *
+     * Anonymised rows are retained, not deleted, and `capabilityBlockId` still
+     * points at the anonymised block. Severing that too would strip the skill tag
+     * and drop the record out of every aggregate, quietly decrementing counts
+     * that other people's trust scores depend on.
+     */
+    workerId: uuid('worker_id').references(() => users.id, { onDelete: 'set null' }),
     capabilityBlockId: uuid('capability_block_id').references(() => capabilityBlocks.id, {
       onDelete: 'set null',
     }),
@@ -119,11 +140,46 @@ export const workProofLogs = pgTable(
     mediaEncoderKnown: boolean('media_encoder_known'),
     submissionGps: varchar('submission_gps', { length: 64 }),
     verificationStatus: verificationStatus('verification_status').notNull().default('pending'),
+    /** Set when the owning worker deleted their account. See migration 0005. */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     createdAt,
   },
   (table) => [
     index('work_proof_logs_worker_id_idx').on(table.workerId),
     index('work_proof_logs_verification_status_idx').on(table.verificationStatus),
+  ],
+);
+
+/**
+ * Stored proof objects still awaiting removal after their account was deleted.
+ *
+ * Storage refuses deletion from SQL — verified, not assumed: `delete from
+ * storage.objects` raises 42501 from `storage.protect_delete()` even as the table
+ * owner, and only the Storage API removes an object. So a database trigger cannot
+ * finish an account deletion, and an object left behind keeps the deleted
+ * worker's user id in its path prefix.
+ *
+ * This records those paths so they can be removed rather than forgotten. An
+ * untracked object is indistinguishable from one that was never created.
+ *
+ * A row is only ever written at deletion time, when the user id in the prefix has
+ * just been deleted from `auth.users` and therefore identifies nobody.
+ */
+export const orphanedProofMedia = pgTable(
+  'orphaned_proof_media',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    bucket: text('bucket').notNull(),
+    path: text('path').notNull(),
+    /** The proof the object belonged to. Retained for audit. */
+    workProofId: uuid('work_proof_id').references(() => workProofLogs.id, { onDelete: 'set null' }),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex('orphaned_proof_media_path_unique').on(table.bucket, table.path),
+    index('orphaned_proof_media_work_proof_idx')
+      .on(table.workProofId)
+      .where(sql`${table.workProofId} is not null`),
   ],
 );
 

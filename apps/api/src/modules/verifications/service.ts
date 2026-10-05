@@ -44,6 +44,7 @@ async function loadByTokenHash(tokenHash: string) {
       description: workProofLogs.description,
       submissionGps: workProofLogs.submissionGps,
       createdAt: workProofLogs.createdAt,
+      anonymisedAt: workProofLogs.anonymisedAt,
       skillTag: capabilityBlocks.skillTag,
     })
     .from(verifications)
@@ -57,12 +58,41 @@ async function loadByTokenHash(tokenHash: string) {
 
 type LoadedVerification = Awaited<ReturnType<typeof loadByTokenHash>>;
 
-function assertUsable(record: LoadedVerification): asserts record is NonNullable<LoadedVerification> {
+/**
+ * A verification whose proof is still attached to a live worker.
+ *
+ * Named rather than inlined so `assertUsable` and its callers cannot disagree
+ * about the shape. `workerId` is non-null here because every caller needs it as an
+ * identity: the collusion graph keys on it, and a null would be a node standing in
+ * for every deleted worker at once.
+ */
+type UsableVerification = NonNullable<LoadedVerification> & { workerId: string };
+
+function assertUsable(record: LoadedVerification): asserts record is UsableVerification {
   if (!record) {
     throw new AppError({
       code: ERROR_CODES.VERIFICATION_TOKEN_INVALID,
       message: 'This verification link is not valid.',
       status: 404,
+    });
+  }
+
+  // A proof whose worker has deleted their account is retained but closed.
+  //
+  // The link was dispatched to a client while the worker was on the platform, and
+  // answering it now would write a verification outcome, a fraud score, and a
+  // timestamp onto a record the worker asked to be released from them. The record
+  // survives anonymisation so that the counts it contributes to stay true; letting
+  // a year-old link keep mutating it would undermine exactly that.
+  //
+  // The refusal is reported as a spent link rather than an error about the
+  // worker: the client is not the reason this cannot be answered, and saying
+  // otherwise would tell a third party that an account was deleted.
+  if (record.anonymisedAt !== null) {
+    throw new AppError({
+      code: ERROR_CODES.VERIFICATION_TOKEN_CONSUMED,
+      message: 'This verification link is no longer active.',
+      status: 409,
     });
   }
 
@@ -137,11 +167,28 @@ async function loadEndorsementHistory(excludeVerificationId: string): Promise<En
         // verifier's apparent reach.
         eq(verifications.response, 'confirmed'),
         ne(verifications.id, excludeVerificationId),
+        // Anonymised proofs are excluded, because a null worker id would collapse
+        // every deleted worker into a single node of the graph. That node would
+        // make a verifier look more diverse than they are, so the filter would
+        // fail open on exactly the rings it exists to catch.
+        //
+        // The limit of this choice is worth stating: a verifier who built their
+        // apparent reach through workers who have since deleted their accounts
+        // now looks narrower than they are. Correcting for that needs the
+        // approvals counted per distinct deleted account, which the retention
+        // policy deliberately does not keep.
+        isNotNull(workProofLogs.workerId),
       ),
     )
     .limit(COLLUSION_HISTORY_LIMIT);
 
-  return rows.map((row) => ({ workerId: row.workerId, verifierKey: row.verifierKey }));
+  // `isNotNull` above is a runtime filter, not a type-level one: drizzle 0.45
+  // returns a plain `SQL` from it, so the compiler still sees `string | null`
+  // here. The guard is kept rather than papered over with a cast so that this
+  // function cannot hand the graph a null node even if the query is edited later.
+  return rows.flatMap((row) =>
+    row.workerId === null ? [] : [{ workerId: row.workerId, verifierKey: row.verifierKey }],
+  );
 }
 
 /** Provenance signals for a proof, or null if the row predates this feature. */
@@ -175,7 +222,7 @@ async function loadMediaSignals(workProofId: string): Promise<MediaSignals | nul
  * `fraud_blocked` verdict from overwriting itself with `verified` a moment later.
  */
 async function evaluateTrust(
-  record: NonNullable<LoadedVerification>,
+  record: UsableVerification,
   response: 'confirmed' | 'rejected',
   verifierGps: string | null,
 ): Promise<FraudAssessment> {

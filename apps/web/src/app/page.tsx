@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Banner } from '@/components/ui/Banner';
 import { Card } from '@/components/ui/Card';
 import { currentProfile } from '@/lib/server/api';
 
@@ -27,8 +28,27 @@ function destinationFor(role: string): string {
   return '/pending';
 }
 
-export default async function HomePage() {
+/**
+ * The signed-out landing page, and where a member lands after deleting their account.
+ *
+ * The deletion flags come from the API's own counts rather than from a generic
+ * "done". A deletion that left files in storage says so here, because the honest
+ * outcome is worth more than a clean-sounding one, and the member has just given up
+ * an account that can no longer show them anything.
+ */
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ deleted?: string; pending?: string }>;
+}) {
   const user = await currentProfile();
+  const { deleted, pending } = await searchParams;
+
+  const justDeleted = deleted === '1';
+  // Parsed defensively: the query string is caller-controlled, and `Number('x')` is
+  // NaN rather than an error. A NaN would render as "NaN of your uploaded files".
+  const parsedPending = Number(pending ?? '0');
+  const pendingMedia = Number.isFinite(parsedPending) && parsedPending > 0 ? parsedPending : 0;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-4 py-12">
@@ -59,19 +79,35 @@ export default async function HomePage() {
           >
             Go to your dashboard
           </Link>
+          <Link
+            href="/settings/account"
+            className="mt-3 block text-sm text-ink-600 underline hover:text-ink-900"
+          >
+            Delete your account
+          </Link>
         </div>
       ) : (
         <div className="rounded-2xl border border-brand-100 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-ink-900">Sign in or create an account</h2>
-          <p className="mt-2 text-sm text-ink-600">
-            Workers and employers can both get started. It takes an email address and a password.
-          </p>
-          <Link
-            href="/login"
-            className="mt-4 inline-flex min-h-12 items-center rounded-xl bg-brand-600 px-6 font-semibold text-white hover:bg-brand-700"
-          >
-            Sign in
-          </Link>
+          {justDeleted ? (
+            <Banner tone="success" title="Your account has been deleted">
+              {pendingMedia > 0
+                ? `We still have ${pendingMedia} of your uploaded file${pendingMedia === 1 ? '' : 's'} to remove from storage. It is recorded and on its way out, and nothing in it can be reached through your account.`
+                : 'Your profile and everything that identified you has been removed. The work you logged stays on the platform without your name attached, because proof counts are shared and one person leaving should not quietly change everyone else’s totals.'}
+            </Banner>
+          ) : (
+            <>
+              <h2 className="text-lg font-semibold text-ink-900">Sign in or create an account</h2>
+              <p className="mt-2 text-sm text-ink-600">
+                Workers and employers can both get started. It takes an email address and a password.
+              </p>
+              <Link
+                href="/login"
+                className="mt-4 inline-flex min-h-12 items-center rounded-xl bg-brand-600 px-6 font-semibold text-white hover:bg-brand-700"
+              >
+                Sign in
+              </Link>
+            </>
+          )}
         </div>
       )}
 

@@ -32,6 +32,59 @@ This document outlines the security architecture, threat model mitigations, data
 * **Storage Encryption:** All sensitive user records and transactional database entries must be encrypted at rest.
 * **Media Sanitization:** Uploaded work proof images and audio files are stored in a private Supabase Storage bucket with EXIF location metadata and private organizational logos stripped before storage. Buckets are never public; access is granted through short-lived signed URLs, and object paths use unpredictable random identifiers. Uploaded content is restricted to an explicit type allow-list and a size cap, enforced in the API before any bytes are transmitted and again at the bucket itself.
 
+### Account Deletion and Retention
+Deleting an account keeps the work and removes the person, in the database rather than in an
+application service. A service can be bypassed by the Supabase dashboard, by a migration, or by
+the smoke suite; a privacy guarantee that holds on only one path is not a guarantee.
+
+* **What is destroyed:** the `auth.users` row, the `public.users` row, and the `profiles` row -
+  which is where the full name, phone, city, and coordinates live.
+* **What is retained:** the worker's `capability_blocks` and `work_proof_logs`, detached from them
+  by `ON DELETE set null` and stamped `anonymised_at`. Within those rows the description is
+  overwritten, `submission_gps` and `media_url` are nulled, and `verifications.verifier_gps` is
+  nulled. What survives is the skill tag, the verification outcome, the fraud score, and the
+  timestamps.
+* **Why retention rather than deletion:** the records are the proof network. Because an aggregate
+  spans many people, deleting one worker's rows would also destroy a *different* worker's trust
+  score. The skill tag in particular is deliberately not severed - it is what carries the record
+  into the aggregate - so removing it would strip both records from every count.
+* **`verifier_phone_hash` is deliberately retained.** It is a salted hash of a *third party's*
+  number, not the worker's, and it is what lets the collusion filter still recognise one client
+  approving many proofs. Scrubbing it would make every verifier look new and silently disable a
+  fraud check. The coordinate next to it has no such argument and is nulled.
+* **Anonymised records are inert, and that is a real cost.** They no longer appear in employer
+  search, because there is no account to address and minting a handle for one would be a fiction
+  the `candidate_handles` foreign key rightly refuses. They are also excluded from the collusion
+  graph, where a null worker identity would collapse every deleted worker into a single node and
+  make a verifier look *more* diverse than they are - the filter would fail open on exactly the
+  rings it exists to catch. The known limit of that choice is that a verifier whose apparent reach
+  was built through workers who have since deleted their accounts now looks narrower than they
+  are. Correcting for it needs approvals counted per distinct deleted account, which this
+  retention policy deliberately does not keep.
+* **A verification link for an anonymised record is refused** as already spent, so a link
+  dispatched while the worker was on the platform cannot write an outcome onto a record they have
+  since been released from. It is worded as spent rather than as an error about the worker, so a
+  client is not told that an account was deleted.
+* **The gap that is left, stated plainly:** SQL cannot delete a stored object.
+  `storage.protect_delete()` refuses it - verified against the live project, not assumed - so
+  nulling `media_url` removes the pointer while the bytes remain under a path that still begins
+  with the worker's own user id. The migration records the affected paths in
+  `orphaned_proof_media` rather than pretending otherwise, which makes the gap auditable instead
+  of silent: an untracked object is indistinguishable from one that was never created.
+* **Members delete their own account** through `DELETE /api/v1/auth/account` (`doc/07` §3.G).
+  The endpoint takes no target in the path and none in the body, so there is no variant of it
+  that can be pointed at somebody else. It deletes the account — which fires the trigger — then
+  removes the quarantined objects through the Storage API and drains their queue rows, so the
+  byte-level gap above is closed on the self-service path rather than merely recorded. It
+  reports counts of removed and pending media instead of a bare success, because "deleted" would
+  otherwise assert something about the bucket the database cannot verify. Signed out
+  afterwards.
+* **An operator deleting through the Supabase dashboard bypasses all of that.** The trigger
+  still runs and the row still lands in `orphaned_proof_media`, but nothing removes the object.
+  That is the intended shape of the gap: the database enforces what it can enforce, and the part
+  it cannot is recorded rather than lost. Such rows sit in the table until they are drained.
+  See `doc/13` E-029.
+
 ---
 
 ## 4. Anti-Fraud & Trust Protocol Security

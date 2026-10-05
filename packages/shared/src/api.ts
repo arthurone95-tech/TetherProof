@@ -223,6 +223,26 @@ export interface ProfileResponse {
   avatarUrl: string | null;
 }
 
+/**
+ * What a completed account deletion actually achieved.
+ *
+ * Reports counts rather than a bare success, because "deleted" would otherwise
+ * assert two things: that the account is gone, and that nothing identifying
+ * remains. The second is not something the database can guarantee on its own —
+ * stored objects can only be removed through the Storage API — so it is measured
+ * and returned instead of assumed.
+ *
+ * `mediaPending` above zero means some files are still in the bucket and have been
+ * left in an auditable queue rather than forgotten. It is not a partial success to
+ * be retried blindly; it is a backlog to drain.
+ */
+export interface AccountDeletionResult {
+  /** Stored objects confirmed removed from the bucket. */
+  mediaRemoved: number;
+  /** Objects still awaiting removal, recorded for follow-up. */
+  mediaPending: number;
+}
+
 export interface AuthResponse {
   user: AuthUser;
   session: AuthSession | null;

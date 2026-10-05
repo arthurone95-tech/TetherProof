@@ -2,7 +2,12 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import type { AuthResponse, ConfirmationChallenge, UserRole } from '@tetherproof/shared';
+import type {
+  AccountDeletionResult,
+  AuthResponse,
+  ConfirmationChallenge,
+  UserRole,
+} from '@tetherproof/shared';
 import { ApiRequestError } from './api-error';
 import type { FormState } from './form-state';
 import { apiPublic, apiServer } from './server/api';
@@ -155,6 +160,33 @@ export async function confirmWithCode(_previous: FormState, formData: FormData):
 export async function signOut(): Promise<void> {
   await clearSession();
   redirect('/');
+}
+
+/**
+ * Deletes the signed-in member's account.
+ *
+ * The session is cleared only after the API confirms the deletion, so a failure
+ * leaves the member signed in and able to try again rather than logged out of an
+ * account that still exists.
+ *
+ * Redirects rather than returning a message, because there is no page left to show
+ * a result on. The API's own counts of removed and pending media are handed to the
+ * landing page instead of being discarded: a deletion that left files behind is
+ * worth saying plainly rather than reporting as a clean success.
+ */
+export async function deleteAccount(): Promise<void> {
+  let result: AccountDeletionResult;
+  try {
+    result = await apiServer<AccountDeletionResult>('/auth/account', { method: 'DELETE' });
+  } catch (error) {
+    redirect(`/settings/account?error=${encodeURIComponent(messageFor(error, 'We could not delete your account. Please try again.'))}`);
+  }
+
+  await clearSession();
+
+  const params = new URLSearchParams({ deleted: '1' });
+  if (result.mediaPending > 0) params.set('pending', String(result.mediaPending));
+  redirect(`/?${params.toString()}`);
 }
 
 /**

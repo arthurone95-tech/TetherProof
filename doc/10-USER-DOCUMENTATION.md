@@ -11,6 +11,28 @@ This document outlines the user-facing guides, onboarding flows, and help docume
 * **Universal Sign-Up:** Users access the platform via any mobile or desktop web browser. They register using a mobile phone number or email address and select their primary role (`Worker`, `Employer`, or `Training Provider`).
 * **Role-Based Redirection:** Upon login, users are automatically routed to their tailored dashboard interface optimized for their specific workflow.
 
+### Deleting Your Account
+From the signed-in home page, open **Delete your account**, then **Delete your account** again on
+the confirmation page. You are signed out and taken back to the landing page, which tells you the
+deletion went through.
+
+What that does:
+
+* Your account, your profile, your name, your contact details, and your location are removed
+  straight away.
+* The work you logged **stays on the platform**, with everything that identifies you taken off it —
+  the description is replaced, and the coordinates recorded with it are cleared. The skill, the
+  verification, and the date remain.
+* Your uploaded photo or audio file is removed from storage as part of the same action. If any
+  file could not be removed at the moment you asked, the page says how many are still on their
+  way out rather than claiming a clean result.
+
+The work stays because proof counts are shared: if one person's records vanished, the totals other
+people rely on would quietly change, and so would the reputation built on them. This is the same
+reason the confirmation page states it plainly rather than promising that everything disappears.
+
+Deletion cannot be undone, and there is no way to get the account back afterwards.
+
 ---
 
 ## 3. Worker User Guide (Portfolio & Proofs)

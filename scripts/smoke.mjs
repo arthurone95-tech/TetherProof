@@ -374,44 +374,166 @@ async function main() {
   const storedPaths = [];
   /** Probe uploads deliberately aimed at the bucket's limits, expected to fail. */
   let probeAttempts = 0;
+  /**
+   * Proof, block, and verification rows this run deliberately left behind.
+   *
+   * The account-deletion test keeps evidence that a worker who logged work can be
+   * deleted without their evidence being destroyed. Those rows survive with a null
+   * `worker_id` by design, so the cleanup below — which is scoped by owner — cannot
+   * see them and would leave them behind on every run. They are tracked by id
+   * instead and removed explicitly.
+   */
+  const retainedRowIds = [];
   /** Hoisted so the cleanup closure can scope its deletes to this run's worker. */
   let workerId = null;
   let apiProcess;
 
+  /**
+   * Removes everything a set of test accounts own, in dependency order.
+   *
+   * The ordering is the point. Stored objects go first because the row deletes
+   * below can be refused by a foreign key, and `media_url` is what tells us where
+   * the bytes are — once the row is gone the path is unrecoverable. Then the rows,
+   * in the order the foreign keys demand, and finally the auth user.
+   *
+   * Shared by the pre-flight and the end-of-run cleanup rather than duplicated.
+   * Two copies of teardown logic drift, and the copy that drifts is the one that
+   * runs when something has already gone wrong.
+   *
+   * Scoped strictly to the ids passed in. These deletes used to be unscoped,
+   * which would have destroyed a real member's proofs had the suite ever been run
+   * against live data.
+   *
+   * Returns the object paths it removed and any storage error, so callers report
+   * what happened rather than assuming it worked.
+   */
+  const purgeOwnedData = async (ids, extraPaths = []) => {
+    const bucket = process.env.STORAGE_PROOFS_BUCKET || 'work-proofs';
+    if (ids.length === 0) return { paths: [...extraPaths], storageError: null };
+
+    // Paths come from the database, not from a list built during the run. A
+    // mid-run snapshot misses every upload made after it was taken, which is how
+    // the Phase 4 fixtures were leaking objects into the bucket: the snapshot was
+    // taken at the end of the trust-engine section and the matching section
+    // uploaded afterwards. Deriving the list here cannot have that gap.
+    const { rows: mediaRows } = await pool.query(
+      'select media_url from public.work_proof_logs where worker_id = any($1::uuid[]) and media_url is not null',
+      [ids],
+    );
+    const paths = new Set(extraPaths);
+    for (const m of mediaRows) paths.add(m.media_url);
+
+    let storageError = null;
+    if (paths.size > 0) {
+      const removed = await admin.storage.from(bucket).remove([...paths]);
+      if (removed.error) storageError = removed.error;
+    }
+
+    await pool.query(
+      `delete from public.verifications where work_proof_id in
+         (select id from public.work_proof_logs where worker_id = any($1::uuid[]))`,
+      [ids],
+    );
+    await pool.query('delete from public.work_proof_logs where worker_id = any($1::uuid[])', [ids]);
+    await pool.query('delete from public.capability_blocks where worker_id = any($1::uuid[])', [ids]);
+
+    // Phase 4 rows. `direct_offers` and `candidate_handles` reference both
+    // parties, so they are keyed on either side and a worker-only delete would
+    // leave an employer's rows behind to block the auth delete.
+    for (const t of ['candidate_handles', 'direct_offers']) {
+      await pool.query(
+        `delete from public.${t}
+           where employer_id = any($1::uuid[]) or worker_id = any($1::uuid[])`,
+        [ids],
+      );
+    }
+    await pool.query('delete from public.employer_specs where employer_id = any($1::uuid[])', [ids]);
+    await pool.query('delete from public.employer_approvals where employer_id = any($1::uuid[])', [ids]);
+
+    return { paths: [...paths], storageError };
+  };
+
+  /**
+   * Removes stored objects whose owning account no longer exists.
+   *
+   * The object path is `<user_id>/<YYYY-MM-DD>/<file>`, so the first segment names the
+   * uploader. If that id is not in `auth.users`, nothing owns the object: every live
+   * account's media has a live owner by definition, because deleting an account
+   * quarantines its media rather than abandoning it (E-029). So this is a proof of
+   * orphanhood rather than a guess, which is what makes deleting on it acceptable.
+   *
+   * Without this the suite cannot return to a clean bucket. An object with no row and
+   * no owner is invisible to every owner-scoped teardown, so it would fail the final
+   * bucket check on every future run — and a check that is always red stops being
+   * read, which is how a real leak would then go unnoticed.
+   *
+   * Deliberately narrow. An object whose prefix is not a UUID, or whose prefix belongs
+   * to a live user, is left alone and left for the final bucket check to report. An
+   * unexplained object should be surfaced, not deleted on a hunch.
+   *
+   * Refuses to run when the live account list cannot be read in full, because an
+   * incomplete list would classify real members' media as orphaned.
+   */
+  const sweepOrphanedObjects = async () => {
+    const bucket = process.env.STORAGE_PROOFS_BUCKET || 'work-proofs';
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    const page = await admin.auth.admin.listUsers({ perPage: 1000 });
+    const accounts = page.data?.users ?? [];
+    if (accounts.length >= 1000) {
+      console.log('   warning: too many accounts to enumerate safely, skipping the orphan sweep');
+      return [];
+    }
+    const live = new Set(accounts.map((u) => u.id));
+
+    const orphans = [];
+    const walk = async (prefix) => {
+      const { data } = await admin.storage.from(bucket).list(prefix, { limit: 1000 });
+      for (const entry of data ?? []) {
+        const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.id) {
+          const owner = path.split('/')[0];
+          if (UUID.test(owner) && !live.has(owner)) orphans.push(path);
+        } else {
+          await walk(path);
+        }
+      }
+    };
+    await walk('');
+
+    if (orphans.length > 0) {
+      const { error } = await admin.storage.from(bucket).remove(orphans);
+      if (error) {
+        console.log(`   warning: could not sweep orphaned media: ${error.message}`);
+        return [];
+      }
+    }
+    return orphans;
+  };
+
   const cleanup = async () => {
     section('CLEANUP');
     try {
-      // Stored objects first, so a failure here cannot leave media behind even if
-      // the row deletes below are refused by a foreign key.
-      //
-      // The paths come from the database, not from a list built during the run.
-      // A mid-run snapshot misses every upload made after it was taken, which is
-      // how the Phase 4 fixtures were leaking objects into the bucket: the
-      // snapshot was taken at the end of the trust-engine section and the matching
-      // section uploaded afterwards. Deriving the list here cannot have that gap.
-      const ownedIds = createdUsers.length > 0 ? createdUsers : [workerId].filter(Boolean);
-      const pathsToRemove = new Set(storedPaths);
-      if (ownedIds.length > 0) {
-        const { rows: mediaRows } = await pool.query(
-          'select media_url from public.work_proof_logs where worker_id = any($1::uuid[]) and media_url is not null',
-          [ownedIds],
-        );
-        for (const m of mediaRows) pathsToRemove.add(m.media_url);
-      }
+      // Scoped to the accounts THIS RUN created, tracked by id. These deletes
+      // used to be unscoped, which would have destroyed a real member's proofs,
+      // capability blocks, and verifications if the suite were ever run against
+      // live data. They then narrowed too far, to a single worker: the `--web`
+      // path creates a second one, and scoping to only the first left its rows
+      // behind, which made the auth delete fail on a surviving foreign key and
+      // leaked an account on every web run.
+      const owned = createdUsers.length > 0 ? createdUsers : [workerId].filter(Boolean);
+      const { paths: pathsToRemove, storageError } = await purgeOwnedData(owned, storedPaths);
 
-      if (pathsToRemove.size > 0) {
-        const removed = await admin.storage
-          .from(process.env.STORAGE_PROOFS_BUCKET || 'work-proofs')
-          .remove([...pathsToRemove]);
+      if (pathsToRemove.length > 0) {
         check(
           'stored proof media removed from the bucket',
-          !removed.error,
-          removed.error?.message ?? `${pathsToRemove.size} object(s)`,
+          !storageError,
+          storageError?.message ?? `${pathsToRemove.length} object(s)`,
         );
         check(
           'every upload this run made is accounted for',
-          uploadsThisRun <= pathsToRemove.size + probeAttempts,
-          `${uploadsThisRun} upload(s), ${pathsToRemove.size} path(s) removed`,
+          uploadsThisRun <= pathsToRemove.length + probeAttempts,
+          `${uploadsThisRun} upload(s), ${pathsToRemove.length} path(s) removed`,
         );
         // Object deletion is asynchronous, so an object can still be listed a
         // moment after the remove call reports success. Waiting for the list to
@@ -427,41 +549,24 @@ async function main() {
         }
       }
 
-      // Scoped to the workers THIS RUN created, tracked by id. These deletes
-      // used to be unscoped, which would have destroyed a real member's proofs,
-      // capability blocks, and verifications if the suite were ever run against
-      // live data. They then narrowed too far, to a single worker: the `--web`
-      // path creates a second one, and scoping to only the first left its rows
-      // behind, which made the auth delete fail on a surviving foreign key and
-      // leaked an account on every web run.
-      const owned = createdUsers.length > 0 ? createdUsers : [workerId].filter(Boolean);
-      if (owned.length > 0) {
-        await pool.query(
-          `delete from public.verifications where work_proof_id in
-             (select id from public.work_proof_logs where worker_id = any($1::uuid[]))`,
-          [owned],
-        );
-        await pool.query('delete from public.work_proof_logs where worker_id = any($1::uuid[])', [owned]);
-        await pool.query('delete from public.capability_blocks where worker_id = any($1::uuid[])', [owned]);
-
-        // Phase 4 rows. `direct_offers` and `candidate_handles` reference both
-        // parties, so they are keyed on either side and a worker-only delete would
-        // leave an employer's rows behind to block the auth delete.
-        for (const t of ['candidate_handles', 'direct_offers']) {
-          await pool.query(
-            `delete from public.${t}
-              where employer_id = any($1::uuid[]) or worker_id = any($1::uuid[])`,
-            [owned],
-          );
-        }
-        await pool.query('delete from public.employer_specs where employer_id = any($1::uuid[])', [owned]);
-        await pool.query('delete from public.employer_approvals where employer_id = any($1::uuid[])', [owned]);
-      }
-
       for (const id of createdUsers) {
         const del = await admin.auth.admin.deleteUser(id);
         if (del.error) console.log(`   warning: could not delete ${id}: ${del.error.message}`);
       }
+
+      // Rows the deletion test deliberately retained. They carry a null
+      // `worker_id`, so the owner-scoped deletes above cannot reach them. Removed
+      // here so a verification run leaves the live database as it found it.
+      if (retainedRowIds.length > 0) {
+        await pool.query('delete from public.verifications where id = any($1::uuid[])', [retainedRowIds]);
+        await pool.query('delete from public.work_proof_logs where id = any($1::uuid[])', [retainedRowIds]);
+        await pool.query('delete from public.capability_blocks where id = any($1::uuid[])', [retainedRowIds]);
+      }
+      const { rows: retainedLeft } = await pool.query(
+        `select count(*)::int n from public.work_proof_logs where id = any($1::uuid[])`,
+        [retainedRowIds.length > 0 ? retainedRowIds : ['00000000-0000-0000-0000-000000000000']],
+      );
+      check('retained anonymised rows removed after being verified', retainedLeft[0].n === 0, `${retainedLeft[0].n} rows`);
 
       // Scoped to the test address pattern rather than counting every row in the
       // table. Counting all of `auth.users` fails for the wrong reason the moment
@@ -483,10 +588,17 @@ async function main() {
       // exactly that, but without false-alarming on real data: a row is an
       // orphan only if its owner no longer exists in `auth.users`. A real
       // member's rows always have a live owner, so they are never counted.
+      //
+      // `worker_id is not null` is load-bearing since migration 0005 made the
+      // column nullable. An anonymised row has a null worker by design, so the
+      // absence of a matching `auth.users` row is true of it by construction and
+      // this check would count every deliberately retained record as a leak — and
+      // would then, by being ignored, stop meaning anything.
       for (const t of ['work_proof_logs', 'capability_blocks']) {
         const { rows } = await pool.query(
           `select count(*)::int n from public.${t} t
-             where not exists (select 1 from auth.users u where u.id = t.worker_id)`,
+             where t.worker_id is not null
+               and not exists (select 1 from auth.users u where u.id = t.worker_id)`,
         );
         check(`no orphaned rows left in public.${t}`, rows[0].n === 0, `${rows[0].n} rows`);
       }
@@ -518,6 +630,20 @@ async function main() {
         `${orphanVerifications[0].n} rows`,
       );
 
+      // A row here is a stored object that outlived its account, which means the
+      // bytes are still in the bucket under a path nobody can find any more. The
+      // deletion test drains its own; anything left at this point is either a real
+      // pending sweep or a leak from an interrupted run, and either way it is a
+      // file that should not be there.
+      const { rows: quarantineLeft } = await pool.query(
+        'select count(*)::int n from public.orphaned_proof_media',
+      );
+      check(
+        'no stored media left awaiting removal in public.orphaned_proof_media',
+        quarantineLeft[0].n === 0,
+        `${quarantineLeft[0].n} rows`,
+      );
+
       const { data: bucketLeft } = await admin.storage
         .from(process.env.STORAGE_PROOFS_BUCKET || 'work-proofs')
         .list('', { limit: 1000 });
@@ -534,8 +660,35 @@ async function main() {
 
     const stale = (await admin.auth.admin.listUsers({ perPage: 200 })).data?.users ?? [];
     const leftovers = stale.filter((u) => TEST_EMAIL_PREFIX.test(u.email ?? ''));
-    for (const u of leftovers) await admin.auth.admin.deleteUser(u.id).catch(() => undefined);
+
+    // E-025 / E-029. This used to be `deleteUser(...).catch(() => undefined)`, which
+    // could not succeed for a worker that had logged work and hid the reason: the
+    // suite then failed on every later run while cleaning nothing.
+    //
+    // Now that the foreign keys are `on delete set null`, `deleteUser` does succeed.
+    // But deleting the account is the *wrong half* of the teardown on its own. The
+    // stored media is removed through the Storage API, never by the anonymisation
+    // trigger, so a bare `deleteUser` leaves the objects in the bucket with nothing
+    // pointing at them — and the pre-flight has just destroyed the pointer. The rows
+    // go first, then the account, which is what `purgeOwnedData` is ordered for.
+    if (leftovers.length > 0) {
+      const staleIds = leftovers.map((u) => u.id);
+      const { paths, storageError } = await purgeOwnedData(staleIds);
+      if (storageError) console.log(`   warning: could not remove earlier media: ${storageError.message}`);
+      for (const id of staleIds) {
+        const del = await admin.auth.admin.deleteUser(id);
+        if (del.error) console.log(`   warning: could not delete ${id}: ${del.error.message}`);
+      }
+      console.log(`   removed ${leftovers.length} leftover account(s) and ${paths.length} stored object(s)`);
+    }
     check('no leftover accounts from an earlier run', leftovers.length === 0, `${leftovers.length} removed`);
+
+    // Anything the leftover teardown above could not reach, because the account that
+    // uploaded it is already gone and there is no id left to scope the delete by.
+    const swept = await sweepOrphanedObjects();
+    if (swept.length > 0) {
+      console.log(`   swept ${swept.length} stored object(s) whose owning account no longer exists`);
+    }
 
     if (!existsSync(join(ROOT, 'apps', 'api', 'dist', 'index.js'))) {
       throw new Error('apps/api/dist/index.js is missing. Run `npm run build` first.');
@@ -1949,6 +2102,218 @@ async function main() {
       await admin.auth.admin.updateUserById(userId, { app_metadata: { role: 'employer' } });
       const mirrored = (await pool.query('select role from public.users where id = $1', [userId])).rows[0];
       check('role change is mirrored into the database', mirrored?.role === 'employer', JSON.stringify(mirrored));
+    }
+
+    // The self-service deletion endpoint. Everything below about the database is
+    // reached through `DELETE /auth/account` rather than through the admin API, so
+    // this section proves the endpoint exists, that it closes the byte-level gap the
+    // database trigger cannot, and that it refuses an unauthenticated caller.
+    section('SELF-SERVICE ACCOUNT DELETION');
+    {
+      const anon = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
+        auth: { persistSession: false },
+      });
+      const unauth = await fetch(`${API}/auth/account`, { method: 'DELETE' });
+      check('deleting an account requires a session', unauth.status === 401, `status ${unauth.status}`);
+
+      const wrongAccount = await api('DELETE', '/auth/account', { token: 'not-a-real-token' });
+      check('a forged token cannot delete an account', wrongAccount.status === 401, `status ${wrongAccount.status}`);
+
+      // The route takes no id in the path or the body, so there is nothing for a
+      // caller to redirect the deletion at. Asserted through the refusal above
+      // rather than by reading the source.
+      const targetless = await fetch(`${API}/auth/account/someone-elses-id`, { method: 'DELETE' });
+      check(
+        'there is no route that deletes an account named in the path',
+        targetless.status === 404,
+        `status ${targetless.status}`,
+      );
+
+      const noSuch = await api('GET', '/health');
+      check('the API is still healthy after the deletion attempts', noSuch.status === 200, `status ${noSuch.status}`);
+      void anon;
+    }
+
+    // E-025. `capability_blocks.worker_id` and `work_proof_logs.worker_id` were
+    // `ON DELETE restrict`, which made any account that had ever logged work
+    // impossible to delete: the delete aborted the cascade from `auth.users` and
+    // Supabase reported `AuthRetryableFetchError: Database error deleting user`,
+    // naming neither the table nor the constraint.
+    //
+    // The fix keeps the evidence and detaches it from the person. That is a claim
+    // about behaviour, not about a column definition, so it is tested by deleting
+    // an account that has actually logged work and reading the rows back.
+    section('ACCOUNT DELETION BY ANONYMISATION');
+    {
+      const email = `smoke.deletion.${Date.now()}@tetherproof.dev`;
+      const deletedAccount = await mintAccount(email, 'worker', 'Smoke Test Deletion');
+      check('a worker account can be provisioned for deletion', Boolean(deletedAccount.id), deletedAccount.error ?? '');
+
+      if (deletedAccount.id) {
+        const { id: subjectId } = deletedAccount;
+        const { randomUUID } = await import('node:crypto');
+        const blockId = randomUUID();
+        const proofId = randomUUID();
+        const verificationId = randomUUID();
+        const skill = `Deletion Skill ${Date.now()}`;
+        retainedRowIds.push(blockId, proofId, verificationId);
+
+        await pool.query(
+          `insert into public.profiles (user_id, full_name, location_gps)
+           values ($1, 'Smoke Test Deletion', '5.6037,-0.1870')`,
+          [subjectId],
+        );
+        await pool.query(
+          'insert into public.capability_blocks (id, worker_id, skill_tag, skill_level) values ($1,$2,$3,4)',
+          [blockId, subjectId, skill],
+        );
+        const mediaPath = `${subjectId}/2026-10-05/${randomUUID()}.jpg`;
+        storedPaths.push(mediaPath);
+        uploadsThisRun += 1;
+        const { error: uploadErr } = await admin.storage
+          .from(process.env.STORAGE_PROOFS_BUCKET || 'work-proofs')
+          .upload(mediaPath, Buffer.from(gpsJpeg()), { contentType: 'image/jpeg', upsert: false });
+        check('the subject has stored proof media', !uploadErr, uploadErr?.message ?? mediaPath);
+
+        await pool.query(
+          `insert into public.work_proof_logs
+             (id, worker_id, capability_block_id, description, media_url, submission_gps, verification_status)
+           values ($1,$2,$3,$4,$5,'5.6040,-0.1865','verified')`,
+          [proofId, subjectId, blockId, 'A description that identifies the job site.', mediaPath],
+        );
+        await pool.query(
+          `insert into public.verifications
+             (id, work_proof_id, token_hash, response, verifier_gps, fraud_score, completed_at, expires_at)
+           values ($1,$2,$3,'confirmed','5.6039,-0.1868',0.92, now(), now() + interval '7 days')`,
+          [verificationId, proofId, randomUUID().replace(/-/g, '')],
+        );
+
+        // `mintAccount` above already returned a session for this account, so the
+        // deletion is issued by the member themselves. That is the path a real member
+        // takes, and the one that has to remove the stored object.
+        check('the subject holds a session for the endpoint', Boolean(deletedAccount.token), 'no token');
+
+        // The operation that used to fail. Called with the account carrying a
+        // profile, a capability block, a verified proof with media, and a
+        // confirmation, so nothing about it is a weaker case than E-025 described.
+        const removed = await api('DELETE', '/auth/account', { token: deletedAccount.token });
+        check(
+          'an account that has logged work can now be deleted by its owner',
+          removed.status === 200,
+          removed.text?.slice(0, 200) ?? '',
+        );
+        check(
+          'the response reports the stored media it removed rather than a bare success',
+          removed.json?.mediaRemoved === 1 && removed.json?.mediaPending === 0,
+          JSON.stringify(removed.json ?? null),
+        );
+        // Drop it from the cleanup list now that it is gone. Left there, the
+        // cleanup retries a delete that now reports "User not found" and prints a
+        // warning on every run — and a suite that always prints a warning is a
+        // suite whose warnings stop being read.
+        if (removed.status === 200) {
+          const at = createdUsers.indexOf(subjectId);
+          if (at !== -1) createdUsers.splice(at, 1);
+        }
+
+        const stillAuth = (await pool.query('select count(*)::int n from auth.users where id = $1', [subjectId])).rows[0];
+        check('the auth user is gone', stillAuth.n === 0, `${stillAuth.n} left`);
+
+        const stillProfile = (await pool.query('select count(*)::int n from public.profiles where user_id = $1', [subjectId])).rows[0];
+        check('the profile is gone, so the identifying data is gone', stillProfile.n === 0, `${stillProfile.n} left`);
+
+        const proof = (await pool.query(
+          'select worker_id, description, media_url, submission_gps, anonymised_at from public.work_proof_logs where id = $1',
+          [proofId],
+        )).rows[0];
+        check('the proof record is retained rather than destroyed', Boolean(proof), JSON.stringify(proof ?? null));
+        check('the proof is detached from the worker', proof?.worker_id === null, `worker_id=${proof?.worker_id}`);
+        check('the proof is marked anonymised', proof?.anonymised_at !== null, String(proof?.anonymised_at));
+        check(
+          'the description is overwritten, not merely hidden',
+          typeof proof?.description === 'string' && !proof.description.includes('job site'),
+          JSON.stringify(proof?.description),
+        );
+        check('the submission location is cleared', proof?.submission_gps === null, String(proof?.submission_gps));
+        check('the media pointer is cleared', proof?.media_url === null, String(proof?.media_url));
+
+        const block = (await pool.query(
+          'select worker_id, skill_tag, anonymised_at from public.capability_blocks where id = $1',
+          [blockId],
+        )).rows[0];
+        check('the capability block is retained', Boolean(block));
+        check('the capability block is detached and marked', block?.worker_id === null && block?.anonymised_at !== null);
+        // The reason retention is not bookkeeping. Severing the proof's link to its
+        // block as well would strip the skill tag and drop both records out of every
+        // aggregate, quietly decrementing counts that other people's trust scores
+        // depend on.
+        check(
+          'the skill tag survives, so the record still counts',
+          block?.skill_tag === skill,
+          String(block?.skill_tag),
+        );
+
+        const countable = (await pool.query(
+          `select count(distinct w.id) filter (where w.verification_status = 'verified')::int as verified
+             from public.work_proof_logs w
+             join public.capability_blocks b on b.id = w.capability_block_id
+            where lower(b.skill_tag) = lower($1)`,
+          [skill],
+        )).rows[0];
+        check(
+          'the retained record still aggregates under its skill after deletion',
+          countable?.verified === 1,
+          `verified=${countable?.verified}`,
+        );
+
+        const verification = (await pool.query(
+          'select verifier_gps, token_hash, fraud_score from public.verifications where id = $1',
+          [verificationId],
+        )).rows[0];
+        check('the confirmation is retained, holding its fraud score', Boolean(verification));
+        check('the verifier coordinate is cleared', verification?.verifier_gps === null, String(verification?.verifier_gps));
+        check(
+          'the verifier phone hash is retained so collusion filtering still works',
+          Boolean(verification?.token_hash),
+        );
+
+        // What the trigger could not do, and the endpoint therefore had to. Storage
+        // refuses deletion from SQL — verified rather than assumed — so the trigger
+        // recorded the path and the object was still stored at that moment. Proving
+        // the object really was still there is what makes the endpoint's removal
+        // meaningful: without it, an assertion that the endpoint cleaned up would
+        // also be consistent with the object never having existed.
+        const afterDelete = (await admin.storage
+          .from(process.env.STORAGE_PROOFS_BUCKET || 'work-proofs')
+          .list(`${subjectId}/2026-10-05`)).data ?? [];
+        check(
+          'the endpoint removed the stored object, which SQL could not',
+          afterDelete.length === 0,
+          `${afterDelete.length} object(s) still stored`,
+        );
+        const goneSigned = await admin.storage
+          .from(process.env.STORAGE_PROOFS_BUCKET || 'work-proofs')
+          .createSignedUrl(mediaPath, 60);
+        check(
+          'a signed URL for the removed object is refused',
+          Boolean(goneSigned.error),
+          goneSigned.error?.message ?? 'a URL was issued',
+        );
+
+        const drained = await pool.query(
+          'select count(*)::int n from public.orphaned_proof_media where path like $1',
+          [`${subjectId}/%`],
+        );
+        check(
+          'the removal queue is drained once the object is gone',
+          drained.rows[0].n === 0,
+          `${drained.rows[0].n} rows`,
+        );
+        check(
+          'nothing was left queued for this account anywhere in the table',
+          (await pool.query('select count(*)::int n from public.orphaned_proof_media')).rows[0].n === 0,
+        );
+      }
     }
 
     if (WITH_WEB) {

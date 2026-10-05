@@ -1,6 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { eq, inArray, like } from 'drizzle-orm';
 import { ERROR_CODES, USER_ROLES } from '@tetherproof/shared';
 import type {
+  AccountDeletionResult,
   AuthResponse,
   AuthSession,
   AuthUser,
@@ -10,7 +11,7 @@ import type {
 } from '@tetherproof/shared';
 import { logger } from '../../config/logger.js';
 import { db } from '../../db/client.js';
-import { profiles, users } from '../../db/schema.js';
+import { orphanedProofMedia, profiles, users } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
 import { supabaseAdmin, supabaseAuth } from '../../lib/supabase.js';
 import type {
@@ -292,6 +293,100 @@ export async function login(input: LoginInput): Promise<AuthResponse> {
     session: toAuthSession(data.session),
     confirmation: null,
   };
+}
+
+/**
+ * Deletes the caller's own account and anonymises the work they leave behind.
+ *
+ * Split into two phases because one of them cannot be done here. The database
+ * trigger scrubs every column and records which stored objects still need a
+ * byte-level delete, but SQL is refused by storage (`storage.protect_delete()`),
+ * so the objects can only be removed through the Storage API. A deletion that
+ * stopped at the trigger would leave files in the bucket whose path still begins
+ * with the user id of the person who just asked to be removed.
+ *
+ * So the order is: delete the account, which fires the trigger and produces the
+ * list of paths; remove those objects; then delete the queue rows. Reading the
+ * queue after the delete is what makes the list authoritative rather than
+ * reconstructed — a path list built before the delete can miss an object written
+ * in between.
+ *
+ * The account is already gone if this throws partway through. That is reported
+ * as an internal error rather than being retried, because the account is gone and
+ * the queue row is precisely the record that makes the leftover recoverable.
+ * Failing loudly here is what stops the gap being silent; the alternative, a
+ * success response while bytes remain under the person's id, is worse.
+ *
+ * Does not promise the media is gone. It reports what was removed, what could not
+ * be, and what is still queued, so the caller is never told a clean result that
+ * the bucket does not agree with.
+ */
+export async function deleteAccount(userId: string): Promise<AccountDeletionResult> {
+  const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
+
+  if (error) {
+    // The provider's message names internal objects, so it is logged rather than
+    // returned. Reaching this means the trigger did not run, because the trigger
+    // runs inside the same delete.
+    logger.error('Account deletion failed', { userId, reason: error.message });
+    throw AppError.internal('The account could not be deleted.');
+  }
+
+  const queued = await db
+    .select({ id: orphanedProofMedia.id, bucket: orphanedProofMedia.bucket, path: orphanedProofMedia.path })
+    .from(orphanedProofMedia)
+    .where(
+      // Matched on the path prefix rather than through `work_proof_id`, which the
+      // delete has already nulled by way of the proof row. The prefix is the
+      // uploader's id by construction, so it is the one part of the path that
+      // still identifies which account this belongs to.
+      like(orphanedProofMedia.path, `${userId}/%`),
+    );
+
+  if (queued.length === 0) {
+    return { mediaRemoved: 0, mediaPending: 0 };
+  }
+
+  // Grouped by bucket because the recorded bucket is read back from
+  // `storage.objects` and is not guaranteed to be the configured one.
+  const byBucket = new Map<string, string[]>();
+  for (const row of queued) {
+    const paths = byBucket.get(row.bucket) ?? [];
+    paths.push(row.path);
+    byBucket.set(row.bucket, paths);
+  }
+
+  const removed = new Set<string>();
+  for (const [bucket, paths] of byBucket) {
+    const outcome = await supabaseAdmin.storage.from(bucket).remove(paths);
+    if (outcome.error) {
+      logger.error('Could not remove media for a deleted account', {
+        userId,
+        bucket,
+        reason: outcome.error.message,
+        pathCount: paths.length,
+      });
+      continue;
+    }
+    for (const path of paths) removed.add(path);
+  }
+
+  if (removed.size > 0) {
+    // Only the drained rows are deleted. A row whose object is still stored is
+    // the record that says so, and deleting it would turn a visible backlog into
+    // an invisible leak.
+    await db.delete(orphanedProofMedia).where(inArray(orphanedProofMedia.path, [...removed]));
+  }
+
+  if (removed.size !== queued.length) {
+    logger.error('Media remains queued after an account deletion', {
+      userId,
+      queued: queued.length,
+      removed: removed.size,
+    });
+  }
+
+  return { mediaRemoved: removed.size, mediaPending: queued.length - removed.size };
 }
 
 /**

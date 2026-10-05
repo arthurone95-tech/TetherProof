@@ -88,6 +88,21 @@ accounts provisioned outside registration had no `profiles` row, so their profil
 write both returned 404; the update is now an upsert. Both are recorded in `doc/13` (E-024,
 E-026).
 
+**A third, found while closing E-025, changed the schema.** Deleting an account that had logged
+work was impossible: two foreign keys were `ON DELETE restrict`, so the delete aborted and
+Supabase reported a generic `Database error deleting user` that named neither the table nor the
+constraint. Deletion now anonymises rather than destroying — the person is removed and the
+evidence is detached and retained, because an aggregate spans many people and deleting one
+worker's rows would destroy a different worker's trust score. Enforced by a `BEFORE DELETE`
+trigger in the database rather than in a service, since a service can be bypassed by the
+dashboard, a migration, or the smoke suite. The one thing it cannot do is delete the stored
+media, which SQL refuses; those paths are recorded in `orphaned_proof_media` so the gap is
+auditable rather than silent. Recorded as `doc/13` E-025 and E-029, and documented in `doc/08`.
+
+**Still open and worth naming before this phase is called done:** deletion is self-service only —
+`DELETE /api/v1/auth/account` is built, documented, and covered by the smoke suite, but there is no
+admin route for handling a deletion request on somebody's behalf.
+
 **Outstanding before Phase 4 can be called done:** the Training Provider module, an admin
 approval page, and an automated browser test for the employer flow.
 

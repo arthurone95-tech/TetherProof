@@ -131,6 +131,44 @@ is accepted by no endpoint and always reads `null`; see `doc/13` E-024.
 
 > **Prerequisite:** Endpoints **B** and **C** depend on an email or SMS provider being configured in the Supabase Auth dashboard. Without one, `delivered` is always `false` and codes are never received.
 
+### G. Delete Own Account
+* **Endpoint:** `DELETE /api/v1/auth/account`
+* **Description:** Deletes the caller's own account permanently and anonymises the work they leave behind.
+* **Authorization:** `Authorization: Bearer <access_token>`
+
+* **Request Body:** None. The endpoint takes no target — no id in the path and no id in the
+  body — because a self-service deletion endpoint that accepts an identifier is an
+  account-takeover primitive the moment one is guessed.
+
+Response (200 OK):
+
+```json
+{
+  "mediaRemoved": 1,
+  "mediaPending": 0
+}
+```
+
+The counts are deliberate. "Deleted" would assert two things — that the account is gone, and
+that nothing identifying remains — and the second is not something the database can guarantee
+on its own, since SQL is refused by storage. The endpoint measures both and reports them, so a
+caller is never told a clean result the bucket does not agree with.
+
+| Outcome | Meaning |
+| --- | --- |
+| `mediaRemoved` | Stored objects confirmed removed through the Storage API. |
+| `mediaPending` | Objects still in the bucket, left in `orphaned_proof_media` rather than forgotten. A backlog to drain, not a retry signal. |
+
+**What happens:** the `auth.users` row is deleted, which cascades to `public.users` and fires
+the `BEFORE DELETE` anonymisation trigger (`doc/06`). The profile goes with it. The worker's
+proofs and capability blocks are retained with the identifying columns cleared and
+`anonymised_at` set, and the quarantined object paths are then removed through the Storage API
+and their queue rows deleted. `401` without a valid session, and the session is invalidated
+afterwards.
+
+See `doc/13` E-025 and E-029 for why deletion anonymises rather than cascading, and `doc/08`
+for the retention policy in full.
+
 ---
 
 ## 4. Worker & Proof Ingestion Endpoints
