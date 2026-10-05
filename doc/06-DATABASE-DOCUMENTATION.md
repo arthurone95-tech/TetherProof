@@ -21,12 +21,20 @@ Application-level user records for all user types. Identity and credential data 
 ### B. Profiles Table (`profiles`)
 Stores extended user details depending on their role.
 * `id` (UUID, Primary Key)
-* `user_id` (UUID, Foreign Key referencing `users.id`)
+* `user_id` (UUID, Foreign Key referencing `users.id`, Unique)
 * `full_name` (VARCHAR)
-* `location_city` (VARCHAR)
+* `location_city` (VARCHAR. **Always `NULL`** — no code path writes it, so every read returns
+  nothing. Geocoding a coordinate to a place name needs either a third-party lookup or a
+  bundled gazetteer, and neither was authorised. See `doc/13` E-024)
 * `location_gps` (VARCHAR / POINT data for proximity checks)
 * `organization_name` (VARCHAR, Optional, for employers/schools)
 * `avatar_url` (VARCHAR)
+
+`profiles` is **upserted, not updated**. Accounts provisioned outside `/auth/register` — by an
+administrator, or by a service-role `createUser` — never pass through the registration
+trigger, so they have no `profiles` row at all. A plain `UPDATE` against a row that does not
+exist is a silent no-op returning 404, which is indistinguishable from "no such user" and sent
+the profile page down the wrong path. See `doc/13` E-027.
 
 ### C. Capability Blocks Table (`capability_blocks`)
 Stores the verifiable skills and execution milestones owned by workers.
@@ -34,8 +42,14 @@ Stores the verifiable skills and execution milestones owned by workers.
 * `worker_id` (UUID, Foreign Key referencing `users.id`)
 * `skill_tag` (VARCHAR, Indexed - e.g., `Refrigeration Repair`, `React State Management`)
 * `skill_level` (INTEGER)
-* `proof_count` (INTEGER, Default: 0)
-* `last_verified_at` (TIMESTAMP)
+
+`proof_count` and `last_verified_at` were dropped in migration `0004`. Both were dormant
+columns that no code path ever incremented, so every read returned `0` and `NULL`. Nothing
+displayed them, and search aggregated from `work_proof_logs` directly, which made them pure
+surface area: a future developer could reasonably have sorted on `proof_count` and obtained a
+correct-looking ranking of zeroes. Removing them was preferred to populating them, because a
+stored aggregate has to be maintained in step with the rows it summarises and would need
+repairing on every write path.
 
 ### D. Work Proof Logs Table (`work_proof_logs`)
 Stores individual task completions, media proofs, and telemetry data.
@@ -90,19 +104,77 @@ Stores job requirements created by employers instead of traditional job descript
 * `is_active` (BOOLEAN)
 * `created_at` (TIMESTAMP)
 
-### G. Direct Offers Table (`direct_offers`)
+A spec is paused by clearing `is_active` rather than deleted, so an employer's saved
+shortlists survive a change of mind. `min_proof_threshold` is bounded at 500 and
+`max_distance_km` at 20,000, both enforced at creation: a filter above any threshold a worker
+could realistically reach would match nothing, forever, and the employer who saved it would
+have no way to tell that apart from "no candidates yet".
+
+### G. Employer Approvals Table (`employer_approvals`)
+Records the review decision that gates sending invitations.
+* `employer_id` (UUID, Primary Key, Foreign Key referencing `users.id`)
+* `status` (ENUM: `pending`, `approved`, `rejected`)
+* `reviewed_by` (UUID, Foreign Key referencing `users.id`, `ON DELETE SET NULL`. Null means
+  nobody has reviewed it)
+* `reviewed_at` (TIMESTAMP)
+* `note` (VARCHAR(200), Optional. Shown to the employer. Never holds a document reference or a
+  contact detail)
+* `created_at` (TIMESTAMP)
+
+A row is created only when a decision is needed. **The absence of a row means pending**, which
+behaves identically to an explicit `pending` row — so a newly registered employer needs no
+setup step before they can search.
+
+This is a table rather than a boolean column on `users` because a review needs a reviewer and
+a time to be meaningful — a flag cannot record *who* decided or *when*, and "approved: yes"
+becomes indistinguishable from "approved by a colleague last quarter". The employer is shown
+the status and the note but never `reviewed_by`: knowing a decision was made and what it was
+is the employer's business, and knowing which administrator made it is not.
+
+### H. Candidate Handles Table (`candidate_handles`)
+Resolves an opaque, employer-scoped value back to the worker a search result refers to.
+* `id` (UUID, Primary Key)
+* `employer_id` (UUID, Foreign Key referencing `users.id`)
+* `worker_id` (UUID, Foreign Key referencing `users.id`)
+* `handle` (VARCHAR(64), Unique. URL-safe, high-entropy, unguessable)
+* `expires_at` (TIMESTAMP)
+* `created_at` (TIMESTAMP)
+
+A handle is issued per employer per worker (unique on both pairs), so a handle captured from
+one employer's results is inert for every other employer: it resolves to nothing without the
+caller's identity matching `employer_id`. The value is random rather than derived from the
+worker id, because a derived value would be stable across employers and therefore
+correlatable by anyone comparing two result sets — which is the tracking that masking exists to
+prevent. Handles also expire: they are a short-lived capability to address one card, not a
+durable pseudonymous identifier.
+
+Nothing in this table is readable or writable by an employer through PostgREST — there is
+deliberately **no INSERT or UPDATE policy** — because the API writes it with the service role,
+and a search result is only meaningful server-side.
+
+### I. Direct Offers Table (`direct_offers`)
 Stores direct connection requests sent from employers to verified workers.
 * `id` (UUID, Primary Key)
 * `employer_id` (UUID, Foreign Key referencing `users.id`)
 * `worker_id` (UUID, Foreign Key referencing `users.id`)
+* `spec_id` (UUID, Foreign Key referencing `employer_specs.id`, `ON DELETE SET NULL`. Null when
+  the invitation was sent straight from search rather than from a saved spec)
 * `status` (ENUM: `pending`, `accepted`, `declined`)
-* `created_at` (TIMESTAMP)
+* `note` (VARCHAR(500), Optional. The only employer-authored text a worker ever sees, always
+  rendered as text rather than markup)
+* `responded_at` (TIMESTAMP, Null while pending)
+* `created_at`, `updated_at` (TIMESTAMP)
+
+A unique index on `(employer_id, worker_id)` means one employer cannot open a second
+invitation to the same worker, whether or not the first was answered. Without it the offer
+list could fill with duplicates and the worker would face several identical requests to
+answer independently.
 
 ---
 
 ## 3. Data Integrity & Security Rules
-* **Row Level Security:** Enabled on every table. Because Supabase exposes the database to the browser through PostgREST, RLS is the boundary that keeps one user from reading another's data. Policies restrict each table to its owner (and, for direct offers, to both parties). Employers cannot read worker work proofs directly; that data is only reachable through the zero-knowledge search service.
-* **Foreign Key Constraints:** Strict cascading rules on user deletion to preserve audit history and prevent orphaned verification records. Deleting an account cascades to profiles and specs but is restricted on the proof and verification tables.
+* **Row Level Security:** Enabled **and forced** on every table, so it applies to the table owner as well as to `anon` and `authenticated`. Because Supabase exposes the database to the browser through PostgREST, RLS is the boundary that keeps one user from reading another's data. Policies restrict each table to its owner (and, for direct offers, to both parties). Employers cannot read worker work proofs directly; that data is only reachable through the zero-knowledge search service. Neither `anon` nor `authenticated` holds any grant on these tables, so the API's service role is the real boundary and RLS is defence in depth behind it.
+* **Foreign Key Constraints:** Cascading rules are deliberately inconsistent, and the reason matters. Deleting an account cascades to `profiles`, `employer_specs`, `employer_approvals`, `candidate_handles`, and `direct_offers` — nothing derived from a user should outlive them. But `capability_blocks.worker_id` and `work_proof_logs.worker_id` are `ON DELETE restrict`, which **makes any worker who has ever logged a job impossible to delete**. Deleting them through the auth admin API fails with a generic `Database error deleting user`, and the failure message names neither the table nor the constraint. This is logged as `doc/13` E-025 and is unresolved: correcting it means a migration, and the retention intent behind the restriction needs a decision rather than a guess.
 * **Encryption:** Sensitive personal data and authentication secrets must be encrypted at rest.
 * **PII Isolation:** Verifier phone numbers and raw client details are isolated from public worker profiles to preserve privacy.
 * **Token Hashing:** Verification links are the live capability to confirm work, so only a SHA-256 hash of the token is persisted. The raw token exists once, in the response that creates the record, and is never written to the database or to logs. Lookup by `token_hash` ensures a database disclosure is insufficient to forge a confirmation.

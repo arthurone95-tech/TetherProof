@@ -196,6 +196,17 @@ function multipart(fields, file) {
   return { body: Buffer.concat(parts), contentType: `multipart/form-data; boundary=${boundary}` };
 }
 
+/**
+ * Successful media uploads this run, counted at the point of the request.
+ *
+ * Cleanup derives what to delete from the database rather than from this count,
+ * because a list assembled during the run misses anything uploaded after the list
+ * was taken. This count exists to check that derivation: if the database holds more
+ * media for this run's workers than were uploaded, something wrote media without
+ * going through this helper, which is worth knowing.
+ */
+let uploadsThisRun = 0;
+
 async function uploadProof(fields, file, token) {
   const { body, contentType } = multipart(fields, file);
   const res = await fetch(`${API}/workers/proofs`, {
@@ -210,6 +221,7 @@ async function uploadProof(fields, file, token) {
   } catch {
     /* non-JSON body */
   }
+  if (res.status === 201) uploadsThisRun += 1;
   return { status: res.status, json, text };
 }
 
@@ -290,10 +302,78 @@ async function main() {
   const admin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
+  /** A plain anon client, used only to redeem a generated link into a session. */
+  const anonClient = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
+    auth: { persistSession: false },
+  });
+
+  /**
+   * Password set on fixture accounts.
+   *
+   * Never used to authenticate: these accounts sign in through a generated link.
+   * Supabase requires one to create an account at all. Declared here rather than
+   * reused from the registration section, which is scoped inside the boot block and
+   * so is not visible to this helper.
+   */
+  const FIXTURE_PASSWORD = 'SmokeTest123456';
+
+  /**
+   * Creates an account with a given role and returns a usable access token.
+   *
+   * Two things this deliberately does NOT do:
+   *
+   * - It does not call `/auth/register`. The public endpoint is rate limited to 10
+   *   credential requests per 15 minutes per address, and the suite already spends
+   *   six of those on tests that are actually about credential handling. Adding
+   *   several more for fixtures would push the run against that ceiling and make
+   *   the suite fail intermittently for reasons that have nothing to do with the
+   *   code under test.
+   * - It does not self-declare an elevated role. The account is created with the
+   *   service-role client and the claim is written directly against the auth record,
+   *   which is the only supported way to become an administrator. Registering as
+   *   `admin` is refused by the API, and there is a check below asserting so.
+   *
+   * The session is minted with a generated link rather than a password login, again
+   * to stay clear of the limiter. This is the same session object the API sees from
+   * any other login: the role claim travels in the token and the API reads nothing
+   * else.
+   */
+  const mintAccount = async (emailAddress, role, fullName) => {
+    const created = await admin.auth.admin.createUser({
+      email: emailAddress,
+      password: FIXTURE_PASSWORD,
+      app_metadata: { role },
+      email_confirm: true,
+      user_metadata: fullName ? { full_name: fullName } : {},
+    });
+    if (created.error || !created.data?.user) {
+      return { id: null, token: null, error: created.error?.message ?? 'no user returned' };
+    }
+    createdUsers.push(created.data.user.id);
+
+    const link = await admin.auth.admin.generateLink({ type: 'magiclink', email: emailAddress });
+    if (link.error || !link.data?.properties?.hashed_token) {
+      return { id: created.data.user.id, token: null, error: link.error?.message ?? 'no token hash' };
+    }
+    const verified = await anonClient.auth.verifyOtp({
+      token_hash: link.data.properties.hashed_token,
+      type: 'magiclink',
+    });
+    return {
+      id: created.data.user.id,
+      token: verified.data?.session?.access_token ?? null,
+      error: verified.error?.message ?? null,
+    };
+  };
 
   const createdUsers = [];
-  /** Bucket objects this run stored, removed during cleanup. */
+  /**
+   * Bucket paths this run attempted, used to catch probe uploads that were
+   * supposed to be refused. Successful uploads are found in the database instead.
+   */
   const storedPaths = [];
+  /** Probe uploads deliberately aimed at the bucket's limits, expected to fail. */
+  let probeAttempts = 0;
   /** Hoisted so the cleanup closure can scope its deletes to this run's worker. */
   let workerId = null;
   let apiProcess;
@@ -302,17 +382,49 @@ async function main() {
     section('CLEANUP');
     try {
       // Stored objects first, so a failure here cannot leave media behind even if
-      // the row deletes below are refused by a foreign key. Probe paths are
-      // tracked too, so the stray-object check stays strict.
-      if (storedPaths.length > 0) {
+      // the row deletes below are refused by a foreign key.
+      //
+      // The paths come from the database, not from a list built during the run.
+      // A mid-run snapshot misses every upload made after it was taken, which is
+      // how the Phase 4 fixtures were leaking objects into the bucket: the
+      // snapshot was taken at the end of the trust-engine section and the matching
+      // section uploaded afterwards. Deriving the list here cannot have that gap.
+      const ownedIds = createdUsers.length > 0 ? createdUsers : [workerId].filter(Boolean);
+      const pathsToRemove = new Set(storedPaths);
+      if (ownedIds.length > 0) {
+        const { rows: mediaRows } = await pool.query(
+          'select media_url from public.work_proof_logs where worker_id = any($1::uuid[]) and media_url is not null',
+          [ownedIds],
+        );
+        for (const m of mediaRows) pathsToRemove.add(m.media_url);
+      }
+
+      if (pathsToRemove.size > 0) {
         const removed = await admin.storage
           .from(process.env.STORAGE_PROOFS_BUCKET || 'work-proofs')
-          .remove(storedPaths);
+          .remove([...pathsToRemove]);
         check(
           'stored proof media removed from the bucket',
           !removed.error,
-          removed.error?.message ?? `${storedPaths.length} object(s)`,
+          removed.error?.message ?? `${pathsToRemove.size} object(s)`,
         );
+        check(
+          'every upload this run made is accounted for',
+          uploadsThisRun <= pathsToRemove.size + probeAttempts,
+          `${uploadsThisRun} upload(s), ${pathsToRemove.size} path(s) removed`,
+        );
+        // Object deletion is asynchronous, so an object can still be listed a
+        // moment after the remove call reports success. Waiting for the list to
+        // drain keeps that lag distinguishable from a real leak; without it the
+        // two are indistinguishable and the leak check becomes unreliable in the
+        // one direction that matters.
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          const { data: stillThere } = await admin.storage
+            .from(process.env.STORAGE_PROOFS_BUCKET || 'work-proofs')
+            .list('', { limit: 1000 });
+          if ((stillThere ?? []).length === 0) break;
+          await sleep(1000);
+        }
       }
 
       // Scoped to the workers THIS RUN created, tracked by id. These deletes
@@ -331,6 +443,19 @@ async function main() {
         );
         await pool.query('delete from public.work_proof_logs where worker_id = any($1::uuid[])', [owned]);
         await pool.query('delete from public.capability_blocks where worker_id = any($1::uuid[])', [owned]);
+
+        // Phase 4 rows. `direct_offers` and `candidate_handles` reference both
+        // parties, so they are keyed on either side and a worker-only delete would
+        // leave an employer's rows behind to block the auth delete.
+        for (const t of ['candidate_handles', 'direct_offers']) {
+          await pool.query(
+            `delete from public.${t}
+              where employer_id = any($1::uuid[]) or worker_id = any($1::uuid[])`,
+            [owned],
+          );
+        }
+        await pool.query('delete from public.employer_specs where employer_id = any($1::uuid[])', [owned]);
+        await pool.query('delete from public.employer_approvals where employer_id = any($1::uuid[])', [owned]);
       }
 
       for (const id of createdUsers) {
@@ -362,6 +487,24 @@ async function main() {
         const { rows } = await pool.query(
           `select count(*)::int n from public.${t} t
              where not exists (select 1 from auth.users u where u.id = t.worker_id)`,
+        );
+        check(`no orphaned rows left in public.${t}`, rows[0].n === 0, `${rows[0].n} rows`);
+      }
+      // Same predicate for the Phase 4 tables, keyed on whichever party the row
+      // points at. A real employer's specs always have a live owner, so a live
+      // member never trips this.
+      for (const t of ['employer_specs', 'employer_approvals']) {
+        const { rows } = await pool.query(
+          `select count(*)::int n from public.${t} t
+             where not exists (select 1 from auth.users u where u.id = t.employer_id)`,
+        );
+        check(`no orphaned rows left in public.${t}`, rows[0].n === 0, `${rows[0].n} rows`);
+      }
+      for (const t of ['direct_offers', 'candidate_handles']) {
+        const { rows } = await pool.query(
+          `select count(*)::int n from public.${t} t
+             where not exists (select 1 from auth.users u where u.id = t.employer_id)
+                or not exists (select 1 from auth.users u where u.id = t.worker_id)`,
         );
         check(`no orphaned rows left in public.${t}`, rows[0].n === 0, `${rows[0].n} rows`);
       }
@@ -430,6 +573,7 @@ async function main() {
     if (bucket) {
       const refused = async (label, path, body, contentType) => {
         storedPaths.push(path);
+        probeAttempts += 1;
         const { error } = await admin.storage.from(bucketName).upload(path, body, { contentType, upsert: true });
         check(`bucket refuses ${label}`, Boolean(error), error ? error.message.slice(0, 60) : 'ACCEPTED');
       };
@@ -1144,20 +1288,29 @@ async function main() {
         dispatchUnexpected ? 'a link was reported sent' : '',
       );
 
-      // These submissions stored real objects in the bucket. They have to be tracked
-      // for removal, or the stray-object check at the end fails on media this run
-      // created and nobody has cleaned up.
+      // These submissions stored real objects in the bucket. Cleanup finds them by
+      // querying the database for this run's workers, so nothing has to be
+      // remembered here. What still needs checking is that each `media_url` points
+      // at an object that really is there: a proof row whose media is missing would
+      // mean cleanup is under-deleting and the stray-object check would report
+      // success while media survives.
       const { rows: engineMedia } = await pool.query(
         'select media_url from public.work_proof_logs where worker_id = $1 and media_url is not null',
         [userId],
       );
+      let dangling = 0;
       for (const m of engineMedia) {
-        if (!storedPaths.includes(m.media_url)) storedPaths.push(m.media_url);
+        const key = m.media_url;
+        const lastSlash = key.lastIndexOf('/');
+        const folder = key.slice(0, lastSlash);
+        const name = key.slice(lastSlash + 1);
+        const { data: found } = await admin.storage.from(bucketName).list(folder, { limit: 1000 });
+        if (!(found ?? []).some((o) => o.name === name)) dangling += 1;
       }
       check(
-        'every proof this run submitted has its media tracked for removal',
-        engineMedia.every((m) => storedPaths.includes(m.media_url)),
-        `${engineMedia.length} object(s)`,
+        'every proof that stored media points at an object in the bucket',
+        dangling === 0,
+        `${dangling} of ${engineMedia.length} missing`,
       );
 
       // The privacy promise, checked against the live table rather than the code.
@@ -1198,6 +1351,558 @@ async function main() {
       );
     }
 
+    section('EMPLOYER MATCHING');
+    // ---------------------------------------------------------------------
+    // Phase 4. Drives the whole employer path against the live API: search,
+    // the approval gate, the invitation, and the worker's answer.
+    //
+    // The candidate fixtures are created here rather than reused from the engine
+    // section, so the proofs behind them are all verified and none are blocked.
+    // Reusing a blocked proof would test the filter for the wrong reason.
+    if (userId && token) {
+      const MATCH_SKILL = 'Solar Panel Installation';
+      const stamp = Date.now();
+      const employerEmail = `smoke.${stamp}.employer@tetherproof.dev`;
+      const adminEmail = `smoke.${stamp}.admin@tetherproof.dev`;
+      const otherEmail = `smoke.${stamp}.other@tetherproof.dev`;
+      const peekerEmail = `smoke.${stamp}.peek@tetherproof.dev`;
+
+      // The escalation itself, and the only credential request this section makes.
+      //
+      // Registration writes the role claim server-side, so honouring a
+      // self-declared `admin` let an anonymous caller create an account satisfying
+      // `authorize('admin')`, approve any employer, and hand that employer the
+      // right to message workers. The refusal is asserted on the status and on the
+      // database, because a request that returned an error while still creating a
+      // worker account would defeat the point just as thoroughly.
+      const escalateEmail = `smoke.${stamp}.wants-admin@tetherproof.dev`;
+      const escalateAttempt = await api('POST', '/auth/register', {
+        body: { email: escalateEmail, password, role: 'admin', fullName: 'Smoke Escalation' },
+      });
+      check(
+        'an account cannot be registered with an elevated role',
+        escalateAttempt.status === 400,
+        `status ${escalateAttempt.status} ${escalateAttempt.text.slice(0, 120)}`,
+      );
+      const escalateRow = (
+        await pool.query(
+          `select u.role from public.users u join auth.users a on a.id = u.id where a.email = $1`,
+          [escalateEmail],
+        )
+      ).rows[0];
+      check(
+        'the refused registration created no account at all, privileged or otherwise',
+        escalateRow === undefined,
+        `stored role ${String(escalateRow?.role)}`,
+      );
+
+      // Fixtures are provisioned through the service role rather than registered,
+      // which is both the only supported way to hold an elevated role and the only
+      // way to keep this section clear of the auth rate limit. See `mintAccount`.
+      const employer = await mintAccount(employerEmail, 'employer', 'Smoke Test Employer');
+      const adminAccount = await mintAccount(adminEmail, 'admin', 'Smoke Test Admin');
+      const other = await mintAccount(otherEmail, 'employer', 'Smoke Test Other Employer');
+      const peeker = await mintAccount(peekerEmail, 'employer', 'Smoke Test Peeker');
+
+      check(
+        'a provisioned employer account can be used',
+        Boolean(employer.token),
+        employer.error ?? 'no token',
+      );
+      check(
+        'a provisioned admin account can be used',
+        Boolean(adminAccount.token),
+        adminAccount.error ?? 'no token',
+      );
+
+      // Two verified proofs for one skill, so a threshold of 2 is satisfiable and
+      // a threshold of 3 is not. Each gets its own verifier, because reusing one
+      // number here would trip the concentration check the engine section proved
+      // works and the proof would come back blocked.
+      for (let i = 0; i < 2; i += 1) {
+        const fixture = await uploadProof(
+          {
+            description: `Fitted and commissioned a rooftop solar array on site ${i + 1}.`,
+            skillTag: MATCH_SKILL,
+            submissionGps: '5.6037,-0.1870',
+            verifierPhone: `+2335501000${i}0`,
+          },
+          { field: 'media_file', filename: 'solar.jpg', contentType: 'image/jpeg', buffer: gpsJpeg() },
+          token,
+        );
+        const body = fixture.status === 201 ? unwrap(fixture.json) : null;
+        if (body) {
+          await api('POST', `/verifications/${body.verificationToken}`, {
+            body: { response: 'confirmed', verifierGps: '5.6040,-0.1871' },
+          });
+        }
+      }
+      const verifiedForSkill = (
+        await pool.query(
+          `select count(*)::int n from public.work_proof_logs w
+             join public.capability_blocks c on c.id = w.capability_block_id
+            where w.worker_id = $1 and lower(c.skill_tag) = lower($2)
+              and w.verification_status = 'verified'`,
+          [userId, MATCH_SKILL],
+        )
+      ).rows[0].n;
+      check('the search fixtures produced verified proofs', verifiedForSkill === 2, `${verifiedForSkill} verified`);
+
+      if (employer.token && adminAccount.token) {
+        // --- Approval gate ---------------------------------------------
+        const pending = await api('GET', '/employers/approval', { token: employer.token });
+        check(
+          'a new employer starts unapproved and unable to send',
+          pending.status === 200 && pending.json?.status === 'pending' && pending.json?.sending?.eligibility === 'blocked',
+          JSON.stringify(pending.json).slice(0, 160),
+        );
+
+        // Searching is allowed while unapproved. It discloses no identity and
+        // harms nobody; only unsolicited contact is gated.
+        const earlySearch = await api('GET', `/employers/search?requiredSkill=${encodeURIComponent(MATCH_SKILL)}&minProofThreshold=1`, {
+          token: employer.token,
+        });
+        check('an unapproved employer can still search', earlySearch.status === 200, `status ${earlySearch.status}`);
+
+        const earlyOffer = await api('POST', '/employers/offers', {
+          token: employer.token,
+          body: { candidateHandle: 'A'.repeat(43), note: 'Should be refused.' },
+        });
+        check(
+          'an unapproved employer cannot send an invitation',
+          earlyOffer.status === 403,
+          `status ${earlyOffer.status} ${earlyOffer.text.slice(0, 120)}`,
+        );
+
+        const selfApprove = await api('POST', `/admin/employers/${employer.id}/approval`, {
+          token: employer.token,
+          body: { status: 'approved' },
+        });
+        check('an employer cannot approve itself', selfApprove.status === 403, `status ${selfApprove.status}`);
+
+        const workerApprove = await api('POST', `/admin/employers/${userId}/approval`, {
+          token: adminAccount.token,
+          body: { status: 'approved' },
+        });
+        check(
+          'approving a non-employer account is refused',
+          workerApprove.status === 409,
+          `status ${workerApprove.status} ${workerApprove.text.slice(0, 120)}`,
+        );
+
+        // --- Specs ------------------------------------------------------
+        const noSkill = await api('GET', '/employers/search?minProofThreshold=1', { token: employer.token });
+        check(
+          'searching with no skill and no spec is refused',
+          noSkill.status === 400,
+          `status ${noSkill.status}`,
+        );
+
+        const badSkill = await api('POST', '/employers/specs', {
+          token: employer.token,
+          body: { requiredSkill: 'x' },
+        });
+        check('a one-character skill is refused', badSkill.status === 400, `status ${badSkill.status}`);
+
+        const absurd = await api('POST', '/employers/specs', {
+          token: employer.token,
+          body: { requiredSkill: MATCH_SKILL, minProofThreshold: 100000 },
+        });
+        check(
+          'an unreachable proof threshold is refused rather than stored',
+          absurd.status === 400,
+          `status ${absurd.status}`,
+        );
+
+        const spec = await api('POST', '/employers/specs', {
+          token: employer.token,
+          body: { requiredSkill: MATCH_SKILL, minProofThreshold: 2, maxDistanceKm: 50 },
+        });
+        check('a capability spec is created', spec.status === 201, `status ${spec.status} ${spec.text.slice(0, 140)}`);
+        const specId = unwrap(spec.json)?.id;
+        check('the spec has no updatedAt field the table does not store', unwrap(spec.json)?.updatedAt === undefined, String(unwrap(spec.json)?.updatedAt));
+
+        const listSpecs = await api('GET', '/employers/specs', { token: employer.token });
+        check('the employer lists their own specs', (listSpecs.json?.specs ?? []).length === 1, `${listSpecs.json?.specs?.length} specs`);
+
+        // --- Search -----------------------------------------------------
+        const found = await api('GET', `/employers/search?specId=${specId}`, { token: employer.token });
+        check('search by spec returns the candidate', found.status === 200 && (found.json?.candidates ?? []).length === 1, `status ${found.status} ${found.text.slice(0, 160)}`);
+
+        const card = found.json?.candidates?.[0];
+        check('the card reports the verified proof count', card?.verifiedProofs === 2, String(card?.verifiedProofs));
+        check('the card reports a trust score', typeof card?.trustScore === 'number', String(card?.trustScore));
+        check('the card reports when the proof was last verified', typeof card?.lastVerifiedAt === 'string', String(card?.lastVerifiedAt));
+        check('no distance is invented without a reference point', card?.distanceKm === null, String(card?.distanceKm));
+        check('a handle is issued', typeof card?.candidateHandle === 'string' && card.candidateHandle.length >= 32, String(card?.candidateHandle)?.slice(0, 12));
+
+        // The masking promise, checked against the actual response body.
+        const cardJson = JSON.stringify(found.json);
+        check('the search result contains no worker id', !cardJson.includes(userId), userId ?? '');
+        check('the search result contains no email address', !cardJson.includes('tetherproof.dev'), '');
+        check(
+          'the search result carries no name, phone, or avatar field',
+          !/fullName|full_name|avatar|phone|email|workerId|worker_id/i.test(cardJson),
+          cardJson.slice(0, 200),
+        );
+
+        // Threshold enforcement: three verified proofs do not exist.
+        const tooTight = await api('GET', `/employers/search?requiredSkill=${encodeURIComponent(MATCH_SKILL)}&minProofThreshold=3`, {
+          token: employer.token,
+        });
+        check(
+          'a threshold above the proof count returns nobody',
+          tooTight.status === 200 && (tooTight.json?.candidates ?? []).length === 0,
+          `${tooTight.json?.candidates?.length} candidates`,
+        );
+
+        // Case-insensitive matching.
+        const cased = await api('GET', `/employers/search?requiredSkill=${encodeURIComponent(MATCH_SKILL.toUpperCase())}&minProofThreshold=2`, {
+          token: employer.token,
+        });
+        check(
+          'skill matching is case-insensitive',
+          (cased.json?.candidates ?? []).length === 1,
+          `${cased.json?.candidates?.length} candidates`,
+        );
+
+        // --- Profile, and what it makes possible -----------------------
+        // Distance filtering and naming the inviter both depend on profile fields
+        // that had no write path at all before this endpoint existed. Driven
+        // through the API rather than by updating rows directly, so these checks
+        // prove the features are genuinely reachable rather than merely that the
+        // columns exist.
+        const profileSet = await api('PATCH', '/auth/profile', {
+          token,
+          body: { locationGps: '5.6037,-0.1870' },
+        });
+        check(
+          'a worker can record their location',
+          profileSet.status === 200,
+          `status ${profileSet.status} ${profileSet.text.slice(0, 140)}`,
+        );
+
+        const stored = (
+          await pool.query('select location_gps from public.profiles where user_id = $1', [userId])
+        ).rows[0];
+        check('the location is stored after validation', stored?.location_gps === '5.6037,-0.1870', String(stored?.location_gps));
+
+        const badLocation = await api('PATCH', '/auth/profile', { token, body: { locationGps: '999,999' } });
+        check('an out-of-range location is refused', badLocation.status === 400, `status ${badLocation.status}`);
+
+        const afterBad = (
+          await pool.query('select location_gps from public.profiles where user_id = $1', [userId])
+        ).rows[0];
+        check(
+          'the refused location did not overwrite the stored one',
+          afterBad?.location_gps === '5.6037,-0.1870',
+          String(afterBad?.location_gps),
+        );
+
+        const orgSet = await api('PATCH', '/auth/profile', {
+          token: employer.token,
+          body: { organizationName: 'Smoke Solar Ltd' },
+        });
+        check('an employer can record their organization name', orgSet.status === 200, `status ${orgSet.status}`);
+
+        // Provisioned accounts are created outside the registration path, so they
+        // have no `profiles` row to begin with. The profile endpoint has to cope
+        // with that, or an administrator cannot use it at all.
+        const noProfileRow = (
+          await pool.query(`select count(*)::int n from public.profiles where user_id = $1`, [
+            adminAccount.id,
+          ])
+        ).rows[0].n;
+        check(
+          'a provisioned account starts with no profile row',
+          noProfileRow === 0,
+          `${noProfileRow} row(s)`,
+        );
+        const adminProfile = await api('PATCH', '/auth/profile', {
+          token: adminAccount.token,
+          body: { fullName: 'Smoke Test Admin' },
+        });
+        check(
+          'a provisioned account can create its profile on demand',
+          adminProfile.status === 200,
+          `status ${adminProfile.status} ${adminProfile.text.slice(0, 140)}`,
+        );
+        const adminProfileRow = (
+          await pool.query(`select full_name from public.profiles where user_id = $1`, [
+            adminAccount.id,
+          ])
+        ).rows[0];
+        check(
+          'the created profile holds the supplied value',
+          adminProfileRow?.full_name === 'Smoke Test Admin',
+          String(adminProfileRow?.full_name),
+        );
+
+        // And it must not wipe fields it was not asked about.
+        const partialPatch = await api('PATCH', '/auth/profile', {
+          token,
+          body: { fullName: 'Smoke Test Worker Renamed' },
+        });
+        const partialRow = (
+          await pool.query(
+            'select full_name, location_gps from public.profiles where user_id = $1',
+            [userId],
+          )
+        ).rows[0];
+        check(
+          'a partial profile update leaves other fields untouched',
+          partialPatch.status === 200 &&
+            partialRow?.full_name === 'Smoke Test Worker Renamed' &&
+            partialRow?.location_gps === '5.6037,-0.1870',
+          `name ${partialRow?.full_name}, location ${partialRow?.location_gps}`,
+        );
+
+        const emptyPatch = await api('PATCH', '/auth/profile', { token, body: {} });
+        check('a profile update with no fields is refused', emptyPatch.status === 400, `status ${emptyPatch.status}`);
+
+        const unauthPatch = await api('PATCH', '/auth/profile', { body: { fullName: 'Nobody' } });
+        check('the profile endpoint requires a session', unauthPatch.status === 401, `status ${unauthPatch.status}`);
+
+        // A spec may narrow but never widen, so it cannot be borrowed as a floor.
+        const widen = await api('GET', `/employers/search?specId=${specId}&minProofThreshold=1`, { token: employer.token });
+        check(
+          'a spec threshold cannot be lowered by a query parameter',
+          (widen.json?.candidates ?? []).length === 1 && widen.json.candidates[0]?.verifiedProofs === 2,
+          `${widen.json?.candidates?.length} candidates`,
+        );
+
+        // Distance: with a reference point far away the card still appears but
+        // reports a distance, and a radius that cannot reach excludes it.
+        const distant = await api('GET', `/employers/search?specId=${specId}&referenceGps=5.6037,-0.1870`, {
+          token: employer.token,
+        });
+        check(
+          'a reference point produces a measured distance',
+          typeof distant.json?.candidates?.[0]?.distanceKm === 'number',
+          String(distant.json?.candidates?.[0]?.distanceKm),
+        );
+
+        // Every "returns nobody" assertion below also asserts a 200. An empty `candidates`
+      // array and an error body both read as "no results" through `?? []`, so a
+      // check written only against the array passes while the endpoint is broken.
+      const faraway = await api('GET', `/employers/search?requiredSkill=${encodeURIComponent(MATCH_SKILL)}&minProofThreshold=1&referenceGps=51.5074,-0.1278&maxDistanceKm=1`, {
+          token: employer.token,
+        });
+        check(
+          'a candidate outside the radius is excluded',
+          faraway.status === 200 && (faraway.json?.candidates ?? []).length === 0,
+          `status ${faraway.status} ${faraway.text.slice(0, 140)}`,
+        );
+
+        const badGps = await api('GET', `/employers/search?requiredSkill=${encodeURIComponent(MATCH_SKILL)}&referenceGps=999,999`, {
+          token: employer.token,
+        });
+        check('an out-of-range reference point is refused', badGps.status === 400, `status ${badGps.status}`);
+
+        // A worker with no stored location must not vanish from a search. Absence of
+        // evidence is not disqualification: excluding them would hide most of a
+        // network that has not opted into geolocation. Cleared through the API,
+        // which also proves an explicit null is honoured.
+        const cleared = await api('PATCH', '/auth/profile', { token, body: { locationGps: null } });
+        check('a worker can withdraw their location', cleared.status === 200, `status ${cleared.status}`);
+
+        const clearedStored = (
+          await pool.query('select location_gps from public.profiles where user_id = $1', [userId])
+        ).rows[0];
+        check('withdrawing the location clears the column', clearedStored?.location_gps === null, String(clearedStored?.location_gps));
+
+        const noLocation = await api('GET', `/employers/search?requiredSkill=${encodeURIComponent(MATCH_SKILL)}&minProofThreshold=1&referenceGps=51.5074,-0.1278&maxDistanceKm=5`, {
+          token: employer.token,
+        });
+        check(
+          'a worker who shared no location is not excluded, and reports no distance',
+          noLocation.status === 200 &&
+            (noLocation.json?.candidates ?? []).length === 1 &&
+            noLocation.json.candidates[0]?.distanceKm === null,
+          `status ${noLocation.status}, ${noLocation.json?.candidates?.length} candidates, distance ${noLocation.json?.candidates?.[0]?.distanceKm}`,
+        );
+
+        // Restored through the API so the later distance checks have a location.
+        await api('PATCH', '/auth/profile', { token, body: { locationGps: '5.6037,-0.1870' } });
+
+        // --- Invitations ------------------------------------------------
+        const handle = card?.candidateHandle;
+
+        const workerSeesEmployerRoutes = await api('GET', '/employers/specs', { token });
+        check('a worker cannot reach employer routes', workerSeesEmployerRoutes.status === 403, `status ${workerSeesEmployerRoutes.status}`);
+
+        const employerSeesInvites = await api('GET', '/invites/offers', { token: employer.token });
+        check('an employer cannot reach the worker invite routes', employerSeesInvites.status === 403, `status ${employerSeesInvites.status}`);
+
+        const noInviteYet = await api('GET', '/invites/offers', { token });
+        check('the worker starts with no invitations', noInviteYet.status === 200 && (noInviteYet.json?.offers ?? []).length === 0, `status ${noInviteYet.status}`);
+
+        if (handle) {
+          // Checked after approval, not before: while the account is unapproved the
+          // gate answers 403 regardless of the handle, so an unknown-handle check
+          // placed here would pass for the wrong reason and prove nothing about
+          // handle resolution.
+          const approved = await api('POST', `/admin/employers/${employer.id}/approval`, {
+            token: adminAccount.token,
+            body: { status: 'approved', note: 'Smoke test approval.' },
+          });
+          check('an admin can approve an employer', approved.status === 200 && approved.json?.status === 'approved', `status ${approved.status} ${approved.text.slice(0, 140)}`);
+
+          // Re-running the search must hand back a usable handle. Handles are
+          // issued at search time, so a search that mints nothing would leave the
+          // employer unable to act on a result they are still looking at.
+          const reSearched = await api('GET', `/employers/search?specId=${specId}`, { token: employer.token });
+          check(
+            'searching again by spec returns a card',
+            reSearched.status === 200 && (reSearched.json?.candidates ?? []).length === 1,
+            `status ${reSearched.status} ${reSearched.text.slice(0, 160)}`,
+          );
+          check(
+            'the same candidate yields the same handle',
+            reSearched.json?.candidates?.[0]?.candidateHandle === card?.candidateHandle,
+            `${reSearched.json?.candidates?.[0]?.candidateHandle?.slice(0, 12)} vs ${card?.candidateHandle?.slice(0, 12)}`,
+          );
+
+          const nowEligible = await api('GET', '/employers/approval', { token: employer.token });
+          check(
+            'an approved employer may now send',
+            nowEligible.json?.sending?.eligibility === 'eligible',
+            JSON.stringify(nowEligible.json?.sending),
+          );
+
+          const bogus = await api('POST', '/employers/offers', {
+            token: employer.token,
+            body: { candidateHandle: 'not-a-real-handle-value-at-all' },
+          });
+          check(
+            'an unknown handle is refused',
+            bogus.status === 404,
+            `status ${bogus.status} ${bogus.text.slice(0, 120)}`,
+          );
+
+          const sent = await api('POST', '/employers/offers', {
+            token: employer.token,
+            body: { candidateHandle: handle, note: 'We have a rooftop array role in Accra.' },
+          });
+          check('an invitation is sent by handle', sent.status === 201, `status ${sent.status} ${sent.text.slice(0, 160)}`);
+          const offerId = unwrap(sent.json)?.id;
+
+          const sentAgain = await api('POST', '/employers/offers', {
+            token: employer.token,
+            body: { candidateHandle: handle, note: 'Duplicate.' },
+          });
+          check(
+            'a second pending invitation to the same candidate is refused',
+            sentAgain.status === 409,
+            `status ${sentAgain.status}`,
+          );
+
+          // Handle scoping: another employer holding the same handle must resolve
+          // to nothing, or masking would be cosmetic.
+          if (other.token) {
+            await api('POST', `/admin/employers/${other.id}/approval`, {
+              token: adminAccount.token,
+              body: { status: 'approved' },
+            });
+            const stolen = await api('POST', '/employers/offers', {
+              token: other.token,
+              body: { candidateHandle: handle, note: 'Should not resolve.' },
+            });
+            check(
+              "another employer's handle resolves to nobody",
+              stolen.status === 404,
+              `status ${stolen.status} ${stolen.text.slice(0, 140)}`,
+            );
+          }
+
+          // --- The worker's answer -------------------------------------
+          const received = await api('GET', '/invites/offers', { token });
+          check('the worker receives the invitation', (received.json?.offers ?? []).length === 1, `${received.json?.offers?.length} offers`);
+          check('the pending count reflects it', received.json?.pendingCount === 1, String(received.json?.pendingCount));
+
+          const inbox = received.json?.offers?.[0];
+          check('the worker sees the employer is approved', inbox?.employerApproved === true, String(inbox?.employerApproved));
+          check(
+            'the employer is named so the worker can judge the offer',
+            inbox?.employerOrganization === 'Smoke Solar Ltd',
+            String(inbox?.employerOrganization),
+          );
+          check('identity is not revealed before acceptance', inbox?.candidateRevealed === false, String(inbox?.candidateRevealed));
+          check('the note reaches the worker', inbox?.note === 'We have a rooftop array role in Accra.', String(inbox?.note));
+
+          const inboxJson = JSON.stringify(received.json);
+          check('the inbox discloses no worker id', !inboxJson.includes(userId), userId ?? '');
+          check(
+            'the inbox carries no employer contact detail or account id',
+            !/employerId|employer_id|avatar|phone|email/i.test(inboxJson),
+            inboxJson.slice(0, 200),
+          );
+
+          if (offerId) {
+            const wrongWorker = await api('POST', `/invites/offers/${offerId}/respond`, {
+              token: employer.token,
+              body: { response: 'accepted' },
+            });
+            check('an employer cannot answer their own invitation', wrongWorker.status === 403, `status ${wrongWorker.status}`);
+
+            const declined = await api('POST', `/invites/offers/${offerId}/respond`, {
+              token,
+              body: { response: 'declined' },
+            });
+            check('the worker declines', declined.status === 200 && declined.json?.status === 'declined', `status ${declined.status} ${declined.text.slice(0, 140)}`);
+            check('a declined invitation does not reveal identity', declined.json?.candidateRevealed === false, String(declined.json?.candidateRevealed));
+
+            const twice = await api('POST', `/invites/offers/${offerId}/respond`, {
+              token,
+              body: { response: 'accepted' },
+            });
+            check('answering an answered invitation is refused', twice.status === 409, `status ${twice.status}`);
+
+            const employerView = await api('GET', '/employers/offers', { token: employer.token });
+            check('the employer sees the outcome', employerView.json?.offers?.[0]?.status === 'declined', String(employerView.json?.offers?.[0]?.status));
+            check('the outcome records when they answered', typeof employerView.json?.offers?.[0]?.respondedAt === 'string', String(employerView.json?.offers?.[0]?.respondedAt));
+
+            // Accepting a fresh invitation does reveal, which is the whole point
+            // of the mask: identity flows one way and only after agreement.
+            const again = await api('POST', '/employers/offers', { token: employer.token, body: { candidateHandle: handle } });
+            check('the employer may re-invite after a response', again.status === 201, `status ${again.status}`);
+            const accepted = await api('POST', `/invites/offers/${unwrap(again.json)?.id}/respond`, {
+              token,
+              body: { response: 'accepted' },
+            });
+            check('the worker accepts', accepted.status === 200 && accepted.json?.status === 'accepted', `status ${accepted.status}`);
+            check('acceptance reveals identity to the worker', accepted.json?.candidateRevealed === true, String(accepted.json?.candidateRevealed));
+            check('acceptance records when they answered', typeof accepted.json?.respondedAt === 'string', String(accepted.json?.respondedAt));
+          }
+
+          // --- Revoking approval ---------------------------------------
+          await api('POST', `/admin/employers/${employer.id}/approval`, {
+            token: adminAccount.token,
+            body: { status: 'rejected', note: 'Smoke test rejection.' },
+          });
+          const afterReject = await api('POST', '/employers/offers', {
+            token: employer.token,
+            body: { candidateHandle: handle, note: 'Should be blocked.' },
+          });
+          check('a rejected employer cannot send again', afterReject.status === 403, `status ${afterReject.status}`);
+
+          // --- Isolation between employers -----------------------------
+          const ownSpecId = (
+            await api('GET', '/employers/specs', { token: employer.token })
+          ).json?.specs?.[0]?.id;
+          if (ownSpecId) {
+            if (peeker.token) {
+              const crossRead = await api('PATCH', `/employers/specs/${ownSpecId}`, {
+                token: peeker.token,
+                body: { minProofThreshold: 9 },
+              });
+              check("another employer cannot read or edit someone else's spec", crossRead.status === 404, `status ${crossRead.status}`);
+            }
+          }
+        }
+      }
+    }
+
     section('ROW LEVEL SECURITY');
     const anon = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, {
       auth: { persistSession: false },
@@ -1208,7 +1913,31 @@ async function main() {
     const readProofs = await anon.from('work_proof_logs').select('*').limit(1);
     check('browser key cannot read work_proof_logs', Boolean(readProofs.error) || (readProofs.data ?? []).length === 0, readProofs.error?.message ?? 'no rows');
 
-    const escalate = await anon.from('users').update({ role: 'admin' }).eq('id', userId ?? '00000000-0000-0000-0000-000000000000');
+    // The Phase 4 tables must be unreachable from a browser key. A handle resolves
+      // to a real worker, so leaking the table would undo the masking that the
+      // search endpoint exists to provide.
+      for (const table of ['employer_approvals', 'candidate_handles', 'direct_offers']) {
+        const read = await anon.from(table).select('*').limit(1);
+        check(
+          `browser key cannot read public.${table}`,
+          Boolean(read.error) || (read.data ?? []).length === 0,
+          read.error?.message ?? 'no rows',
+        );
+      }
+
+      // The dormant capability counters must actually be gone, not merely unused.
+      const dormant = await pool.query(
+        `select column_name from information_schema.columns
+          where table_schema='public' and table_name='capability_blocks'
+            and column_name in ('proof_count','last_verified_at')`,
+      );
+      check(
+        'the dormant proof counters are dropped, not just ignored',
+        dormant.rows.length === 0,
+        dormant.rows.map((r) => r.column_name).join(', '),
+      );
+
+      const escalate = await anon.from('users').update({ role: 'admin' }).eq('id', userId ?? '00000000-0000-0000-0000-000000000000');
     check('browser key cannot escalate a role', Boolean(escalate.error) || escalate.count === 0, escalate.error?.message ?? '0 rows');
     if (userId) {
       const stillWorker = (await pool.query('select role from public.users where id = $1', [userId])).rows[0];

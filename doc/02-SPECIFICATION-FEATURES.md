@@ -63,17 +63,74 @@ Two properties hold throughout, and they constrain everything else:
 ---
 
 ## 4. Module 3: Employer Discovery & Capability Matching
+
+Module 3 is built. The three features below are described as implemented, not as intended,
+including the boundaries that were deliberately drawn.
+
+Three properties hold throughout the module:
+
+* **The worker is never an output.** No endpoint in this module returns a worker id, name,
+  email, phone number, or avatar. A search result can be acted on and nothing more, and the
+  only handle it carries is meaningless to any other employer.
+* **Aggregates are derived, never stored.** Verified counts, trust scores, and last-verified
+  timestamps are computed from the proof records at read time. A cached counter would drift
+  from the proofs it summarises, and a counter that always reads zero would rank on a lie.
+  Two dormant counter columns were removed for exactly this reason.
+* **Approval gates contact, not discovery.** An employer may search as soon as the account
+  exists. Sending an invitation is unsolicited contact with a real person, so it waits for a
+  human decision. Gating search too would stop the product working while also stopping the
+  abuse it exists to prevent.
+
 ### Feature 4.1: Capability Spec Builder
 * **Description:** Replaces traditional job descriptions with strict operational criteria.
-* **Behavior:** Allows hiring managers to define required skill tags, minimum verified execution counts, and geographic/delivery zones.
+* **Behavior:** Allows hiring managers to define a required skill tag, a minimum verified proof
+  count, and a maximum distance in kilometres. A spec can be paused without being deleted and
+  resumed later.
+* **Implementation:** The reference point for the distance filter is the employer's own saved
+  location, so a search is run from where the employer actually is rather than from a
+  coordinate typed into the search form. The proof threshold is capped at 500 and the radius at
+  20,000 km rather than merely validated as positive: a threshold above what anyone could
+  realistically accumulate would never match, and an employer who saved one would have built a
+  spec that silently returns nothing forever. Failing at creation is kinder than a filter that
+  quietly never fires.
 
 ### Feature 4.2: Zero-Knowledge Talent Search
 * **Description:** Privacy-first candidate discovery engine.
-* **Behavior:** Surfaces candidate cards based purely on verified performance metrics and skill scores, masking personal identity details until a mutual connection or invitation is accepted.
+* **Behavior:** Surfaces candidate cards based purely on verified performance metrics and skill
+  scores, masking personal identity details until a mutual connection or invitation is accepted.
+* **Implementation:** Each card carries a `candidateHandle`: an opaque, employer-scoped,
+  expiring value the server resolves solely for the employer that search was run for. Knowing a
+  handle does not let a second employer act on the same worker, and it reveals no worker id.
+  A card carries the skill, the verified proof count, the mean fraud score of the verifications
+  backing those proofs, the last verification time, and `distanceKm`.
+* **On location:** Distance is returned as a number and never as a coordinate. A worker who has
+  not shared a location is **not** excluded from results — a missing location is an absence of
+  evidence, and dropping those workers would hide most of a network that has not opted into
+  geolocation. Their card shows `Not shared` and is still actionable.
 
 ### Feature 4.3: Direct Invitation Pipeline
 * **Description:** Streamlined connection workflow bypassing traditional resume screening queues.
-* **Behavior:** Enables employers to send direct interview or job offers to pre-verified candidates based on their proven execution record.
+* **Behavior:** Enables employers to send direct interview or job offers to pre-verified
+  candidates based on their proven execution record. The worker accepts or declines, and one
+  answer is final.
+* **Implementation:** The identity reveal is deliberately asymmetric. Until a worker accepts,
+  the employer sees nothing but a handle; the worker sees the employer's organization name and
+  whether that account has been reviewed. Accepting is the moment the worker releases their
+  identity, and the interface says so on the button rather than letting it read as
+  acknowledging a message. A pending invitation cannot be sent twice, and a decision cannot be
+  withdrawn, so the controls are not a toggle.
+
+### Feature 4.4: Employer Verification (added during implementation)
+* **Description:** An approval record per employer account.
+* **Behavior:** Self-registration stays open for employers, because requiring approval before
+  anyone can look at the product would leave nobody to approve. Sending an invitation is
+  gated instead.
+* **Implementation:** Approval is a row with a status, a reviewer, a timestamp, and an optional
+  note, not a boolean on the user. The employer sees the status and the note but never who
+  reviewed them: the employer needs to know a decision was made and what it was, and who made
+  it is not theirs to see. Administrators are provisioned by writing the role claim against the
+  auth record, never by self-registration — `admin` is deliberately excluded from the roles the
+  public registration endpoint will accept (see `doc/13` E-024).
 
 ---
 

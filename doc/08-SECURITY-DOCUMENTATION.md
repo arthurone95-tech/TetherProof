@@ -10,11 +10,18 @@ This document outlines the security architecture, threat model mitigations, data
 ## 2. Authentication & Authorization Security
 * **Token Management:** Supabase Auth issues short-lived access tokens for session maintenance. Tokens are transmitted exclusively over HTTPS and are never written to logs.
 * **Server-Controlled Roles:** The account role is written into the `app_metadata.role` claim at registration. `user_metadata` is editable by the account holder and therefore never carries an authorization decision.
-* **Role-Based Access Control (RBAC):** Every API endpoint must enforce server-side role checks. 
-  * `worker` roles cannot access employer search management or training provider tools.
-  * `employer` roles cannot access or modify worker capability proof logs directly.
+* **Roles Cannot Be Self-Declared.** Public registration accepts only `worker`, `employer`, and `training_provider`. `admin` is excluded, because the endpoint writes the role into a server-controlled claim that `authorize('admin')` trusts — accepting `admin` from an unauthenticated caller was a complete privilege escalation, verified live before the fix (`doc/13` E-024). Administrators are provisioned by writing the claim against the auth record, an operation requiring service-role credentials that never reach a browser. Validating a role against the list of roles that exist is not the same as validating it against the list a stranger may claim.
+* **Role-Based Access Control (RBAC):** Every API endpoint must enforce server-side role checks.  
+  * `worker` roles cannot access employer search management or training provider tools.  
+  * `employer` roles cannot access or modify worker capability proof logs directly.  
   * `training_provider` roles are restricted to institutional milestone issuance and demand analytics.
-* **Row Level Security:** Enabled on all application tables as a second, independent boundary. The browser only ever holds the public anon key, so a modified or careless client cannot read data belonging to another user. The API server holds the service-role key and is responsible for its own authorization.
+  * Role requirements are enforced at the router mount point, so the rule is a property of the route group rather than something each handler can forget to repeat. The employer approval gate is deliberately **not** middleware: it lives in the service layer so the rule holds however the route is reached.
+* **Worker Identity Is Not An API Output.** No employer endpoint returns a worker id, name, email, phone number, or avatar. A search result carries an opaque, employer-scoped, expiring handle that resolves server-side and is inert for any other employer. Identity is revealed only to the employer the worker has accepted an invitation from — a one-directional reveal, because the worker is the one releasing their identity. Coordinates are never returned to anyone but their owner; search reports a distance in kilometres.
+* **Account Deletion Is Not Fully Available.** `capability_blocks.worker_id` and `work_proof_logs.worker_id` are `ON DELETE restrict`, which makes any account that has logged work impossible to delete; the request fails with an error naming neither the table nor the constraint. A member asking to be removed currently cannot be removed. Unresolved and tracked as `doc/13` E-025.
+* **Row Level Security:** Enabled **and forced** on all application tables as a second, independent boundary. The browser only ever holds the public anon key, so a modified or careless client cannot read data belonging to another user. The API server holds the service-role key and is responsible for its own authorization.
+  * `FORCE ROW LEVEL SECURITY` matters: it applies the policies to the table owner too, so a table cannot be protected by accident of ownership.
+  * `anon` and `authenticated` hold **no grants at all** on the application tables. The service role is therefore the real boundary, and RLS is defence in depth behind it — not the thing standing between two users.
+  * `candidate_handles` has no INSERT or UPDATE policy by design. The service role writes it, and a masked search result is only meaningful server-side.
 * **Public Verification Tokens:** SMS and WhatsApp verification links use single-use tokens with short expiration windows to prevent replay attacks. Only a SHA-256 hash of the token is stored, so a leaked database row cannot be replayed.
 
 ---

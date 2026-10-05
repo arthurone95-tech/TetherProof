@@ -64,6 +64,35 @@ end-to-end for a real delivered SMS.
   * Implement direct invitation pipeline and offer management.
   * Develop Training Provider Dashboard: Student roster management, milestone issuer, and market demand insights dashboard.
 
+### Status as of 2026-10-05
+
+The Employer module is complete. The Training Provider module is **not started** and is
+deliberately deferred to its own pass, so Phase 4 is half delivered.
+
+| Task | State |
+| --- | --- |
+| Employer dashboard | **Complete.** Profile form, spec builder, search, and sent invitations. Verified in a real browser end to end: signed in through the sign-in form, ran a search from the shareable result URL, sent an invitation, signed in as the worker, accepted it, and confirmed the identity reveal on the employer's side. |
+| Zero-knowledge search | **Complete.** Returns proof counts, trust score, distance, and last-verified time. No endpoint returns a worker id, name, contact detail, or coordinate. Cards carry an employer-scoped expiring handle that resolves to nothing for any other employer. |
+| Capability spec builder | **Complete.** Create, pause, update, delete. A paused spec keeps the employer's saved shortlists; an invitation already sent keeps a null reference to its spec. |
+| Direct invitation pipeline | **Complete.** Approval-gated send, single outstanding invitation per employer/worker pair, one final worker answer. Identity reveal is deliberately one-directional: masked until accepted, then visible on the employer side only. |
+| Employer approval | **Complete.** A review row with reviewer and timestamp, not a flag on the user. Search is open to unapproved accounts; only sending is gated. Self-registration stays open so there is somebody to approve. |
+| Admin approval UI | **Not built.** The API endpoint exists and is exercised by the smoke suite, but there is no page. An administrator approving an employer today needs a tool call. |
+| Training provider module | **Not started.** No roster, milestone issuer, or demand insights. |
+| Automated browser tests | **Not built.** The flows were walked by hand in a real browser. There is no test that would fail if the dashboard regressed. |
+
+**Two defects were found and fixed during this phase.** The registration endpoint accepted
+`admin` as a self-declared role, which is a full privilege escalation — an anonymous caller
+could register as an administrator, approve their own employer account, and send invitations.
+`admin` is now excluded from the roles the endpoint will accept, verified live. Separately,
+accounts provisioned outside registration had no `profiles` row, so their profile read and
+write both returned 404; the update is now an upsert. Both are recorded in `doc/13` (E-024,
+E-026).
+
+**Outstanding before Phase 4 can be called done:** the Training Provider module, an admin
+approval page, and an automated browser test for the employer flow.
+
+---
+
 ---
 
 ## 6. Phase 5: Testing, Security Review & Production Launch (Weeks 9 - 10)

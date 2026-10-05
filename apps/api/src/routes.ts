@@ -1,5 +1,10 @@
 import { Router } from 'express';
 import { authRouter } from './modules/auth/routes.js';
+import {
+  employerAdminRouter,
+  employerRouter,
+  inviteRouter,
+} from './modules/employers/routes.js';
 import { healthRouter } from './modules/health/routes.js';
 import { proofRouter } from './modules/proofs/routes.js';
 import { verificationRouter } from './modules/verifications/routes.js';
@@ -15,3 +20,16 @@ apiRouter.use('/verifications', verificationRouter);
 // Mounted at `/workers` so the full path is `/api/v1/workers/proofs`, matching
 // the API documentation. A proof is owned by the worker who performed the work.
 apiRouter.use('/workers', proofRouter);
+
+// Employer discovery and matching, per the API documentation: specs and search at
+// `/employers`, invitations the employer sent at `/employers/offers`.
+apiRouter.use('/employers', employerRouter);
+
+// Invitations addressed to the worker. Mounted at `/invites` rather than under
+// `/employers`, because the authenticated party is a worker and the path should
+// not imply otherwise.
+apiRouter.use('/invites', inviteRouter);
+
+// Admin-only employer approvals. Mounted at the API root under `/admin` to keep
+// the elevated surface on one identifiable prefix.
+apiRouter.use('/admin', employerAdminRouter);

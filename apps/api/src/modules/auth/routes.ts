@@ -2,8 +2,21 @@ import { Router } from 'express';
 import { authenticate } from '../../middleware/auth.js';
 import { authRateLimiter, codeVerificationRateLimiter, confirmationRateLimiter } from '../../middleware/rate-limit.js';
 import { validateBody } from '../../middleware/validate.js';
-import { confirm, getProfile, login, register, requestConfirmation } from './service.js';
-import { confirmRequestSchema, confirmSchema, loginSchema, registerSchema } from './schemas.js';
+import {
+  confirm,
+  getProfile,
+  login,
+  register,
+  requestConfirmation,
+  updateProfile,
+} from './service.js';
+import {
+  confirmRequestSchema,
+  confirmSchema,
+  loginSchema,
+  registerSchema,
+  updateProfileSchema,
+} from './schemas.js';
 
 export const authRouter = Router();
 
@@ -74,6 +87,27 @@ authRouter.get('/me', authenticate, async (req, res, next) => {
   try {
     const profile = await getProfile(req.auth!.userId);
     res.status(200).json(profile);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Updates the caller's own profile.
+ *
+ * Any authenticated role may call it, because the fields belong to different roles
+ * for different reasons: a worker's location lets an employer measure distance,
+ * and an employer's organization name is what a worker reads before deciding
+ * whether to accept an invitation. The route cannot be narrowed to one role, so
+ * it is mounted on the account router rather than on either role's router.
+ *
+ * Scoped to the caller's own row, so there is nothing to authorize beyond having a
+ * session.
+ */
+authRouter.patch('/profile', authenticate, validateBody(updateProfileSchema), async (req, res, next) => {
+  try {
+    const updated = await updateProfile(req.auth!.userId, req.body);
+    res.status(200).json(updated);
   } catch (error) {
     next(error);
   }

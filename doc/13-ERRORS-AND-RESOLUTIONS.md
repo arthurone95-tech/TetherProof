@@ -869,3 +869,293 @@ The bucket is a second layer, not the only one. `ALLOWED_CONTENT_TYPES` in `src/
 and the multer size cap in `src/middleware/upload.ts` reject a bad upload before any bytes are
 sent, and the API-layer allow-list is deliberately kept in step with `allowed_mime_types` by hand.
 If a format is added to one it must be added to the other.
+---
+
+## E-024: Anyone could self-register as an administrator
+
+* **Status:** Resolved — 2026-10-05, verified live against the running project
+* **Severity:** Privilege escalation from no credentials to full administrator.
+* **Found:** 2026-10-05, while building the employer approval flow.
+* **Related:** makes E-009's latent policy weakness reachable in practice.
+
+### Description
+`registerSchema` validated `role` against the full `USER_ROLES` list, which includes `admin`.
+The endpoint then wrote that role into the server-controlled `app_metadata.role` claim. Because
+`authorize('admin')` reads that claim, accepting `admin` at registration meant **any anonymous
+caller could mint themselves an administrator account** with one unauthenticated POST.
+
+This was not theoretical. Verified live end to end: an anonymous caller registered as `admin`,
+called the approval endpoint to approve a third party's employer account, received `200`, and
+that employer was then reported as `sending: {"eligibility":"eligible"}` — a fully escalated
+path from no credentials to approving strangers and sending invitations to workers.
+
+It also invalidated the design of the whole approval gate. The gate exists so a human decides
+whether a real organisation may contact real people. If the gate's own keyholder can be
+self-issued, the gate is not a gate.
+
+### Root cause
+The list of valid roles and the list of roles a stranger may claim are different questions, and
+the schema only asked the first. `USER_ROLES` is a correct description of what exists in the
+system; it was the wrong allow-list for an unauthenticated endpoint.
+
+### Resolution
+`SELF_REGISTER_ROLES = ['worker', 'employer', 'training_provider']` in
+`packages/shared/src/enums.ts`, used by `registerSchema`. `USER_ROLES` is untouched and still
+drives the database enum, so nothing else changes.
+
+Self-registration stays open for employers and training providers, deliberately. Requiring
+approval before anyone can look at the product would leave nobody in a position to approve
+anyone. What is gated is sending an invitation, not looking.
+
+Administrators are now provisioned by writing the role claim against the auth record, which is
+an operation requiring service-role credentials that are never exposed to a browser.
+
+### Verification
+`npm run smoke -- --live --web` asserts an anonymous `POST /auth/register` with `role: "admin"`
+is refused with `400`, and that no `public.users` row was created for the attempt. The suite
+also asserts the three legitimately self-registerable roles still succeed, so the fix cannot be
+"closed registration" in disguise.
+
+---
+
+## E-025: `ON DELETE restrict` makes any worker who has logged work impossible to delete
+
+* **Status:** Resolved — 2026-10-05, by E-029. The restriction itself is removed there.
+* **Found:** 2026-10-05, while tearing down browser walkthrough fixtures.
+* **Related:** `doc/08` data retention; migration `0000_luxuriant_pyro.sql`; resolved by `0005`.
+
+### Description
+Two foreign keys from migration 0000 are declared `ON DELETE restrict`:
+
+* `capability_blocks.worker_id → users.id`
+* `work_proof_logs.worker_id → users.id`
+
+A restricted foreign key blocks deletion of the referenced parent row. Because `public.users`
+itself cascades from `auth.users`, deleting a worker who has ever logged a job aborts the whole
+cascade and Supabase returns:
+
+```
+AuthRetryableFetchError: Database error deleting user
+```
+
+The message names neither the table nor the constraint, and its name claims the error is
+*retryable* when it is in fact permanent — four retries failed identically. An account that has
+logged work therefore **cannot be deleted at all**, by any route.
+
+This surfaced through ordinary operations rather than an audit. The walkthrough teardown could
+remove every fixture account except the one worker who had submitted proofs; and later, a smoke
+run interrupted by a DNS failure left an account that the suite's own pre-flight then refused to
+clean up, on every subsequent run. In both cases the failure was indistinguishable from a
+permissions problem, and the two plausible explanations (a missing grant, a transient error) were
+both wrong.
+
+It matters beyond housekeeping. A member who asks for their account to be removed is entitled
+to a mechanism that works, and the current answer is a silent generic error. It also blocks
+retention workflows: the rows that make deletion impossible are exactly the proof records.
+
+### Root cause
+A deliberate choice to restrict deletion on proof history, made when nothing required the
+opposite — and never revisited when account deletion became an operation something actually
+performs. Restricting is defensible for audit records; it is not defensible as the *only*
+outcome, because the combination with the `auth.users` cascade turns "keep the proof history"
+into "keep the account forever".
+
+### The three candidate fixes
+Fixing it means a migration, which needed authorisation, and the correct fix was not obvious:
+
+* Cascading would delete verified work history, which may be what a data-retention obligation
+  actually requires an employer or regulator to keep.
+* Cascading with an anonymising trigger would preserve aggregate proof counts while severing the
+  link to a person — arguably the correct outcome, and a schema change plus new code.
+* Leaving it restricted, and documenting that deletion requires an administrator running an
+  explicit retention script, is honest but leaves the generic error in place for the next person.
+
+Guessing at a retention obligation is worse than leaving a known limitation visible, so no
+migration was written at the time. The second option was authorised on 2026-10-05 and is
+implemented as **E-029**; the reasoning for choosing it is in that entry.
+
+### Impact on the smoke suite's own cleanup
+This surfaced a second, more annoying consequence. The smoke suite's pre-flight deletes leftover
+test accounts with `deleteUser(...).catch(() => undefined)`. Any worker fixture that has logged
+work therefore **cannot be removed by the suite's own self-healing**, and the swallowed error
+means the only visible symptom is a `no leftover accounts from an earlier run` check that fails
+on every subsequent run while cleaning nothing.
+
+This was hit for real. A `--web` run aborted mid-flight when DNS to the database pooler failed
+(`getaddrinfo ENOTFOUND`), leaving one worker and nine stored uploads behind. Every later run
+then reported the same two failures. Those failures were **not** a leak in the smoke suite: they
+were this restriction refusing to let the suite clean up after a run it could not finish.
+
+The actual PostgreSQL error, read directly rather than through the admin API's opaque wrapper:
+
+```
+23503 update or delete on table "users" violates foreign key constraint
+      "capability_blocks_worker_id_users_id_fk" on table "capability_blocks"
+detail: Key (id)=(…) is still referenced from table "capability_blocks".
+```
+
+Supabase reports this as `AuthRetryableFetchError: Database error deleting user`, which names
+neither the table nor the constraint and whose class name asserts retryability that does not
+exist — four consecutive retries failed identically.
+
+### Diagnostic caution worth recording
+Two false conclusions were reached before the real one, and both came from the same mistake:
+
+1. The pre-flight cleanup was assumed to be removing accounts, on the basis that it reported
+   `0 rows`. It removes zero because the delete is *refused*, not because there is nothing to
+   delete.
+2. A PostgREST count query with `head: true` was read as "no referencing rows". It returned
+   `null`, and a `count && count > 0` guard treated `null` as zero. The account demonstrably had
+   **9** `capability_blocks` rows.
+
+A `null` count is an absence of a measurement, not a measurement of zero. Where a number decides
+whether something is safe to delete, it has to come from a query whose empty result and failure
+are distinguishable.
+
+### Mitigation applied in the meantime
+Only to temporary cleanup scripts, not to product code or to `scripts/smoke.mjs`: they delete
+dependent rows in explicit order over `pg`, remove the stored objects, then remove the auth
+user, asserting what each step removed, and confirming zero orphans afterwards scoped by
+predicate rather than by the ids the run happened to create.
+
+Note that `service_role` has **no DELETE grant** on these tables through PostgREST, so a
+service-role client cannot clean up after this failure either. Row removal goes through a direct
+database connection, which is how the smoke suite's own cleanup already worked.
+
+### Resolution
+Authorised on 2026-10-05: **keep the proof records, strip the link to the person.** Deletion
+becomes an anonymisation rather than a refusal, so the retention promise survives and the
+member can still be removed.
+
+Superseded by E-029, which records the implementation. What follows is the reasoning, kept
+because it explains why the resolution is not "just cascade".
+
+* **Why not cascade.** Cascading would destroy verified work history. The value of the network
+  is that the proof is real and independently verified; deleting it to satisfy a deletion
+  request destroys the thing being asked about, and would do so for a *different* worker's
+  trust score, since an aggregate spans many people.
+* **Why not leave it restricted.** It is the current state, and it means a member who asks to
+  be removed gets a generic error and stays. That is the worst of the three options because it
+  is both unhelpful and, on a retention question, non-compliant.
+* **Why anonymisation.** The aggregate — "this skill has N verified proofs, mean trust score S"
+  — is what employers consume, and none of it identifies anyone. What identifies the person is
+  the foreign key and the free-text description. Severing those two, and keeping the row,
+  satisfies a deletion request without falsifying a count.
+
+Making the smoke suite's pre-flight resilient to an interrupted predecessor run — removing
+restricted rows in order rather than calling `deleteUser` and swallowing the failure — is a
+follow-up that belongs with the migration.
+
+---
+
+## E-026: Accounts provisioned outside registration had no profile row
+
+* **Status:** Resolved — 2026-10-05, verified live
+* **Found:** 2026-10-05, while building `PATCH /auth/profile`.
+
+### Description
+`updateProfile` issued an `UPDATE public.profiles SET ... WHERE user_id = ?`. The `profiles`
+row is created by a trigger on `auth.users`, which only fires for accounts that pass through
+`/auth/register`. Accounts created by a service-role `createUser` — an administrator
+provisioning a colleague, or the smoke suite minting an elevated role — never fire it.
+
+For those accounts the update matched zero rows, which the service reported as 404. Reading the
+profile 404'd for the same reason. The result was that a perfectly real, authenticated user got
+"not found" for both operations on their own profile, and the profile form was unusable for
+anyone not created through the public endpoint.
+
+### Root cause
+`UPDATE` was chosen on the assumption that the row always exists, which held for the only account
+creation path that had been exercised. The assumption was never wrong about the data model —
+it was wrong about who creates accounts.
+
+### Resolution
+Converted to `insert … onConflictDoUpdate`, keyed on the existing `profiles_user_id_unique`
+index. No schema change was needed; the unique constraint that makes the upsert safe was
+already there.
+
+A trigger to create `profiles` rows for every auth user was considered and **deliberately not
+added**: it is a schema change nobody asked for, and the upsert makes it unnecessary.
+
+### Verification
+`npm run smoke -- --live --web` exercises `PATCH /auth/profile` for a worker, an employer, and
+an account minted directly through the service role, and confirms each can both read and write
+its own profile.
+
+---
+
+## E-027: `profiles.location_city` is a column no code path writes
+
+* **Status:** Open — resolving it needs an authorisation decision, not code
+* **Found:** 2026-10-05, while building the employer profile form.
+
+### Description
+`profiles.location_city` has no writer anywhere in the codebase. Every read returns `null`, for
+every account, permanently. It was carried into the Phase 4 profile form and rendered as the
+user's location, which made the UI assert something the database does not contain.
+
+### Why it was not simply filled in
+A city name cannot be derived from a latitude and longitude without reverse geocoding, which
+means either a third-party lookup — a new dependency, an outbound call, and a privacy
+question about sending a user's position to a geocoder — or a bundled gazetteer large enough to
+matter. Both are decisions to make deliberately, not defaults to pick.
+
+The alternative was to derive it on read from `location_gps` and present that as a fact. A
+geocoder's answer is a guess about administrative boundaries; presenting it as "your city" would
+be asserting something the platform does not actually know.
+
+### Resolution so far
+The column remains, because dropping it is a breaking contract change and `ProfileResponse`
+already exposes it. It is documented in `packages/shared/src/api.ts` as always `null` with the
+reason, and it was **removed from every screen** rather than rendered as though it held a
+place. Nothing in the product now displays it.
+
+### What remains
+Either authorise reverse geocoding, or authorise dropping the column. Leaving it is stable and
+honest, but the field is dead weight that the next developer will trip over.
+
+---
+
+## E-028: A profile refresh could not be persisted during a render
+
+* **Status:** Resolved as hardening — the underlying 500 is unexplained and still unreproduced
+* **Found:** 2026-10-05, during the employer dashboard browser walkthrough.
+
+### Description
+`readAccessToken()` runs on every server render that calls the API — including `/login`, which
+calls `currentProfile()`. When the stored access token had expired, it refreshed through
+Supabase and then called `writeSession()` to persist the renewed token.
+
+`writeSession()` calls `cookies().set()`, which Next.js only permits inside a Server Action or
+Route Handler. During a Server Component render this is outside the contract, and the write is
+guaranteed to be rejected.
+
+### The unresolved part
+During the walkthrough, `/login` returned `500: Internal Server Error` four times, and the
+server logged:
+
+```
+[TypeError: Invalid URL] { code: 'ERR_INVALID_URL', input: 'null' }
+```
+
+one per failed request, all in the sign-out-then-navigate sequence. **This was not reproduced.**
+Roughly sixty subsequent requests were made — with no cookie, with a valid session, and with a
+crafted session stamped as expired — and every one returned 200 with no new errors. Both 500
+tabs recovered on reload. The built output was inspected to rule out a misconfigured Supabase
+client, and both the middleware and `session.ts` have correctly inlined URLs.
+
+So: the cookie-write-during-render is a real contract violation and has been removed. It is
+**not** established as the cause of the 500, and the error's `input: 'null'` does not obviously
+correspond to anything in this code path. Recording this honestly matters more than closing it
+with a guess: an unexplained intermittent 500 in an auth path should not be reported as fixed.
+
+### Resolution
+`writeSession()` now returns `false` instead of throwing when the cookie cannot be written, and
+`readAccessToken()` ignores the result: the refreshed token is used for the request in hand and
+the renewal is persisted by the next action. One extra Supabase refresh per render after an hour
+of continuous use is a small cost; failing a render over it would be a large one.
+
+### What would settle it
+A stack trace. `next start` logs only the error summary, so the production path cannot produce
+one without either a development server or an error-reporting hook. Neither was added, since
+adding infrastructure for a defect that has not reproduced in sixty attempts is a poor trade.

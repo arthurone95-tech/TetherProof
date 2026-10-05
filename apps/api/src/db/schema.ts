@@ -24,6 +24,11 @@ export const verificationStatus = pgEnum('verification_status', [
 ]);
 export const verificationResponse = pgEnum('verification_response', ['none', 'confirmed', 'rejected']);
 export const offerStatus = pgEnum('offer_status', ['pending', 'accepted', 'declined']);
+export const employerVerificationStatus = pgEnum('employer_verification_status', [
+  'pending',
+  'approved',
+  'rejected',
+]);
 export const proximityStatus = pgEnum('proximity_status', ['within', 'outside', 'unavailable']);
 
 const createdAt = timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
@@ -75,8 +80,11 @@ export const capabilityBlocks = pgTable(
       .references(() => users.id, { onDelete: 'restrict' }),
     skillTag: varchar('skill_tag', { length: 160 }).notNull(),
     skillLevel: integer('skill_level').notNull().default(1),
-    proofCount: integer('proof_count').notNull().default(0),
-    lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
+    // There is deliberately no cached proof count or last-verified timestamp
+    // here. Both were dropped in migration 0004: nothing had ever written them,
+    // so they always read zero, and an employer search ranking on a cached
+    // number would be ranking on a lie. Counts aggregate from `work_proof_logs`
+    // at read time, which cannot drift. See the reasoning in 0004.
   },
   (table) => [
     index('capability_blocks_worker_id_idx').on(table.workerId),
@@ -202,12 +210,84 @@ export const directOffers = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     status: offerStatus('status').notNull().default('pending'),
+    /**
+     * Free text from the employer, shown to the worker when they decide.
+     *
+     * Bounded at 500 characters and always rendered as text, never as markup. It
+     * is the only employer-authored content a worker ever sees, so it is the
+     * obvious place for injected script or an attempt at social engineering.
+     */
+    note: varchar('note', { length: 500 }),
+    /** The spec this invitation came from, for the employer's own audit trail. */
+    specId: uuid('spec_id').references(() => employerSpecs.id, { onDelete: 'set null' }),
+    /** When the worker accepted or declined. Null while pending. */
+    respondedAt: timestamp('responded_at', { withTimezone: true }),
     createdAt,
+    updatedAt,
   },
   (table) => [
     index('direct_offers_employer_id_idx').on(table.employerId),
     index('direct_offers_worker_id_idx').on(table.workerId),
     uniqueIndex('direct_offers_employer_worker_unique').on(table.employerId, table.workerId),
+  ],
+);
+
+/**
+ * Approval state for an employer account.
+ *
+ * A row is created only when a decision is actually needed. Its absence means
+ * pending, which behaves identically to an explicit `pending` row, so a freshly
+ * registered employer needs no setup step before they can search.
+ */
+export const employerApprovals = pgTable(
+  'employer_approvals',
+  {
+    employerId: uuid('employer_id')
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: employerVerificationStatus('status').notNull().default('pending'),
+    reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+    /** Short reviewer note. Never holds a document reference or contact detail. */
+    note: varchar('note', { length: 200 }),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    createdAt,
+  },
+  (table) => [index('employer_approvals_status_idx').on(table.status)],
+);
+
+/**
+ * Employer-scoped opaque handles, so a masked candidate card can still be acted on.
+ *
+ * `direct_offers.worker_id` is a real foreign key, so an employer must be able to
+ * name a specific candidate, but Feature 4.2 promises not to reveal who that
+ * candidate is. A handle is a random token that only the server resolves, and
+ * only for the employer it was issued to. The value is random rather than derived
+ * from the worker id on purpose: a derived value would be stable across employers
+ * and therefore correlatable by anyone comparing two result sets.
+ *
+ * Handles expire. They are a temporary capability to address one card, not a
+ * durable pseudonymous identifier, and a permanent one would quietly become the
+ * tracking id that masking was meant to prevent.
+ */
+export const candidateHandles = pgTable(
+  'candidate_handles',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    employerId: uuid('employer_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    workerId: uuid('worker_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    handle: varchar('handle', { length: 64 }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex('candidate_handles_employer_worker_unique').on(table.employerId, table.workerId),
+    uniqueIndex('candidate_handles_handle_unique').on(table.handle),
+    index('candidate_handles_employer_idx').on(table.employerId),
+    index('candidate_handles_expires_at_idx').on(table.expiresAt),
   ],
 );
 
@@ -246,6 +326,16 @@ export const employerSpecsRelations = relations(employerSpecs, ({ one }) => ({
 export const directOffersRelations = relations(directOffers, ({ one }) => ({
   employer: one(users, { fields: [directOffers.employerId], references: [users.id] }),
   worker: one(users, { fields: [directOffers.workerId], references: [users.id] }),
+  spec: one(employerSpecs, { fields: [directOffers.specId], references: [employerSpecs.id] }),
+}));
+
+export const employerApprovalsRelations = relations(employerApprovals, ({ one }) => ({
+  employer: one(users, { fields: [employerApprovals.employerId], references: [users.id] }),
+}));
+
+export const candidateHandlesRelations = relations(candidateHandles, ({ one }) => ({
+  employer: one(users, { fields: [candidateHandles.employerId], references: [users.id] }),
+  worker: one(users, { fields: [candidateHandles.workerId], references: [users.id] }),
 }));
 
 export type UserRow = typeof users.$inferSelect;
@@ -255,3 +345,5 @@ export type WorkProofLogRow = typeof workProofLogs.$inferSelect;
 export type VerificationRow = typeof verifications.$inferSelect;
 export type EmployerSpecRow = typeof employerSpecs.$inferSelect;
 export type DirectOfferRow = typeof directOffers.$inferSelect;
+export type EmployerApprovalRow = typeof employerApprovals.$inferSelect;
+export type CandidateHandleRow = typeof candidateHandles.$inferSelect;

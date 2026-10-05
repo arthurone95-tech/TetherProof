@@ -1,4 +1,4 @@
-import type { UserRole } from './enums.js';
+import type { EmployerVerificationStatus, UserRole } from './enums.js';
 
 /**
  * Error codes returned by the TetherProof API.
@@ -69,12 +69,160 @@ export interface ConfirmationChallenge {
   delivered: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Employer discovery and matching (Phase 4)
+// ---------------------------------------------------------------------------
+
+/** A hiring filter as the employer sees it. Nothing worker-specific. */
+export interface CapabilitySpec {
+  id: string;
+  requiredSkill: string;
+  minProofThreshold: number;
+  maxDistanceKm: number;
+  isActive: boolean;
+  createdAt: string;
+}
+
+/**
+ * One candidate card, as a masked result.
+ *
+ * There is no worker id, name, email, phone, avatar, or coordinate in this shape.
+ * `candidateHandle` is the only way to act on the card, and the server resolves
+ * it solely for the employer that search was run for.
+ */
+export interface CandidateCard {
+  /** Opaque, employer-scoped, expiring. Not derivable from the worker. */
+  candidateHandle: string;
+  skillTag: string;
+  /** Count of proofs for this skill confirmed by a client. Never includes blocked ones. */
+  verifiedProofs: number;
+  /**
+   * Mean fraud score of the verifications backing those proofs, where 1 is fully
+   * supported. Null when nothing has been scored, which is not the same as zero.
+   */
+  trustScore: number | null;
+  lastVerifiedAt: string | null;
+  /**
+   * Straight-line distance from the spec's reference point in kilometres, or null
+   * when the worker has not shared a location. Null is not disqualifying: a
+   * missing location is an absence of evidence, and excluding those workers would
+   * hide most of a network that has not opted into geolocation.
+   */
+  distanceKm: number | null;
+}
+
+/** The sender's view of an invitation. Safe to show before the worker answers. */
+export interface SentOffer {
+  id: string;
+  workerId: string;
+  specId: string | null;
+  note: string | null;
+  status: 'pending' | 'accepted' | 'declined';
+  createdAt: string;
+  respondedAt: string | null;
+}
+
+/**
+ * The recipient's view of an invitation.
+ *
+ * The employer is reduced to `employerOrganization` plus an approval marker. A
+ * worker cannot meaningfully decide whether to talk to someone without knowing
+ * who is offering, but nothing else about the account is disclosed: not the
+ * contact details, not the account id, not its spec history.
+ *
+ * `candidateRevealed` is true only once accepted, which is the condition under
+ * which the employer is entitled to see who they are talking to.
+ */
+export interface ReceivedOffer {
+  id: string;
+  employerOrganization: string | null;
+  employerApproved: boolean;
+  note: string | null;
+  status: 'pending' | 'accepted' | 'declined';
+  candidateRevealed: boolean;
+  createdAt: string;
+  respondedAt: string | null;
+}
+
+/** Whether this employer may send invitations right now, and why not if not. */
+export interface OfferSendingStatus {
+  eligibility: 'eligible' | 'blocked';
+  /** Only present when `eligibility` is `blocked`. Safe to show to the employer. */
+  reason?: string;
+}
+
+/**
+ * The employer's own approval state, from `GET /employers/approval`.
+ *
+ * `record` is always present, synthesised as pending when no decision has been
+ * recorded, so a caller never has to distinguish "not reviewed yet" from "reviewed
+ * and pending" and cannot mistake a missing row for an approval.
+ *
+ * It deliberately carries no reviewer identity. The employer needs to know a decision
+ * was made and what it was; who made it is not theirs to see.
+ */
+export interface EmployerApprovalResponse {
+  status: EmployerVerificationStatus;
+  record: {
+    status: EmployerVerificationStatus;
+    note: string | null;
+    reviewedAt: string | null;
+  };
+  sending: OfferSendingStatus;
+}
+
+export interface SpecsResponse {
+  specs: CapabilitySpec[];
+}
+
+export interface SearchResponse {
+  candidates: CandidateCard[];
+}
+
+export interface SentOffersResponse {
+  offers: SentOffer[];
+}
+
+export interface ReceivedOffersResponse {
+  offers: ReceivedOffer[];
+  pendingCount: number;
+}
+
 /**
  * Result of registering, confirming, or signing in.
  *
  * `session` is null only while the account is unconfirmed; E-007 removed the
  * need for an administrator to confirm accounts by hand.
  */
+/**
+ * The signed-in account's own application profile, as returned by `GET /auth/me`.
+ *
+ * Always the caller's own row. `locationGps` is their own stored location in
+ * `latitude,longitude` form and is returned so an interface can prefill the field
+ * they set it with; the search API is what turns it into a distance, and it never
+ * returns coordinates belonging to anyone else.
+ */
+export interface ProfileResponse {
+  id: string;
+  role: UserRole;
+  fullName: string | null;
+  /**
+   * Always null.
+   *
+   * `profiles.location_city` has no writer anywhere in the codebase, so it reads
+   * null for every account. It is left in the response rather than removed because
+   * dropping it is a breaking contract change, but it must not be rendered as if it
+   * held a place: giving a user a city name requires reverse geocoding, which is an
+   * open decision, and inventing one from a coordinate would be a guess presented as
+   * fact. Logged as E-024.
+   */
+  locationCity: string | null;
+  /** The caller's own stored location. Null when they have not shared one. */
+  locationGps: string | null;
+  organizationName: string | null;
+  avatarUrl: string | null;
+}
+
 export interface AuthResponse {
   user: AuthUser;
   session: AuthSession | null;

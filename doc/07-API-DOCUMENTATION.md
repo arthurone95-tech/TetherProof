@@ -98,6 +98,37 @@ Response (200 OK): Returns the user object, role, and a session containing the a
 
 Response (200 OK): Returns the caller's id, role, full name, location, organization, and avatar.
 
+This returns **no email address and no phone number**, by design. A page that needs contact
+details has to ask for them deliberately through another endpoint rather than receiving them
+by default alongside the profile. It does include `locationGps`, which is the caller's own
+value, so a profile form can be prefilled with the location that was actually saved.
+
+### F. Update Own Profile
+* **Endpoint:** `PATCH /api/v1/auth/profile`
+* **Description:** Updates the caller's own profile fields. Any field may be omitted to leave
+  it unchanged.
+* **Authorization:** `Authorization: Bearer <access_token>`
+
+* **Request Body:**
+  ```json
+  {
+    "fullName": "Ama Mensah",
+    "organizationName": "Accra Solar Ltd",
+    "locationGps": "5.6037,-0.1870",
+    "avatarUrl": "https://…"
+  }
+  ```
+
+Response (200 OK): Returns the updated profile. This is an **upsert**, not an update: accounts
+provisioned outside `/auth/register` — by an administrator or a service-role `createUser` —
+never pass through the registration trigger and so have no `profiles` row at all. A plain
+`UPDATE` against a missing row is a silent no-op that reports 404, which is indistinguishable
+from "no such user". See `doc/13` E-027.
+
+`locationGps` is a `"latitude,longitude"` string. **Coordinates are never returned to anyone
+but their owner** — search reports a distance in kilometres and never a point. `locationCity`
+is accepted by no endpoint and always reads `null`; see `doc/13` E-024.
+
 > **Prerequisite:** Endpoints **B** and **C** depend on an email or SMS provider being configured in the Supabase Auth dashboard. Without one, `delivered` is always `false` and codes are never received.
 
 ---
@@ -232,25 +263,144 @@ already used, `410` link expired.
 
 ## 6. Employer & Matching Endpoints
 
-### A. Create Capability Spec
-* **Endpoint:** `POST /api/v1/employers/specs`
-* **Description:** Allows an employer to create a verifiable hiring filter. Requires employer authorization.
-* **Request Body:**
-  ```json
-  {
-    "requiredSkill": "Industrial Machine Operator",
-    "minProofThreshold": 15,
-    "maxDistanceKm": 20
-  }
-  ```
-Response (201 Created): Returns created spec object.
+All endpoints here are role-scoped at the router, so the requirement is a property of the mount
+point rather than something each handler re-checks. Employer routes require `employer`, the
+invitation inbox requires `worker`, and the approval route requires `admin`.
+
+**The approval gate.** An employer may read and search as soon as the account exists. Sending
+an invitation waits for approval, because that is the action that contacts a real person who
+did not ask to be contacted. The gate lives in the service layer, not in middleware, so it
+holds however the route is reached.
+
+### A. Own Approval State
+* **Endpoint:** `GET /api/v1/employers/approval`
+* **Description:** The caller's own review state, so a disabled control can be explained
+  instead of leaving the employer to guess.
+* **Authorization:** `Authorization: Bearer <access_token>`, employer role.
+
+Response (200 OK):
+```json
+{
+  "status": "approved",
+  "record": {
+    "employerId": "…",
+    "status": "approved",
+    "reviewedBy": null,
+    "reviewedAt": "2026-10-05T09:12:00Z",
+    "note": "Company documents checked."
+  },
+  "sending": { "eligibility": "eligible" }
+}
+```
+`record` is `null` when no decision has been made, which behaves the same as `pending`.
+`reviewedBy` is **always `null` in this response** — it is stripped deliberately. The employer
+needs to know a decision was made and what it was; who made it is not theirs to see.
 
 ### B. Zero-Knowledge Talent Search
 * **Endpoint:** `GET /api/v1/employers/search`
-* **Description:** Searches for verified workers matching active spec criteria while masking personal identity.
-* **Query Parameters:** `spec_id=UUID`
+* **Description:** Searches verified workers and returns aggregate proof metrics with no
+  worker identity. Open to unapproved employers.
+* **Query Parameters:** `specId` (UUID, optional) to reuse a saved spec, or any of
+  `requiredSkill`, `minProofThreshold`, `maxDistanceKm`, `referenceGps`, `limit` (1–100,
+  default 25). Numeric values are coerced from strings, so this is usable as a plain form GET.
 
-Response (200 OK): Returns list of anonymized candidate tokens, aggregate proof counts, and trust scores.
+Response (200 OK):
+```json
+{
+  "candidates": [
+    {
+      "candidateHandle": "9yo0q0Yl_XrrJIv4Wrk-tAo7pD0EmNv2TyO7IEdRiEU",
+      "requiredSkill": "Solar Panel Installation",
+      "verifiedProofs": 2,
+      "trustScore": 0.71,
+      "distanceKm": 0,
+      "lastVerifiedAt": "2026-10-05T08:40:00Z"
+    }
+  ]
+}
+```
+No field in this response identifies a worker: no id, name, email, phone, avatar, or
+coordinate. `candidateHandle` is random, employer-scoped, and expires — it is only resolvable
+by the employer that ran this search. `trustScore` is the mean fraud score of the verifications
+backing those proofs, so a low number is good.
+
+A worker who has not shared a location is **not** filtered out. Their card reports
+`distanceKm: null` and is still actionable; an absent location is an absence of evidence, and
+excluding those workers would hide most of a network that has not opted into geolocation.
+
+### C. List, Create, Update, and Delete Specs
+* `GET /api/v1/employers/specs` — the caller's own specs.
+* `POST /api/v1/employers/specs` — create. **201** with the created spec.
+  ```json
+  { "requiredSkill": "Industrial Machine Operator", "minProofThreshold": 15, "maxDistanceKm": 20 }
+  ```
+* `PATCH /api/v1/employers/specs/:specId` — partial update, including `isActive` to pause a
+  spec without deleting it. An empty body is refused.
+* `DELETE /api/v1/employers/specs/:specId` — **204**. Invitations already sent keep a null
+  reference to the spec rather than cascading away, so an employer cannot erase their own
+  record of who they contacted by deleting the filter that found them.
+
+`minProofThreshold` defaults to 1 and is capped at 500; `maxDistanceKm` defaults to 25 and is
+capped at 20,000. The caps are deliberate: a threshold no worker could realistically reach
+produces a filter that silently matches nothing forever, and refusing it at creation is kinder
+than a saved spec that never fires.
+
+### D. Send an Invitation
+* **Endpoint:** `POST /api/v1/employers/offers`
+* **Description:** Sends an invitation to a masked candidate card. Requires an approved account.
+* **Request Body:**
+  ```json
+  {
+    "candidateHandle": "9yo0q0Yl_XrrJIv4Wrk-tAo7pD0EmNv2TyO7IEdRiEU",
+    "note": "We have a site in Tema, starting next month."
+  }
+  ```
+
+The request schema has **no field for a worker id**, so a caller who obtained one cannot act
+on it here even by accident. `note` is capped at 500 characters and is the only
+employer-authored text a worker ever sees; it is always rendered as text, never as markup.
+
+Response (201 Created): Returns the created invitation. Refused with `409` when an invitation
+to that candidate is already awaiting a response, and with `403` when the account is not yet
+approved.
+
+### E. Sent Invitations
+* **Endpoint:** `GET /api/v1/employers/offers`
+* **Description:** Invitations this employer sent, with the workers they were addressed to.
+
+Worker identity stays masked until the invitation is **accepted**. Before that the entry shows
+only the skill and status; after it, the worker's name and contact details appear here and
+nowhere else. The reveal is one-directional on purpose: the worker is choosing to be
+contactable, and the employer has no reciprocal claim.
+
+### F. Invitation Inbox (worker)
+* `GET /api/v1/invites/offers` — invitations addressed to the signed-in worker, with a
+  `pendingCount`. Each entry shows the employer's organization name and whether that account
+  has been reviewed. The worker's own identity is never echoed back.
+* `POST /api/v1/invites/offers/:offerId/respond` — records the answer:
+  ```json
+  { "response": "accepted" }
+  ```
+
+Answering an already-answered invitation is refused rather than overwritten, so a recorded
+decision cannot be silently retracted; changing one's mind means a new invitation. Accepting is
+the moment the worker releases their identity, which the interface states on the button rather
+than letting it read as acknowledging a message.
+
+### G. Record an Approval Decision (admin)
+* **Endpoint:** `POST /api/v1/admin/employers/:employerId/approval`
+* **Authorization:** admin role.
+* **Request Body:**
+  ```json
+  { "status": "approved", "note": "Company documents checked." }
+  ```
+
+`status` accepts `approved`, `rejected`, and `pending`. `pending` is allowed as a reset so a
+mistaken approval can be undone. The reviewer's id and the timestamp are stored rather than
+inferred, because an approval that cannot be audited is not a control worth having.
+
+> Administrators are provisioned by writing the role claim against the auth record. `admin` is
+> deliberately **not** an accepted value for `POST /auth/register`; see `doc/13` E-024.
 
 ---
 

@@ -5,6 +5,7 @@ import type {
   AuthSession,
   AuthUser,
   ConfirmationChallenge,
+  ProfileResponse,
   UserRole,
 } from '@tetherproof/shared';
 import { logger } from '../../config/logger.js';
@@ -12,7 +13,13 @@ import { db } from '../../db/client.js';
 import { profiles, users } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
 import { supabaseAdmin, supabaseAuth } from '../../lib/supabase.js';
-import type { ConfirmInput, ConfirmRequestInput, LoginInput, RegisterInput } from './schemas.js';
+import type {
+  ConfirmInput,
+  ConfirmRequestInput,
+  LoginInput,
+  RegisterInput,
+  UpdateProfileInput,
+} from './schemas.js';
 
 /**
  * Reads the server-controlled role claim.
@@ -287,14 +294,24 @@ export async function login(input: LoginInput): Promise<AuthResponse> {
   };
 }
 
-/** Reads the application profile for the authenticated caller. */
-export async function getProfile(userId: string) {
+/**
+ * Reads the application profile for the authenticated caller.
+ *
+ * Scoped to the caller's own row, so `locationGps` being returned is the caller
+ * reading their own location rather than anyone else's. It is included because an
+ * interface has to be able to show and prefill what the user previously entered, and
+ * the alternative would be a second write-only field with no way to read it back.
+ * Distance is still computed by the search service, which returns kilometres and
+ * never a coordinate belonging to a candidate.
+ */
+export async function getProfile(userId: string): Promise<ProfileResponse> {
   const rows = await db
     .select({
       id: users.id,
       role: users.role,
       fullName: profiles.fullName,
       locationCity: profiles.locationCity,
+      locationGps: profiles.locationGps,
       organizationName: profiles.organizationName,
       avatarUrl: profiles.avatarUrl,
     })
@@ -306,6 +323,57 @@ export async function getProfile(userId: string) {
   const row = rows[0];
   if (!row) {
     throw AppError.notFound('Profile not found.');
+  }
+  return row;
+}
+
+/**
+ * Updates the caller's own profile, creating the row if it is not there yet.
+ *
+ * Scoped by `user_id = caller` in the statement itself rather than by reading the
+ * row first and then writing it. A read-then-write would leave a window in which a
+ * concurrent request could change the row and be overwritten by this one.
+ *
+ * The upsert is not incidental. `public.users` rows are created by the
+ * `on_auth_user_created` database trigger, but `public.profiles` rows are created
+ * by this module's registration path. An account created any other way, through the
+ * service-role API, an import, or the Supabase dashboard, therefore has a `users`
+ * row and no `profiles` row. That is precisely how an administrator is provisioned,
+ * so an admin provisioned that way could not set an organization name or a location
+ * at all, and both reads and writes on the profile failed for them. Creating the row
+ * on demand is narrower than moving the insert into a trigger and needs no schema
+ * change, so it does not disturb the accounts that already have one.
+ *
+ * Only the columns the caller actually supplied are written. Spreading the whole
+ * input across the write would set `undefined` over every untouched column, so a
+ * request that sets only a name would silently erase the location.
+ */
+export async function updateProfile(userId: string, input: UpdateProfileInput) {
+  const patch: Partial<typeof profiles.$inferInsert> = {};
+  if (input.fullName !== undefined) patch.fullName = input.fullName;
+  // `null` here is meaningful and distinct from absent: it is how a worker stops
+  // sharing a location and returns to the "unlocatable" state that the search
+  // treats as unknown rather than disqualifying.
+  if (input.locationGps !== undefined) patch.locationGps = input.locationGps;
+  if (input.organizationName !== undefined) patch.organizationName = input.organizationName;
+
+  const written = await db
+    .insert(profiles)
+    .values({ userId, ...patch })
+    .onConflictDoUpdate({ target: profiles.userId, set: patch })
+    .returning({
+      fullName: profiles.fullName,
+      locationCity: profiles.locationCity,
+      organizationName: profiles.organizationName,
+      avatarUrl: profiles.avatarUrl,
+    });
+
+  const row = written[0];
+  if (!row) {
+    // Reachable only if the account itself is missing, since the insert would
+    // otherwise fail on the foreign key. Reporting success on a write that touched
+    // nothing would be worse than refusing.
+    throw AppError.notFound('That account was not found.');
   }
   return row;
 }
