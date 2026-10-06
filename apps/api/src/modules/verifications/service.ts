@@ -133,6 +133,27 @@ export async function getVerificationSummary(rawToken: string): Promise<Verifica
       status: 404,
     });
   }
+
+  // Closed for the same reason `assertUsable` closes it on submission, and with
+  // the same sentence, so a reader never sees an answerable form for a proof
+  // that cannot be answered: the verifier would fill in an answer, press the
+  // button, be refused, and "Try again" would bring the identical form back —
+  // an endless retry against a state nothing can change.
+  //
+  // Spent and expired links are deliberately still shown. A spent one carries
+  // the outcome, which is information the reader came for; an expired one can
+  // be recognised from `expiresAt`. Only the deleted-worker case has nothing to
+  // report and no way to say why, and reporting it at read time means it is
+  // never reached. As on submission, the wording must not become a signal that
+  // an account was deleted, so it is the wording for a spent link.
+  if (record.anonymisedAt !== null) {
+    throw new AppError({
+      code: ERROR_CODES.VERIFICATION_TOKEN_CONSUMED,
+      message: 'This verification link is no longer active.',
+      status: 409,
+    });
+  }
+
   return toSummary(record);
 }
 

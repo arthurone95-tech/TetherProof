@@ -18,7 +18,14 @@ const envSchema = z.object({
 
   API_HOST: z.string().min(1).default('127.0.0.1'),
   API_PORT: z.coerce.number().int().positive().default(4000),
-  API_BASE_URL: z.string().url().default('http://localhost:4000'),
+  /**
+   * The origin the browser talks to is `NEXT_PUBLIC_API_BASE_URL`, which the
+   * client workspace reads from the same root `.env`. There is deliberately no
+   * `API_BASE_URL` for this process: nothing in the API builds a URL from it,
+   * and having a second, similarly named variable that is validated but never
+   * referenced is how a deployment ends up configuring the one that does
+   * nothing.
+   */
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
 
   /**
@@ -33,6 +40,25 @@ const envSchema = z.object({
     .default('')
     .refine((value) => value === '' || /^https?:\/\//.test(value), {
       message: 'WEB_BASE_URL must start with http:// or https:// when set',
+    }),
+
+  /**
+   * Canonical origin of the web client, shared with `apps/web`.
+   *
+   * Optional. When set it is the address every confirmation link returns to,
+   * which is what makes a deployed site independent of whichever host or port a
+   * particular request arrived on. When it is empty the origin is taken from the
+   * request that asks for the code, so a local server follows whatever port it
+   * actually started on. Named `NEXT_PUBLIC_` because both workspaces read it
+   * from the one repository-root `.env`, and because it is a public address: it
+   * appears in every link the product sends and keeps no secret.
+   */
+  NEXT_PUBLIC_SITE_URL: z
+    .string()
+    .trim()
+    .default('')
+    .refine((value) => value === '' || /^https?:\/\/[^/\s]+\/?$/.test(value), {
+      message: 'NEXT_PUBLIC_SITE_URL must be a bare origin such as https://example.com when set',
     }),
 
   // Supabase project

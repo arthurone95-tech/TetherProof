@@ -117,3 +117,25 @@ approval page, and an automated browser test for the employer flow.
   * Perform security audit of API endpoints, authentication flows, and data privacy isolation.
   * Configure production hosting environment (Vercel/Netlify frontend, managed database backend, environment variable secrets).
   * Deploy to production and initialize live system monitoring.
+
+**Completed:** end-to-end testing at phone and desktop widths in a real browser (the desktop
+navigation is the same-origin 1000px frame because no wide viewport is available here); the security
+audit, which covered the endpoint/role matrix, anonymous and cross-role access, the rate-limit
+buckets, the CORS origin policy in both development and production mode, response headers on both
+applications, a secrets scan of every tracked file, and an audit of every environment key the code
+reads against `.env.example`; and production configuration — `.github/workflows/ci.yml`, the CI and
+checklist sections added to `doc/09` §3.1 and §4.2, and start-up refusal and health behaviour probed
+directly against the production build. Errors found along the way are logged through `doc/13`
+E-039; the smoke suite asserts 257 checks, including response headers.
+
+**What remains, and why it is not a code change:** choosing the hosting platforms and creating the
+staging/production Supabase projects, injecting their secrets, enabling repository branch
+protection, wiring an error tracker and an uptime monitor, and the deployment itself. Each needs
+the owner's accounts and explicit authorisation, so none of them can be completed from inside the
+repository. No `Dockerfile` or platform manifest was written either: the runtime target has not
+been chosen, and this machine has no container tooling with which to verify one — an unverifiable
+deployment file would be worse than none.
+
+**Still open from earlier phases:** the Twilio account behind `doc/13` E-027 (Phase 3), the
+Training Provider module and admin approval page (Phase 4), and the missing ESLint and unit-test
+runners (E-010), which is also why the CI workflow has no lint or unit-test job.

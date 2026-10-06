@@ -30,10 +30,17 @@ Credentials are owned by Supabase Auth. These endpoints create accounts and exch
     "email": "user@example.com",
     "password": "SecurePassword123!",
     "role": "worker",
-    "fullName": "Ama Mensah"
+    "fullName": "Ama Mensah",
+    "redirectOrigin": "https://app.example.com"
   }
   ```
 At least one of `phoneNumber` or `email` is required. Passwords must be at least 12 characters and include an uppercase letter, a lowercase letter, and a number.
+
+Those rules are defined once, in `passwordProblems()` in `@tetherproof/shared`, and both this schema and the web registration form check the same list — so the two cannot disagree about what is acceptable. A refusal comes back with its field-level reasons in `details` (see **§7**), which is how a client knows whether to correct the email or the password.
+
+`redirectOrigin` is **optional**. It is the origin a confirmation link returns to when the member taps the link in their email, and becomes `${redirectOrigin}/auth/callback`. Supplied by the web client, which knows the origin the request actually arrived on; a caller talking to the API directly may omit it, in which case the API falls back to `NEXT_PUBLIC_SITE_URL`, then `WEB_BASE_URL`, then the first entry in `CORS_ORIGINS`, and finally to Supabase's own Site URL.
+
+It is accepted only as an origin — `http` or `https`, no path, no credentials — and only when it is one of those configured origins, or a `localhost` / `127.0.0.1` address outside production. Anything else is refused with a field-level reason rather than dropped, because an unchecked value here turns every confirmation email into an open redirect carrying a session: an attacker who requested a code for somebody else's address would otherwise receive that person's tokens at a host they control. See `lib/redirect.ts` and `doc/13` E-031.
 
 Response (201 Created): Returns the user object and role, `session: null`, and a `confirmation` challenge. A session is not issued until the account is confirmed.
 
@@ -55,6 +62,8 @@ Response (201 Created): Returns the user object and role, `session: null`, and a
   { "phoneNumber": "+233241234567" }
   ```
   A `phoneNumber` or an `email` is required, matching the value used at registration.
+
+  `redirectOrigin` is optional and means the same thing it does at registration: where a confirmation link should return the person who taps it, restricted to the same set of addresses. It is accepted here as well as there because a member who never received their first link asks for a second one through this endpoint, and the second link must go to the right place too.
 * **Rate limit:** 5 requests per 15 minutes per IP, tighter than the credential endpoints because each accepted request can cost an SMS or email.
 
 Response (202 Accepted): Returns the masked destination and whether the message was dispatched. The status and shape are identical whether or not the account exists, so this endpoint cannot be used to discover which phone numbers or addresses are registered.
@@ -170,6 +179,24 @@ See `doc/13` E-025 and E-029 for why deletion anonymises rather than cascading, 
 for the retention policy in full.
 
 ---
+
+### H. Confirmation Link Return (`/auth/callback`)
+
+* **Route:** `GET /auth/callback` in `apps/web` — a web route, not an API endpoint.
+
+The API never redirects anyone itself. It tells Supabase Auth where a confirmation link should
+return the person who taps it (`redirectOrigin`, see **A** and **B**), Supabase verifies the token
+in the email first and only then redirects, and this route is what receives the result. It accepts
+both shapes Supabase can send:
+
+* `?code=...` — the PKCE exchange, completed server-side with `exchangeCodeForSession`.
+* `#access_token=...&refresh_token=...` — the implicit flow, read in the browser because a URL
+  fragment is never transmitted to a server, and handed to a server action.
+
+Either way the tokens are validated with Supabase before anything is stored: the refresh token is
+exchanged, and only Supabase's answer becomes the application's `tp_session` cookie. The reader
+then lands on the page for their role. On any refusal the credentials are cleared and the route
+says the link could not be used, without distinguishing an expired token from a replayed one.
 
 ## 4. Worker & Proof Ingestion Endpoints
 
@@ -454,3 +481,26 @@ All error responses follow a consistent JSON structure:
   }
 }
 ```
+
+A validation refusal adds `details`, an array of the individual problems. `message` describes the
+request; `details` describes the mistake, and it is the part a person can act on:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Request body failed validation.",
+    "status": 400,
+    "details": [
+      { "path": "password", "message": "Password must be at least 12 characters." },
+      { "path": "password", "message": "Password must include a number." }
+    ]
+  }
+}
+```
+
+`path` is the dotted path into the submitted body, so a client can place each message beside the
+field it belongs to rather than showing all of them as one undifferentiated block. Clients should
+treat `details` as optional and read it defensively: several endpoints use the same field for other
+shapes of information. Ignoring it entirely is what turned every distinct registration mistake into
+the same unusable sentence — see `doc/13` E-030.

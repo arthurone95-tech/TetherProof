@@ -5,6 +5,7 @@ import { Banner } from '@/components/ui/Banner';
 import { Card } from '@/components/ui/Card';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 import { deleteAccount } from '@/lib/actions';
+import { homeFor } from '@/lib/navigation';
 import { currentProfile } from '@/lib/server/api';
 
 export const metadata: Metadata = {
@@ -39,12 +40,9 @@ export default async function AccountSettingsPage({
   const { error } = await searchParams;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 px-4 py-10">
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
       <header>
-        <Link href="/" className="text-sm font-semibold text-brand-600 hover:text-brand-700">
-          ← Back
-        </Link>
-        <h1 className="mt-3 text-2xl font-bold text-ink-900">Your account</h1>
+        <h1 className="text-2xl font-bold text-ink-900">Your account</h1>
         {/*
           No email address here, and not as an oversight: `ProfileResponse` does not
           carry one. Identity data stays in Supabase Auth and is not duplicated into
@@ -78,13 +76,13 @@ export default async function AccountSettingsPage({
             <SubmitButton variant="danger">Delete my account</SubmitButton>
           </form>
           <Link
-            href={user.role === 'employer' ? '/employer' : '/invites'}
+            href={homeFor(user.role)}
             className="inline-flex min-h-12 items-center rounded-xl px-4 font-semibold text-ink-600 hover:text-ink-900"
           >
             Keep my account
           </Link>
         </div>
       </Card>
-    </main>
+    </div>
   );
 }

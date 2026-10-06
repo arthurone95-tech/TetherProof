@@ -762,11 +762,31 @@ async function main() {
     const health = await api('GET', '/health');
     check('health reports the database as up', health.json?.database === 'up', JSON.stringify(health.json));
 
+    // The API's `helmet` set is not visible to typechecking and is easy to lose
+    // in a middleware reorder, so it is asserted where the responses are already
+    // being examined rather than trusted (doc/13 E-039).
+    const apiHeaders = health.headers;
+    const apiHeader = (name) => apiHeaders.get(name);
+    check('API sets X-Content-Type-Options', apiHeader('x-content-type-options') === 'nosniff', apiHeader('x-content-type-options') ?? 'absent');
+    check('API frames only itself', apiHeader('x-frame-options') !== null, apiHeader('x-frame-options') ?? 'absent');
+    check('API suppresses the referrer', apiHeader('referrer-policy') === 'no-referrer', apiHeader('referrer-policy') ?? 'absent');
+    check('API states transport security', apiHeader('strict-transport-security') !== null, apiHeader('strict-transport-security') ?? 'absent');
+    check('API does not advertise the framework', apiHeader('x-powered-by') === null, apiHeader('x-powered-by') ?? 'absent');
+
     section('REGISTRATION');
     const email = `smoke.${Date.now()}@tetherproof.dev`;
     const password = 'SmokeTest123456';
     const reg = await api('POST', '/auth/register', {
-      body: { email, password, role: 'worker', fullName: 'Smoke Test Worker' },
+      body: {
+        email,
+        password,
+        role: 'worker',
+        fullName: 'Smoke Test Worker',
+        // A permitted return address must not change the outcome: this is the
+        // field that decides where a confirmation link points, and a schema that
+        // rejected it outright would break every registration from the web app.
+        redirectOrigin: 'http://localhost:3210',
+      },
     });
     check('register returns 201', reg.status === 201, `status ${reg.status} ${reg.text.slice(0, 140)}`);
     const userId = unwrap(reg.json)?.user?.id;
@@ -791,6 +811,34 @@ async function main() {
 
     const dup = await api('POST', '/auth/register', { body: { email, password, role: 'worker' } });
     check('duplicate registration is rejected', dup.status === 409 || dup.status === 400, `status ${dup.status}`);
+
+    // An address this deployment never named must be refused rather than quietly
+    // ignored. A confirmation link carries an access and refresh token on its way
+    // to an inbox, so accepting any return address would turn every such link
+    // into an open redirect that hands that session to whoever asked for it.
+    const hostile = await api('POST', '/auth/register', {
+      body: {
+        email: `smoke.redirect.${Date.now()}@tetherproof.dev`,
+        password,
+        role: 'worker',
+        redirectOrigin: 'https://attacker.example.net',
+      },
+    });
+    check(
+      'a confirmation link may not be pointed at an unlisted address',
+      hostile.status === 400,
+      `status ${hostile.status} ${hostile.text.slice(0, 140)}`,
+    );
+    check(
+      'the refusal names the field at fault',
+      hostile.json?.error?.details?.some((d) => d.path === 'redirectOrigin') === true,
+      JSON.stringify(hostile.json?.error?.details),
+    );
+    check(
+      'the refused registration created no account',
+      hostile.json?.user == null,
+      JSON.stringify(hostile.json?.user ?? null),
+    );
 
     const challenge = unwrap(reg.json)?.confirmation;
     check(
@@ -2400,6 +2448,20 @@ async function runWebChecks({ pool, admin, createdUsers }) {
     const page = await fetch(`${WEB}/verify/${rawToken}`, { redirect: 'manual' });
     const html = await page.text();
     check('GET /verify/{token} returns 200', page.status === 200, `status ${page.status}`);
+
+    // The client renders the forms and holds the session cookie, so it carries
+    // the same class of response headers as the API (doc/13 E-039). Checked on
+    // a page that needs no token, so a header regression is reported even when
+    // the confirmation flow itself is broken.
+    const loginPage = await fetch(`${WEB}/login`);
+    const webHeaders = loginPage.headers;
+    const webHeader = (name) => webHeaders.get(name);
+    check('web sets X-Content-Type-Options', webHeader('x-content-type-options') === 'nosniff', webHeader('x-content-type-options') ?? 'absent');
+    check('web frames only itself', webHeader('x-frame-options') === 'SAMEORIGIN' && /frame-ancestors 'self'/.test(webHeader('content-security-policy') ?? ''), `${webHeader('x-frame-options') ?? 'no xfo'} / ${webHeader('content-security-policy') ?? 'no csp'}`);
+    check('web suppresses the referrer (the token is in the path)', webHeader('referrer-policy') === 'no-referrer', webHeader('referrer-policy') ?? 'absent');
+    check('web limits camera, microphone and location to itself', (webHeader('permissions-policy') ?? '').includes('geolocation=(self)') && (webHeader('permissions-policy') ?? '').includes('microphone=(self)') && (webHeader('permissions-policy') ?? '').includes('camera=(self)'), webHeader('permissions-policy') ?? 'absent');
+    check('web states transport security', webHeader('strict-transport-security') !== null, webHeader('strict-transport-security') ?? 'absent');
+    check('web does not advertise the framework', webHeader('x-powered-by') === null, webHeader('x-powered-by') ?? 'absent');
     check('confirmation shell is rendered', /Was this work completed|Loading request details/.test(html), `${html.length} bytes`);
     check('referrer is suppressed to protect the token', /no-referrer/i.test(html));
     check('page is excluded from indexing', /noindex/i.test(html));

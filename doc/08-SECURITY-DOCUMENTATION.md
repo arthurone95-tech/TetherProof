@@ -17,7 +17,7 @@ This document outlines the security architecture, threat model mitigations, data
   * `training_provider` roles are restricted to institutional milestone issuance and demand analytics.
   * Role requirements are enforced at the router mount point, so the rule is a property of the route group rather than something each handler can forget to repeat. The employer approval gate is deliberately **not** middleware: it lives in the service layer so the rule holds however the route is reached.
 * **Worker Identity Is Not An API Output.** No employer endpoint returns a worker id, name, email, phone number, or avatar. A search result carries an opaque, employer-scoped, expiring handle that resolves server-side and is inert for any other employer. Identity is revealed only to the employer the worker has accepted an invitation from — a one-directional reveal, because the worker is the one releasing their identity. Coordinates are never returned to anyone but their owner; search reports a distance in kilometres.
-* **Account Deletion Is Not Fully Available.** `capability_blocks.worker_id` and `work_proof_logs.worker_id` are `ON DELETE restrict`, which makes any account that has logged work impossible to delete; the request fails with an error naming neither the table nor the constraint. A member asking to be removed currently cannot be removed. Unresolved and tracked as `doc/13` E-025.
+* **Account Deletion Works, With One Path That Only Records The Leak.** The two `ON DELETE restrict` foreign keys that made any worker with proof records undeletable were replaced with `set null` (migration `0005`, `doc/13` E-025/E-029), so an account holding work can now be deleted. What SQL cannot do is remove the uploaded bytes: a `BEFORE DELETE` trigger is refused from `storage.objects` by `storage.protect_delete()`, so the trigger instead scrubs every identifying column and writes the bucket and path to `public.orphaned_proof_media`. Removal is left to the Storage API, which `DELETE /auth/account` performs before answering (the response reports `mediaRemoved`/`mediaPending` rather than a bare success) and which the smoke suite drains. The residual exposure is an object left by a deletion that bypasses the application — a direct Supabase dashboard delete — which is queued for removal rather than silently lost, but is not removed at that moment. Tracked as `doc/13` E-025/E-029.
 * **Row Level Security:** Enabled **and forced** on all application tables as a second, independent boundary. The browser only ever holds the public anon key, so a modified or careless client cannot read data belonging to another user. The API server holds the service-role key and is responsible for its own authorization.
   * `FORCE ROW LEVEL SECURITY` matters: it applies the policies to the table owner too, so a table cannot be protected by accident of ownership.
   * `anon` and `authenticated` hold **no grants at all** on the application tables. The service role is therefore the real boundary, and RLS is defence in depth behind it — not the thing standing between two users.
@@ -102,3 +102,79 @@ the smoke suite; a privacy guarantee that holds on only one path is not a guaran
 ## 5. Environment Variables & Secrets Management
 * **No Hardcoded Secrets:** Private API keys, database credentials, and third-party service tokens (e.g., Twilio, payment gateways) must never be hardcoded in source files.
 * **Environment Strategy:** All credentials must be loaded via secure environment variables (`.env`). The actual `.env` file must be excluded from version control via `.gitignore`.
+
+---
+
+## 6. HTTP Hardening: Headers, Origin Policy, and Abuse Limits
+
+Every control in this section is enforced by the server rather than by the client, and each is
+asserted by the smoke suite so it fails loudly if it is lost (`doc/13` E-039).
+
+### 6.1 Response headers
+
+Both applications set their own headers; neither relies on the other to do it.
+
+| | API (`helmet`, since Phase 1) | Web client (`apps/web/next.config.ts`) |
+| --- | --- | --- |
+| MIME sniffing | `X-Content-Type-Options: nosniff` | `X-Content-Type-Options: nosniff` |
+| Framing | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'` | `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'` |
+| Referrer | `Referrer-Policy: no-referrer` | `Referrer-Policy: no-referrer` |
+| Transport | `Strict-Transport-Security: max-age=31536000; includeSubDomains` | same |
+| Content Security Policy | full policy: `default-src 'self'`, `script-src 'self'`, `style-src 'self' https: 'unsafe-inline'`, `object-src 'none'`, `form-action 'self'`, `base-uri 'self'` | narrow by design: `frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'` |
+| Capabilities | — | `Permissions-Policy: geolocation=(self), microphone=(self), camera=(self)` |
+| Fingerprint | `X-Powered-By` disabled | `X-Powered-By` disabled |
+
+Two deliberate asymmetries:
+
+* **The client's CSP does not state `script-src`.** Next bootstraps hydration from inline scripts,
+  so a strict script policy requires a per-request nonce threaded through middleware — a change that
+  breaks pages in ways a header check cannot detect. The directives that are present are
+  independent, and a browser applies those while leaving `script-src` unconstrained. A nonce policy
+  is the right next step and belongs in its own change.
+* **`SAMEORIGIN`, not `DENY`.** A same-origin frame is how the layout is inspected at a desktop
+  width when no wide viewport is available; `DENY` would close that without protecting anything
+  `frame-ancestors 'self'` does not.
+
+`Referrer-Policy: no-referrer` exists because a verification link carries a bearer token in its
+path: no page in this product needs to tell a third party where a reader came from.
+
+### 6.2 Origin policy (CORS)
+
+* Cross-origin reads are granted **only to origins listed in `CORS_ORIGINS`**, and the same list is
+  what decides which origins may be pointed at by a confirmation link.
+* Outside development, nothing else is granted — not loopback, not private ranges, not an absent
+  `Origin`. In development, loopback and private-range origins are accepted as a convenience
+  (`apps/api/src/lib/origin.ts`), because a browser is usually served from a port that changes.
+* A request with no `Origin` is not a CORS request and is left alone.
+* Refused origins receive **no `Access-Control-Allow-Origin` header at all** rather than a
+  mismatched value, so the browser reports the refusal as a CORS failure with nothing to fall back
+  on.
+
+Observed in a production-mode run with `http://localhost:3000` configured: that origin echoed,
+`http://localhost:3001`, `http://127.0.0.1:4200` and `https://evil.example.net` each received no
+CORS headers, and a preflight from the configured origin returned `204` with methods and
+credentials (`doc/13` E-035).
+
+### 6.3 Rate limits
+
+Per-IP, `express-rate-limit`, draft-7 headers (`RateLimit`, `RateLimit-Policy`), answered with
+`429 RATE_LIMITED` and no detail about what remains:
+
+| Bucket | Limit |
+| --- | --- |
+| Global, every route | 300 / 60s |
+| Auth (`/auth/login`, `/auth/register`, code verification) | 10 / 15 min |
+| Confirmation code submission | 5 / 15 min |
+| Proof media upload | 20 / 15 min |
+| Verification link fetch | 30 / 60s |
+
+Registration deserves the client-side password check before the request is sent: 10 attempts per
+15 minutes means a rejected password costs a real attempt, so the policy is validated in the form
+first (`doc/13` E-030) and then again on the server, where it is authoritative.
+
+### 6.4 Input validation
+
+Request bodies, query strings and path parameters are validated with `zod` at the route boundary —
+the same schemas the client pre-checks, so the two cannot drift. Media uploads are constrained by
+declared MIME type and size, images are re-encoded before storage, and every write path runs
+through `authorize()`.

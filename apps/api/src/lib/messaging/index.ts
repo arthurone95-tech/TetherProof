@@ -1,9 +1,10 @@
 /**
  * Provider selection.
  *
- * Resolved once at startup so a deployment that intends to send messages but has
- * misconfigured them is caught by the health check rather than by the first
- * worker who submits a proof.
+ * Resolved once at startup (`index.ts` calls `getMessageProvider()` before the
+ * socket opens) so a deployment that intends to send messages but has
+ * misconfigured them refuses to start, rather than answering the health check
+ * with `ok` and being caught out by the first worker who submits a proof.
  */
 import { logger } from '../../config/logger.js';
 import { env } from '../../config/env.js';

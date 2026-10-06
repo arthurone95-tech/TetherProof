@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
+import { homeFor } from '@/lib/navigation';
 import { currentProfile } from '@/lib/server/api';
 import { LoginView } from './LoginView';
 
@@ -18,7 +19,7 @@ export default async function LoginPage() {
   const user = await currentProfile();
 
   if (user) {
-    redirect(user.role === 'employer' ? '/employer' : user.role === 'worker' ? '/invites' : '/pending');
+    redirect(homeFor(user.role));
   }
 
   return <LoginView />;

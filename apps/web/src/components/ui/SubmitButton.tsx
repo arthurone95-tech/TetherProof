@@ -49,6 +49,18 @@ export function SubmitButton({
       name={name}
       value={value}
     >
+      {/*
+        A spinner beside the words rather than instead of them. A button that says
+        only "Working…" tells a screen reader that something is happening and a
+        glance that nothing is; together they answer both, and the glyphs are
+        hidden from the accessibility tree so the label is read once.
+      */}
+      {pending ? (
+        <span
+          aria-hidden="true"
+          className="inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent"
+        />
+      ) : null}
       {pending ? (pendingLabel ?? 'Working…') : children}
     </Button>
   );

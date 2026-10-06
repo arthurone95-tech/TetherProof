@@ -1149,6 +1149,15 @@ crafted session stamped as expired — and every one returned 200 with no new er
 tabs recovered on reload. The built output was inspected to rule out a misconfigured Supabase
 client, and both the middleware and `session.ts` have correctly inlined URLs.
 
+**Second occurrence, 2026-10-06:** the identical signature appeared once during a proof-form
+submission, with `page: /_error`, `statusCode: 500` and `handleAction` in the stack
+(`app-page.runtime.dev.js`) — the server-action path rather than the render path. Again
+unreproduced: roughly forty further submissions, including every refusal branch and both media
+kinds, produced no further 500 and no console errors. The two occurrences sit in different paths
+(one a render during sign-out, one a server action during a signed-in submission), so no single
+path accounts for both. Also unexplained: `input: 'null'` is a string, so whatever constructed the
+URL was given the four characters `null` rather than an empty value.
+
 So: the cookie-write-during-render is a real contract violation and has been removed. It is
 **not** established as the cause of the 500, and the error's `input: 'null'` does not obviously
 correspond to anything in this code path. Recording this honestly matters more than closing it
@@ -1291,3 +1300,674 @@ its skill aggregate.
 An operator deleting an account through the Supabase dashboard bypasses the endpoint. The trigger
 still runs and the row still lands in `orphaned_proof_media`, but nothing removes the object, so
 those rows wait to be drained by hand. The endpoint closes the gap only on the path it sits on.
+
+---
+
+## E-030: Registration refused passwords with a message that never said why
+
+* **Status:** Resolved — 2026-10-05, verified live against the running project
+* **Found:** 2026-10-05, from a report that creating an account in the UI failed with
+  `Request body failed validation`.
+* **Related:** E-007 (registration and confirmation); `doc/07` §3.A; `doc/10` creating an account.
+
+### Description
+The API was right and the web app threw the answer away.
+
+`registerSchema` enforces a password policy — at least twelve characters, an uppercase letter, a
+lowercase letter, a number — and answered a refusal precisely:
+
+```json
+{"error":{"code":"VALIDATION_ERROR","message":"Request body failed validation.","status":400,
+  "details":[{"path":"password","message":"Password must be at least 12 characters."}]}}
+```
+
+Three layers then discarded everything after the second sentence:
+
+1. **`registerAccount` validated nothing about the password.** It checked only that an email and a
+   name were present, so the policy was enforced entirely by the network round trip.
+2. **`ApiRequestError` accepted only `message`, `status`, and `code`.** `error.details` was parsed
+   out of the response and never stored, so the specific reason was gone the moment the response
+   became an exception.
+3. **The catch returned no `field`,** and the register panel printed any error unconditionally as a
+   form-level message, so even a message naming a field would not have been shown beside it.
+
+The result: a person whose password was one character short, or had no digit, or was otherwise
+wrong, was told `Request body failed validation.` — a sentence that describes the request rather than
+the mistake, and that no reader can act on. Six distinct failures produced one indistinguishable
+message.
+
+The shape itself was never wrong. Every payload the registration action sends parses, and the happy
+path worked throughout; that is what made this easy to miss, because nothing fails until someone
+picks a password the policy dislikes.
+
+### The fix, and why the rules moved
+* **One policy, one definition.** `passwordProblems()` now lives in `@tetherproof/shared` and returns
+  every reason a password is unacceptable. `registerSchema` reports those reasons through
+  `.superRefine`, and `registerAccount` checks the same list before sending anything. Two hand-written
+  copies of a rule set drift apart, and they drift in the direction nobody tests — the copy with
+  fewer rules — which is exactly how the frontend ended up checking nothing.
+* **The field-level details survive the trip.** `ApiRequestError` now carries `issues`, read
+  defensively from `details` by `readFieldIssues`, which ignores anything malformed rather than
+  throwing while handling a failure.
+* **`formErrorFor` maps path to input,** preferring the field-level reason and falling back to the
+  request-level message. Paths with no matching input — `phoneNumber` on a form that only asks for an
+  email, `role` on a select that can only hold an accepted value — deliberately stay form-level, since
+  pointing at a field that did not cause the failure sends the reader to fix the wrong thing.
+* **The register panel no longer repeats itself.** Its form-level message is now guarded on
+  `!registerState.field`, the way the sign-in panel already was, so a field-level reason appears once.
+
+Checking the password locally as well as in the API is not redundant: `/auth/register` is rate limited
+to ten attempts per fifteen minutes and the limiter runs *before* validation, so a refused password
+still spent an attempt. Failing locally costs nothing; failing remotely eventually costs the person
+the ability to try at all.
+
+`.superRefine` rather than `.refine` because a password failing three rules must report all three —
+which is what the previous chain of `.min()` and `.regex()` calls did, and what someone fixing their
+password needs. The one wording change is the length ceiling, which now reads `Password must be at
+most 200 characters.` instead of Zod's default `Password must contain at most 200 character(s).`
+
+### Verification
+A probe asserting that `registerSchema`'s password issues equal `passwordProblems` output, case by
+case — compliant, too short, no uppercase, no number, no lowercase, several failures at once, over
+the maximum — plus every payload shape accepted before the change (worker, employer, training
+provider, no `fullName`, an extra unknown key, an omitted `role` defaulting to `worker`, and no
+identifier at all). Login is asserted unchanged: it must not impose the policy on a password, because
+enforcing password rules at sign-in locks people out rather than helping them. **16 of 16 passed.**
+
+Real-browser walkthrough against the running dev server: opened the registration panel, submitted a
+compliant-but-short password, and confirmed the reason now renders **attached to the password input**
+(`Password must be at least 12 characters.`) with the form-level alert empty, then resubmitted with a
+valid password and reached `Check f***@tetherproof.dev`. The five probe accounts this took were
+removed afterwards through `admin.auth.admin.deleteUser`, leaving 0 probe accounts and 0 orphaned
+profiles.
+
+`npm run smoke -- --live`: **229 passed, 0 failed**. `scrub-check` and `fraud-check` pass. Typecheck
+clean across all workspaces; shared and API builds clean.
+
+### Known limit
+React 19 resets an uncontrolled `<form action={…}>` after the action completes, so a failed
+registration still clears the name and email the person typed, and they are retyped along with the
+corrected password. That is pre-existing — it happened before this fix too, with the worse message —
+and fixing it means carrying the submitted values back as `defaultValue`. Not done here, because it
+is a separate concern from the validation contract and changes what the user sees after a failure.
+
+**Re-tested 2026-10-05** while redesigning the registration flow, through the same early return
+(a mismatched pair refused by `registerAccount`): the name, the email address, and both password
+boxes all still held their values after the refusal, on the same dev server. The reset does not
+reproduce, so either a dependency change since removed it or the original observation had a
+different cause. The note stays because that has not been ruled out everywhere, but nothing needs
+to be worked around for it at present.
+
+A second, unrelated observation from the same walkthrough: on the sign-in panel the button that opens
+the registration form is labelled **"I already have an account"**, which says the opposite of what it
+does, and there is no visible "Create an account" entry point. The register panel's equivalent button
+is correct. Reported, not changed.
+
+**Since corrected** as part of the registration-flow rework (2026-10-05). The label was a default
+value on the shared `PanelSwitch` component, right for one panel and wrong for the other, so the
+default was removed and each panel now states its own: the sign-in panel reads **"I don't have an
+account"** and opens registration — which is also the visible entry point that was missing — and the
+register panel keeps **"I already have an account"** and opens sign-in.
+
+---
+
+## E-031: The confirmation link went to a port nobody was listening on
+
+* **Status:** Resolved — 2026-10-05, verified live against the running project
+* **Found:** 2026-10-05, from a report that clicking the link in a confirmation email failed with a
+  connection-refused error.
+* **Related:** E-007 (registration and confirmation); `doc/07` §3.A, §3.B, §3.H; `doc/10` confirming
+  an account.
+
+### Description
+Two things were missing, and either alone would have been enough to break the click.
+
+**There was no `/auth/callback` route.** When Supabase confirms an account it redirects the reader
+back to a URL the application supplies. Nothing at `/auth/callback` existed, so even a link pointing
+at the right machine had nowhere to land.
+
+**The port was written down in the wrong place.** The redirect came from Supabase's Site URL —
+`http://localhost:3000` — because nothing asked for anything else. The application was running on
+3001, and 3000 on that machine serves a completely different project. The link did not merely land
+on the wrong page; it landed on someone else's server, and a reader arriving from a real inbox saw a
+refused connection or an unrelated site.
+
+The shape of the response is worth recording, because it decides where the fix has to live. GoTrue
+answers the confirmation request with a redirect carrying the session in the **fragment**:
+
+```
+303 → http://localhost:3001/auth/callback#access_token=…&refresh_token=…
+```
+
+A fragment is never transmitted to a server. No server-side code, no route handler, no middleware can
+read it — so a callback that only exists as a server component would render a page and never see the
+credentials. Whatever completes the sign-in has to run in the browser.
+
+The one thing that must not happen is treating that fragment as proof. The credentials are only worth
+something because Supabase issued them, so they are sent to the server and **exchanged** — GoTrue's
+answer is the session, and a token the client merely asserts is worth nothing.
+
+### The fix, and why the origin is derived rather than written down
+* **`/auth/callback` exists** as a page with a client component that reads `window.location.hash`,
+  clears the credentials out of the address bar with `history.replaceState` before any network call,
+  and hands the refresh token to a server action. A `?code=` query — the PKCE shape, which is what
+  this application's own Supabase clients speak — is handled on the same page through
+  `exchangeCodeForSession`.
+* **The session comes from an exchange, never from the link.** `refreshSession()` sends the refresh
+  token to GoTrue and stores only what comes back; the custom `tp_session` cookie is then written.
+  The role is read from `GET /auth/me` rather than from the token, because the API is what will
+  authorize every page opened next — and if the API will not recognize the account, the cookie is
+  cleared rather than left to fail one click later.
+* **The redirect origin is supplied by the caller, per request.** The web app sends `redirectOrigin`
+  on `/auth/register` and `/auth/confirm/request`, resolved in this order: a configured
+  `NEXT_PUBLIC_SITE_URL`, then the request's own `Origin` header (the form of `window.origin`), then
+  `x-forwarded-proto`/`x-forwarded-host`, then `Host`. Nothing is hardcoded to a port anywhere in the
+  source, so whichever port the server started on is the port in the link.
+* **The API refuses an origin it did not agree to.** `redirectOriginSchema` trims, validates, and
+  reduces the value to `new URL(v).origin`, then checks it against the allow-list: `NEXT_PUBLIC_SITE_URL`,
+  `WEB_BASE_URL`, and `CORS_ORIGINS`, plus loopback and private addresses outside production. A
+  non-permitted origin is a **400 with `details` naming `redirectOrigin`** — not a silent fallback.
+  Silence is how this bug survived: a redirect quietly substituted for the requested one looks exactly
+  like success until somebody clicks it.
+
+The refusal is deliberately loud because a wrong origin is a wrong link, and a wrong link is only
+discovered by the person receiving it. Development permits `localhost`, the whole `127.0.0.0/8`, and
+the private ranges, so a phone on the same network can still register; production permits only what
+the deployment named.
+
+### Verification
+A probe asserting the policy against the real `redirectOriginSchema`, in both modes: configured
+origins accepted, every path and credential form rejected, malformed values rejected, the port
+carried through untouched, and the local-address allowance present in development and absent in
+production. **49 of 49 passed in development, 46 of 46 in production.**
+
+Live against the running API on port 4000: a register carrying
+`redirectOrigin: https://attacker.example.net` returned **400** with
+`details[0].path === "redirectOrigin"` and *"This address is not permitted to receive confirmation
+links."* The same call with `http://localhost:3001` returned **201**, as did a register with no
+`redirectOrigin` at all.
+
+Real-browser proof that the origin is derived and not written down: registering from
+`http://desktop-ch0mrbt:3001` was **refused in the form with that same message**, while registering
+from `http://localhost:3001` succeeded. A hardcoded `http://localhost:3000` is an allowed origin, so
+a hardcoded value would have been accepted on that host — the refusal is only possible if the web app
+read the request's own host and sent it.
+
+Real-browser end-to-end, run against the shipped code: registered through the real form on 3001,
+minted the confirmation link with `redirect_to=http://localhost:3001/auth/callback`, and opened it.
+The link landed on `/auth/callback` with no connection refused, the credentials were stripped from the
+address bar, the exchange succeeded, and the reader was sent to `/invites` and rendered the signed-in
+page — *"Signed in as Final Callback Probe."* — with the session surviving a full page load.
+
+`npm run smoke -- --live`: **232 passed, 0 failed**. Typecheck clean across all workspaces; API build
+clean.
+
+### Known limit
+Reaching the development server by the machine's own name — `http://DESKTOP-CH0MRBT:3001` — is
+refused, because a name is not an address and deciding which hostnames count as "this machine" would
+mean resolving them inside a validation path. The message says so plainly and the fix is to set
+`NEXT_PUBLIC_SITE_URL`, which states the answer explicitly rather than guessing it.
+
+The `?code=` path only completes when the code was produced by this application's own Supabase
+client, because PKCE pairs a code with the verifier that requested it. A code minted elsewhere is
+refused, which is correct: accepting it would defeat the pairing.
+
+Nothing here reaches an inbox, so the link was minted with `admin.generateLink` — the same technique
+used to verify E-016 — rather than by reading the email. What that does not cover is whether a
+delivered message renders its link intact; the redirect is Supabase's, not the mail client's.
+
+## E-032: The verification link rendered as `[object Promise]/verify/...`
+
+* **Status:** Resolved — 2026-10-06, verified in a real browser against the running app
+* **Found:** 2026-10-06, walking the proof-upload success path for the first time end to end.
+
+### Description
+`submitProof` built the link a worker hands to the person confirming their work:
+
+```ts
+verificationUrl: `${currentOrigin()}/verify/${result.verificationToken}`
+```
+
+`currentOrigin()` is `async` — it awaits `headers()` — so the template string interpolated a
+Promise. Every successful submission therefore displayed and copied
+`[object Promise]/verify/<token>`: a link that looks complete, passes a casual read, and resolves
+to a 404 when tapped. Nothing else in the flow caught it, because the API returns the token
+correctly and the panel renders whatever it is given.
+
+The same file already used `await currentOrigin()` in the two registration paths, so the mistake is
+a single missed `await` rather than a misunderstanding of the helper.
+
+### Resolution
+`const origin = (await currentOrigin()) ?? ''` before the template, with a comment stating why the
+`await` is load-bearing. The `?? ''` keeps the shape honest if no origin can be derived: the result
+is a site-relative `/verify/<token>`, which still resolves on whatever host served the page, rather
+than a stringified promise.
+
+### Verification
+Real browser, live submission through the shipped form: the panel now reads
+`http://localhost:3001/verify/9syA8FrvIOML3i6lJ45aaGl-Cxhlxj9kWg4bzBSJOwA`. The token is
+base64url and untouched. A second submission produced a second distinct link.
+
+## E-033: The location box was hidden while the copy told people to type into it
+
+* **Status:** Resolved — 2026-10-06, verified in a real browser at a mobile viewport
+* **Found:** 2026-10-06, auditing the log form at a 579px viewport.
+
+### Description
+The proof form's location input was `<input type="hidden" name="submissionGps">` — 0×0, absent from
+the tab order, absent from the accessibility tree. The only way to set a location was the "Use my
+location" button.
+
+Two sentences around it said otherwise:
+
+* the fieldset's own copy — *"this box is the only record of place there is"* — pointed at a box that
+  could not be seen or focused;
+* both geolocation refusal messages end *"You can type the coordinates instead"* (`use-geolocation.ts`),
+  whose docblock in turn asserts *"Every location field in the app is typeable by hand"*.
+
+So a person who declined the sensor, or whose browser has no geolocation, was told to do something
+the page offered no means to do. The API accepts a typed coordinate and always did; only the
+interface refused to provide one.
+
+A hidden input also meant a stale coordinate had no visible representation: after `Clear`, the value
+was gone from the DOM but the user had no surface in which to notice a value still being submitted.
+
+### Resolution
+Replaced with a visible, labelled text field inside the same fieldset: `id`/`htmlFor` `submissionGps`,
+`inputMode="decimal"`, a hint giving the exact accepted form (`5.6037,-0.1870`), `aria-invalid` and
+`aria-describedby` wired to the hint and the error as `Field` does. The sensor still fills it; the
+keyboard is now a peer rather than a claim. The duplicate read-only span that echoed the value was
+removed, since the input itself now shows it.
+
+`submitProof` gained the matching client-side check — shape first, then `|lat| ≤ 90`, `|lon| ≤ 180` —
+for the same reason the other checks are duplicated: `/workers/proofs` sits behind a media rate
+limiter, and discovering a nonsense coordinate after the file has already uploaded spends one of a
+worker's few uploads per minute on a refusal that was knowable beforehand.
+
+### Verification
+Real browser at `innerWidth: 579` (below the `md:` breakpoint):
+
+* the field measures 449×48, is labelled "Coordinates", and its hint reads *"Latitude, longitude. The
+  button fills this in, or type it: 5.6037,-0.1870"*;
+* typing `not-a-coordinate` and submitting returns *"Enter coordinates as latitude, longitude — for
+  example 5.6037,-0.1870."* with `aria-invalid="true"` and `aria-describedby="submissionGps-error
+  submissionGps-hint"` — and **without** spending an upload, since the file attached to that attempt
+  was never sent;
+* typing `999,999` returns *"Location coordinates are out of range."* with the text and the attached
+  file both retained;
+* typing `5.6037,-0.1870` with a real JPEG submits successfully and the success panel renders.
+
+The geolocation refusal path was exercised first: declining the sensor produces *"Your location was
+not shared. You can type the coordinates instead."*, and the box it refers to is now present.
+
+## E-034: React emptied the log form after every attempt, including a refused one
+
+* **Status:** Resolved — 2026-10-06, verified in a real browser with a DOM probe
+* **Found:** 2026-10-06, while re-testing the refusal path of the proof-upload form.
+
+### Description
+`useActionState` calls `form.reset()` once its action settles. That is correct for a form whose
+submission succeeded and is now gone, and wrong for one that came back with a refusal: the worker
+was about to correct one line and try again, and the reset took the rest with it — the description
+they had written, the photo or recording they had chosen, and any location already set. Every
+rejection cost them the whole submission.
+
+The clean sheet a successful submission *does* need was already available from a different
+direction: "Log another job" remounts the form through its `key`, which resets the inputs, the file
+picker, and the recording state without relying on the browser's reset at all.
+
+### What was tried first, and why it was reverted
+A controlled `value`/`onChange` on each text field, plus restoring the chosen file after the reset.
+It worked, but it made three fields controlled purely to defend against a reset this form does not
+want, duplicated state the DOM already held, and needed an effect to put the file back. Two
+mechanisms for one problem, and the weaker one could drift out of sync with the stronger one.
+
+### The React `onReset` prop does not work for this
+Probed directly before committing to a fix. React calls `form.reset()` from within its own work, and
+on that path the synthetic event never reaches the component's `onReset` prop. Measured on the live
+form:
+
+* `form.reset` wrapped to count calls → **`resets: 1`**, so React did call it;
+* `onReset={(e) => e.preventDefault()}` on the `<form>` → **`preventedAtForm: false`**;
+* a `preventDefault` at `document` → **`preventedAtDoc: false`**;
+* the same prop, when a page script called `form.reset()` directly → **prevented**.
+
+So the prop looks like it should stop the reset and does not, which is worse than having no hook at
+all: it invites the next reader to trust it.
+
+### Resolution
+One mechanism, on the element: a native `reset` listener installed through `formRef` in a
+`useEffect`. `reset` is cancelable and the listener is on the target, so it runs before the browser
+acts on it. The `onReset` prop was removed rather than left beside it — a second, inert version of
+the same intent is a trap.
+
+`Field`'s now-unused `value?: string` prop was reverted out with it, so the component is back to
+being uncontrolled by default with `defaultValue` seeding it.
+
+### Verification
+DOM probe on the live form, instrumenting `form.reset` and listening for `reset`:
+
+| | |
+| --- | --- |
+| `resets` | 1 — React called it, exactly as it does in production |
+| `prevented` | `true` — the native listener cancelled it |
+| skill text after refusal | `Reset Prevention Probe` — retained |
+| description after refusal | 75 characters — retained |
+| file after refusal | `probe.jpg`, `fileCount: 1` — **retained**, which the reset destroyed most reliably |
+| refusal itself | `Location coordinates are out of range.` still rendered as `role="alert"` |
+
+Stable on a second poll after the action had fully settled, so the values survive the re-render and
+not merely the first frame. A full submission afterwards still produced the success panel, and
+"Log another job" still produced a genuinely clean form (`skill` empty, `description` 0 characters,
+`fileCount: 0`, empty location) — the clean sheet comes from the remount, which is the only place
+it is wanted.
+
+## E-035: The browser's own origin was missing from the API's CORS list, so the verification page could not load
+
+* **Status:** Resolved — 2026-10-06, verified against the running API with an origin matrix and in a real browser
+* **Found:** 2026-10-06, opening a verification link during the Phase 5 security review.
+* **Related:** E-031 (confirmation links, the same port drift); `doc/11` §4; `apps/api/src/app.ts`, `apps/api/src/lib/origin.ts`.
+
+### Description
+The page a verifier is sent to is the only screen in the product that calls the API from the
+browser. The page is served by the web app, the data comes from the API, and the API answers that
+cross-origin read with `Access-Control-Allow-Origin` only for origins named in `CORS_ORIGINS`.
+
+That list is written down once and says `http://localhost:3000`. The web app has not been on 3000
+since another project claimed the port: `next dev` moved to 3001 and stayed there. So the preflight
+was refused, the `fetch` threw, and the verifier was shown
+
+```
+This request could not be opened
+We could not load this request. Please try again.
+```
+
+with, in the console,
+
+```
+Access to fetch at 'http://localhost:4000/api/v1/verifications/…' from origin
+'http://localhost:3001' has been blocked by CORS policy
+```
+
+No amount of retrying helps, because nothing about the page can change a header the API decides. The
+link itself was valid — the API answered the same token correctly over plain HTTP.
+
+The same drift had already broken confirmation links once (E-031), which is what makes this a
+repeated failure rather than a first one: two independent rules in the codebase had to keep agreeing
+with a port number nobody wrote down.
+
+### Why adding the port to configuration was not the answer
+It would fix today's port and nothing else — a development server takes the next free port the same
+way next time — and the value lives in `.env`, which is not the code's to edit. It also only
+describes the symptom. What is really being judged is *"is this origin the machine the browser is
+running on"*, and the codebase already had a rule for exactly that question, written for
+confirmation links: `isLocalAddress` in `redirect.ts`.
+
+### Resolution
+The rule became shared, in `apps/api/src/lib/origin.ts`, and `createApp` now decides the CORS origin
+with it:
+
+* an origin in `CORS_ORIGINS` → allowed, exactly as before;
+* outside production, an origin on loopback or a private range → allowed, the same "this machine or
+  this network" reading `redirectOriginProblem` already uses;
+* anything else → refused, which withholds the CORS headers entirely rather than blanking one;
+* no `Origin` at all — curl, the smoke suite, server-to-server → untouched, as before.
+
+Production is unchanged: `env.isProduction` gates the local allowance, so a deployed API still
+accepts only what the operator named. Two definitions of "local" would be two chances for them to
+disagree, so there is one.
+
+### Verification
+Origin matrix against the running API (`GET /api/v1/health`, plus `OPTIONS` preflights):
+
+| Origin | Result |
+| --- | --- |
+| none | served, no `ACAO` |
+| `http://localhost:3001` (where the app runs) | `ACAO: http://localhost:3001` |
+| `http://localhost:3000` (the configured entry) | `ACAO: http://localhost:3000` |
+| `http://127.0.0.1:3001` | `ACAO: http://127.0.0.1:3001` |
+| `https://evil.example.net` | no `ACAO`; preflight answers without CORS headers |
+| `null` (what a sandboxed frame sends) | no `ACAO` |
+
+Preflight from the app's origin answers `204` with methods and credentials.
+
+In the browser: the verification page that previously failed now renders the question, the skill and
+the description with **zero console errors**, and pressing the button recorded the answer
+(*"Thank you — Your confirmation has been recorded."*), after which a reload reported the link
+already answered. Full path walked live: a worker submits a proof → the link is opened → confirmed →
+revisited.
+
+End to end in the suite as well: `npm run smoke -- --live --yes --web` reports **246 passed, 0
+failed**, including `preflight allows the web origin (ACAO=http://localhost:3105 status=204)`,
+`GET response carries a CORS header`, and `unknown origin is not granted CORS access (ACAO=null)`.
+
+---
+
+## E-036: The API offered a form for a proof that could never be answered
+
+* **Status:** Resolved — 2026-10-06, verified against the running API and in a real browser
+* **Found:** 2026-10-06, while completing the verification flow after the E-035 fix.
+* **Related:** E-025/E-029 (account deletion); `apps/api/src/modules/verifications/service.ts`; `doc/08` data retention.
+
+### Description
+Two endpoints answer for one link, and they disagreed about it.
+
+`POST /verifications/{token}` refuses through `assertUsable`, which refuses a proof whose worker has
+deleted their account. The record survives anonymisation so the counts it contributes stay true, but
+answering it now would write a verdict, a fraud score and a timestamp onto a row the person asked to
+be released from them. The refusal is a `409`: *"This verification link is no longer active."*
+
+`GET /verifications/{token}` did not consult that rule. It answered `200` with
+`status: "awaiting_response"`, so the client rendered a working form:
+
+1. the verifier opens a link whose worker has since left the platform;
+2. the page shows the question and both buttons, as though the answer would count;
+3. the verifier chooses and presses — and is told the link is no longer active;
+4. "Try again" re-reads, gets `200`, and returns the identical form, so the loop only ends when the
+   tab is closed.
+
+The verifier is invited to do work that is refused every time, on a screen that claims otherwise.
+Nothing is written anywhere, so there is no data damage; the damage is to a person being asked a
+question the product has already decided cannot be answered.
+
+### Why GET did not simply reuse `assertUsable`
+It must not. Two of that function's three refusals are wrong for a read:
+
+* a **spent** link must stay readable — the outcome is what the reader came for, and the suite
+  asserts that revisiting shows it;
+* an **expired** link can be recognised from `expiresAt`, and refusing it at read time would hide a
+  summary the spent case deliberately shows.
+
+Only the deleted-worker case has nothing to report, and it must not say *why*: `assertUsable` is
+explicit that *"saying otherwise would tell a third party that an account was deleted"*. So it takes
+the spent link's sentence.
+
+### Resolution
+`getVerificationSummary` now refuses an anonymised proof with the identical code and wording that
+`assertUsable` uses on submission. One rule, decided once, reported the same way whichever endpoint
+is asked — and the form is never rendered for it.
+
+### Verification
+Against the running API, on the link for a proof whose worker account had been deleted:
+
+| | before | after |
+| --- | --- | --- |
+| `GET /verifications/{token}` | `200`, `awaiting_response`, form rendered | `409 VERIFICATION_TOKEN_CONSUMED` — *"This verification link is no longer active."* |
+| unknown token | `404` | `404` (unchanged) |
+| live link | `200` | `200` (unchanged) |
+| answered link | `200`, outcome | `200`, outcome (unchanged) |
+
+The browser then walked a fresh proof end to end — question → confirm → *"Thank you"* → reload
+reporting *"already answered on 10/6/2026"* — with no console errors, and the suite's
+`--web` section (`browser GET returns the summary`, `revisiting the link shows it was answered`)
+passes: **246 passed, 0 failed**.
+
+---
+
+## E-037: Running the production build stopped the dev server dead, with 500s on every route
+
+* **Status:** Resolved — 2026-10-06, by restarting the dev server; the trap is documented rather than patched, because it is Next's build layout rather than this project's code
+* **Found:** 2026-10-06, when `/login` and `/dashboard` both answered `500 Internal Server Error` while the API stayed healthy.
+* **Related:** `doc/11` §4.
+
+### Description
+`npm run build` and `next dev` both write to `apps/web/.next`. Running the build while the dev
+server was serving from that directory replaced the files under a running process: the server kept
+its port, its PID and its apparent health, and began answering every compiled route with
+`Internal Server Error`.
+
+What made this cost time is how it presents. Three things said everything was fine:
+
+* `/api/v1/health` returned `{"status":"ok"}`;
+* `robots.txt` returned `200`, because it is a static file served outside the compile path;
+* a browser tab that was already open kept rendering its page from the previous successful load.
+
+So the evidence pointed away from the build and towards a stale session cookie or a broken route —
+which is where it was chased for a while before the dev server's own output was read.
+
+### Resolution
+Stop the dev server before building, and restart it afterwards. The running process's `.next` is not
+going to be coherent again, so it is restarted rather than coaxed.
+
+### Prevention
+`doc/11` §4 now states the constraint alongside the build and smoke steps, including the three false
+symptoms above, so the next person reads the dev server's output instead of the network tab.
+
+## E-038: A misconfigured messaging provider started anyway, exactly as the docs promised it would not
+
+* **Status:** Resolved — 2026-10-06, verified by starting the production build with and without the misconfiguration
+* **Found:** 2026-10-06, while checking the production-startup rules `doc/09` §4.1 states.
+* **Related:** `doc/09` §4.1 and §5; `apps/api/src/lib/messaging/index.ts`; `apps/api/src/index.ts`.
+
+### Description
+Three separate documents said the same thing, and none of them was true.
+
+`doc/09` §4.1:
+
+> Setting `MESSAGING_PROVIDER=twilio` without all three **refuses to start**, rather than looking
+> healthy while quietly never sending.
+
+The module's own header comment, above `resolve()`:
+
+> Resolved once at startup so a deployment that intends to send messages but has misconfigured them
+> is caught by the health check rather than by the first worker who submits a proof.
+
+And the comment inside the refusal itself:
+
+> Refusing to start is the point.
+
+The refusal existed. It was simply never reached at the time either claim described: the provider
+was resolved lazily, by `getMessageProvider()`, which runs on the first *dispatch*. So a production
+process started with `MESSAGING_PROVIDER=twilio` and empty credentials:
+
+```
+$ NODE_ENV=production MESSAGING_PROVIDER=twilio node apps/api/dist/index.js
+API server listening  {"url":"http://127.0.0.1:4200","environment":"production"}
+$ curl /api/v1/health
+{"status":"ok","product":"TetherProof","database":"up",...}
+```
+
+Healthy, listening, and doomed. The health check does not mention the messaging provider at all,
+so nothing about the deployment's state was visible; the first sign of trouble would have been the
+first worker to submit a proof, and even that arrives as a caught exception inside
+`sendVerificationLink` — a log line, in a feature whose whole purpose is to reach a client. The
+failure mode both documents named as unacceptable was the actual behaviour.
+
+### Resolution
+`index.ts` now resolves the provider before the socket opens, so `resolve()` runs at startup and
+its refusal is a startup failure. Constructing the provider does no I/O — `TwilioProvider`'s
+constructor stores configuration and `isConfigured()` checks that it is present — so the check
+costs nothing at boot. The module comment was corrected to describe what the code now does: it
+refuses to start, rather than being "caught by the health check", which it never was.
+
+### Verification
+Production build, run four ways:
+
+| configuration | result |
+| --- | --- |
+| `VERIFIER_PHONE_SALT` missing | refuses to start: `VERIFIER_PHONE_SALT: required in production, at least 16 characters` (pre-existing, matches `doc/09` §4.1) |
+| `MESSAGING_PROVIDER=twilio`, credentials empty | **refuses to start**: `MESSAGING_PROVIDER is "twilio" but TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER are not all set.` — previously started |
+| `MESSAGING_PROVIDER=log` (the default) | starts, `/api/v1/health` returns `200 {"status":"ok","database":"up"}` |
+| development (`.env`, provider `log`) | unaffected; the development server runs normally |
+
+`npm run build` and `npm run typecheck` both pass with the change.
+
+---
+
+## E-039: The client rendered every form in the product with none of the security headers the API carries
+
+* **Status:** Resolved — 2026-10-06, verified by header capture, a same-origin frame probe and Lighthouse
+* **Found:** 2026-10-06, during the Phase 5 security audit — the API was checked first and came back
+  clean, which is what made the asymmetry visible.
+* **Related:** `doc/08` §2; `apps/web/next.config.ts`; `apps/api/src/app.ts` (`helmet`).
+
+### Description
+The API has carried a full `helmet` set since Phase 1 — CSP, HSTS, `nosniff`, frame options,
+referrer policy, `x-powered-by` disabled. The web app, which is the half that actually renders the
+forms and holds the session cookie, shipped with none of them:
+
+```
+$ curl -I http://localhost:3001/login
+HTTP/1.1 200 OK
+X-Powered-By: Next.js
+Content-Type: text/html; charset=utf-8
+```
+
+No `X-Content-Type-Options`, no frame protection, no referrer policy, no `Permissions-Policy`, no
+CSP. Two consequences with a person behind them:
+
+* **Clickjacking.** Any site could frame the sign-in and log-work forms, overlay them, and have a
+  visitor click something they never saw. The product's entire value is a signed statement about
+  work performed, so a forged submission is not a nuisance, it is the fraud the platform exists to
+  prevent.
+* **A token in a referer.** A verification link carries a bearer token in its path. Without a
+  referrer policy, following any link from that page — or from any page the reader reached after it
+  — could disclose the token to a third party.
+
+### Why these values
+* `X-Frame-Options: SAMEORIGIN` rather than `DENY`, matching the API: a same-origin frame is how the
+  layout is inspected at a desktop width when no wide viewport is available, and `DENY` closes that
+  without protecting anything `frame-ancestors 'self'` does not.
+* `Referrer-Policy: no-referrer` — the verify page had already asked for this with a meta tag;
+  nothing in the product needs to tell another site where a reader came from, and a verification
+  token in a path is never a thing to leak.
+* `Permissions-Policy` grants only what the app uses, to this origin: geolocation (is the work at
+  the site it claims), microphone (voice note), camera (the photo picker on a phone).
+* CSP asserts `frame-ancestors`, `base-uri`, `form-action` and `object-src`, and **deliberately not
+  `script-src`**: Next bootstraps hydration from inline scripts, so a strict script policy needs a
+  per-request nonce threaded through middleware — a change that breaks pages in ways a header check
+  cannot see. The directives are independent, so a browser applies the ones it is given and leaves
+  the rest alone. A nonce is the right next step and belongs in its own change.
+* `Strict-Transport-Security` is stated unconditionally: it is only honoured over HTTPS, so it is
+  inert in development and correct in a deployment.
+* `poweredByHeader: false` removes the framework name from every response.
+
+### Verification
+Header capture after the change:
+
+```
+$ curl -I http://localhost:3001/login
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Referrer-Policy: no-referrer
+Permissions-Policy: geolocation=(self), microphone=(self), camera=(self)
+Content-Security-Policy: frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+```
+
+`X-Powered-By` is gone. Behaviour that the new headers could have broken was re-tested in a real
+browser rather than assumed:
+
+* a **same-origin 1000px frame** still renders the dashboard under `SAMEORIGIN`, and the desktop
+  navigation bar is the variant visible inside it;
+* a **server-action form** still submits under `form-action 'self'` — a full sign-in completed with
+  no console errors and no CSP violation;
+* the verification page still loads its data cross-origin (the CORS path from E-035);
+* **Lighthouse** on `/` and `/dashboard`: accessibility 1.0, best practices 1.0, SEO 1.0, zero
+  failures.
+
+`npm run typecheck` and `npm run build` pass. These headers are now asserted by the smoke suite
+itself — five on the API's health response, six on the client's `/login` — because a response
+header is invisible to typechecking and easy to lose in a middleware reorder, and a check the suite
+makes is one that survives me leaving. Full run after the assertions were added: **257 passed, 0
+failed** (246 before, so all eleven passed first time).

@@ -119,13 +119,26 @@ export async function readAccessToken(): Promise<string | null> {
 
   if (stored.expiresAt > Date.now()) return stored.accessToken;
 
-  const refreshed = await refresh(stored.refreshToken);
+  const refreshed = await refreshSession(stored.refreshToken);
   if (!refreshed) return null;
   await writeSession(refreshed);
   return refreshed.accessToken;
 }
 
-async function refresh(refreshToken: string): Promise<AuthSession | null> {
+/**
+ * Exchanges a refresh token for a fresh session, or returns null when Supabase
+ * refuses it.
+ *
+ * Exported for the confirmation-link callback, which receives a refresh token
+ * inside the link and must have Supabase validate it before the application
+ * treats anybody as signed in. The validation is the point: a token the client
+ * merely asserts is worthless, and GoTrue's answer is what makes it real.
+ *
+ * A refusal here is an ordinary outcome — an expired, rotated, or replayed token
+ * — not a fault, so the caller reports it as something the person can act on
+ * rather than as an error.
+ */
+export async function refreshSession(refreshToken: string): Promise<AuthSession | null> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anonKey) return null;

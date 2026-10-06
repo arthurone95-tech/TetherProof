@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import { SELF_REGISTER_ROLES } from '@tetherproof/shared';
+import { passwordProblems, SELF_REGISTER_ROLES } from '@tetherproof/shared';
 import { gpsSchema } from '../../lib/geo.js';
+import { redirectOriginSchema } from '../../lib/redirect.js';
 
 const phoneSchema = z
   .string()
@@ -13,13 +14,25 @@ export const registerSchema = z
   .object({
     phoneNumber: phoneSchema.optional(),
     email: z.string().trim().email('A valid email address is required.').max(320).optional(),
-    password: z
-      .string()
-      .min(12, 'Password must be at least 12 characters.')
-      .max(200)
-      .regex(/[a-z]/, 'Password must include a lowercase letter.')
-      .regex(/[A-Z]/, 'Password must include an uppercase letter.')
-      .regex(/[0-9]/, 'Password must include a number.'),
+    /**
+     * Validated by `passwordProblems` from `@tetherproof/shared` rather than by a
+     * chain of `.min()` and `.regex()` here.
+     *
+     * The rules and their messages are the same ones the registration action checks
+     * before it sends anything, so the two cannot disagree about what is acceptable.
+     * They previously could, and did: every refusal reached the browser as the bare
+     * `Request body failed validation.` because this schema's precise issue was
+     * dropped on the way out. See `doc/13` E-030.
+     *
+     * `.superRefine` rather than `.refine`, so a password failing three rules reports
+     * all three instead of only the first — which is what the previous chain of
+     * checks did, and what someone fixing their password needs.
+     */
+    password: z.string().superRefine((value, ctx) => {
+      for (const message of passwordProblems(value)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+      }
+    }),
     /**
      * The role to create the account with.
      *
@@ -34,6 +47,19 @@ export const registerSchema = z
      */
     role: z.enum(SELF_REGISTER_ROLES).default('worker'),
     fullName: z.string().trim().min(1).max(160).optional(),
+    /**
+     * Where a confirmation link may return the person who taps it.
+     *
+     * Supplied by the web client, which knows the origin the request actually
+     * arrived on, because the API is called server-to-server and sees only its
+     * own address. Absent for callers that talk to the API directly, which then
+     * fall back to the configured origin, and finally to Supabase's own Site URL.
+     *
+     * Validated as a destination rather than trusted: see `lib/redirect.ts` for
+     * why an unchecked value here would turn every confirmation email into an
+     * open redirect carrying a session.
+     */
+    redirectOrigin: redirectOriginSchema.optional(),
   })
   .refine((value) => Boolean(value.phoneNumber ?? value.email), {
     message: 'A phone number or an email address is required.',
@@ -74,7 +100,12 @@ const targetRequired = {
   path: ['phoneNumber'],
 };
 
-export const confirmRequestSchema = confirmationTargetSchema.refine(hasTarget, targetRequired);
+export const confirmRequestSchema = confirmationTargetSchema
+  // Only on the request, not on `confirmSchema`: a code is redeemed by an API
+  // call that never sends anything, so a return address there would be dead
+  // configuration with no reason to be validated.
+  .extend({ redirectOrigin: redirectOriginSchema.optional() })
+  .refine(hasTarget, targetRequired);
 
 /**
  * Self-service updates to the signed-in account's own profile.

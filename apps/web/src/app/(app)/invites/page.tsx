@@ -1,10 +1,8 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import type { ProfileResponse, ReceivedOffersResponse } from '@tetherproof/shared';
-import { signOut } from '@/lib/actions';
+import type { ReceivedOffersResponse } from '@tetherproof/shared';
 import { apiServer, currentProfile } from '@/lib/server/api';
 import { Card } from '@/components/ui/Card';
-import { SubmitButton } from '@/components/ui/SubmitButton';
 import { RespondForm } from './RespondForm';
 
 export const metadata: Metadata = {
@@ -24,32 +22,24 @@ export default async function InvitesPage() {
   if (!user) redirect('/login');
   if (user.role !== 'worker') redirect(user.role === 'employer' ? '/employer' : '/pending');
 
-  const [profile, inbox] = await Promise.all([
-    apiServer<ProfileResponse>('/auth/me'),
-    apiServer<ReceivedOffersResponse>('/invites/offers'),
-  ]);
+  const inbox = await apiServer<ReceivedOffersResponse>('/invites/offers');
 
   const offers = inbox.offers;
   const waiting = offers.filter((offer) => offer.status === 'pending');
   const answered = offers.filter((offer) => offer.status !== 'pending');
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 px-4 py-10">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">TetherProof</p>
-          <h1 className="mt-1 text-2xl font-bold text-ink-900 sm:text-3xl">Invitations</h1>
-          {inbox.pendingCount > 0 ? (
-            <p className="mt-1 text-ink-600">
-              {inbox.pendingCount} waiting for your answer.
-            </p>
-          ) : null}
-        </div>
-        <form action={signOut}>
-          <SubmitButton variant="secondary" className="sm:w-auto">
-            Sign out
-          </SubmitButton>
-        </form>
+    <div className="mx-auto flex max-w-3xl flex-col gap-6">
+      {/*
+        The brand line, the greeting, and the sign-out button belong to the shell
+        now. What is left here is only what this screen is about, so the heading
+        does not change when a member walks from one page to the next.
+      */}
+      <header>
+        <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">Invitations</h1>
+        {inbox.pendingCount > 0 ? (
+          <p className="mt-1 text-ink-600">{inbox.pendingCount} waiting for your answer.</p>
+        ) : null}
       </header>
 
       <Card title="Waiting for your answer">
@@ -99,9 +89,9 @@ export default async function InvitesPage() {
       </Card>
 
       <p className="text-sm text-ink-600">
-        Signed in as {profile.fullName ?? 'this account'}.
+        Signed in as {user.fullName ?? 'this account'}.
       </p>
-    </main>
+    </div>
   );
 }
 

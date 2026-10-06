@@ -13,6 +13,7 @@ import { logger } from '../../config/logger.js';
 import { db } from '../../db/client.js';
 import { orphanedProofMedia, profiles, users } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
+import { confirmationCallbackUrl } from '../../lib/redirect.js';
 import { supabaseAdmin, supabaseAuth } from '../../lib/supabase.js';
 import type {
   ConfirmInput,
@@ -91,15 +92,41 @@ function toAuthSession(session: {
  * one, so this never confirms to a caller whether the destination is
  * registered.
  *
+ * `redirectOrigin` becomes the `redirect_to` on the link inside an email, so the
+ * person tapping it comes back to the application they signed up on rather than
+ * to the fixed Site URL configured in the Supabase dashboard. It is accepted only
+ * for email: an SMS carries a code, not a link, and there is nowhere for a
+ * redirect to go.
+ *
  * Never throws. A provider outage must not fail registration, and the caller can
  * always retry through `POST /auth/confirm/request`.
  */
-async function deliverCode(channel: Channel, value: string): Promise<boolean> {
+async function deliverCode(
+  channel: Channel,
+  value: string,
+  redirectOrigin?: string,
+): Promise<boolean> {
   const target = channel === 'email' ? { email: value } : { phone: value };
+
+  const emailRedirectTo =
+    channel === 'email' && redirectOrigin ? confirmationCallbackUrl(redirectOrigin) : undefined;
+
+  if (emailRedirectTo) {
+    // Logged because it is the one value in this flow that decides where a
+    // session-bearing link is sent, and "which address did that link point at"
+    // was previously unanswerable without an inbox.
+    logger.info('Confirmation link will return to the supplied origin', {
+      channel,
+      origin: redirectOrigin,
+    });
+  }
 
   const { error } = await supabaseAuth.auth.signInWithOtp({
     ...target,
-    options: { shouldCreateUser: false },
+    options: {
+      shouldCreateUser: false,
+      ...(emailRedirectTo ? { emailRedirectTo } : {}),
+    },
   });
 
   if (error) {
@@ -181,7 +208,7 @@ export async function register(input: RegisterInput): Promise<AuthResponse> {
   const confirmation: ConfirmationChallenge = {
     channel,
     destination: maskDestination(destination),
-    delivered: await deliverCode(channel, destination),
+    delivered: await deliverCode(channel, destination, input.redirectOrigin),
   };
 
   return {
@@ -212,7 +239,7 @@ export async function requestConfirmation(
   return {
     channel,
     destination: maskDestination(destination),
-    delivered: await deliverCode(channel, destination),
+    delivered: await deliverCode(channel, destination, input.redirectOrigin),
   };
 }
 

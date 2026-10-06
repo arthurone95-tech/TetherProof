@@ -74,10 +74,66 @@ if (missingPublicEnv.length > 0) {
   );
 }
 
+/**
+ * Response headers for every page the web app serves.
+ *
+ * The API has carried a full `helmet` set since Phase 1 and the client had
+ * none, which leaves the half of the application that actually renders forms
+ * and holds the session cookie less defended than the JSON behind it: the
+ * rendered page could be framed by any site (so a sign-in or log-work form
+ * could be overlaid and clicked from elsewhere), and a response with no
+ * declared type is one MIME-sniffing mistake away from being treated as
+ * executable.
+ *
+ * `X-Frame-Options: SAMEORIGIN` rather than `DENY`, matching the API: a
+ * same-origin frame is how the layout is inspected at a desktop width when no
+ * wide viewport is available, and `DENY` would close that without protecting
+ * anything `frame-ancestors 'self'` does not.
+ *
+ * `Referrer-Policy: no-referrer` because a verification link carries a bearer
+ * token in its path. Any referrer that leaks the URL leaks the token, and
+ * nothing in this product needs to tell another site where a reader came from.
+ * The verify page asked for this with a meta tag; it is now true everywhere.
+ *
+ * **No `script-src`, deliberately.** Next bootstraps hydration from inline
+ * scripts, so a strict script policy needs a per-request nonce threaded through
+ * middleware — a change that breaks pages in ways a header check cannot see.
+ * The directives below are the ones that are safe to assert now; each is
+ * independent, so a browser applies them and leaves the rest alone. A nonce is
+ * the right next step for `script-src`, and belongs in its own change.
+ */
+const securityHeaders = [
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+  { key: 'Referrer-Policy', value: 'no-referrer' },
+  // The app asks for the reader's position (to check a work site), their
+  // microphone (to record a voice note) and, on a phone, the camera behind the
+  // photo picker. Each is granted to this origin only — a page embedded in
+  // another site gets none of them.
+  { key: 'Permissions-Policy', value: 'geolocation=(self), microphone=(self), camera=(self)' },
+  {
+    key: 'Content-Security-Policy',
+    value: "frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'",
+  },
+  // Meaningful only over HTTPS, which is what a deployment speaks; ignored on
+  // plain http in development, so it is safe to state unconditionally.
+  { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
+];
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // The header names the framework on every response for no benefit.
+  poweredByHeader: false,
   // The shared contracts package ships TypeScript sources in this workspace.
   transpilePackages: ['@tetherproof/shared'],
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: securityHeaders,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

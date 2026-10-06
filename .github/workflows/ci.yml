@@ -1,0 +1,115 @@
+# Automated checks for every pull request, as specified in doc/09 §3.
+#
+# Scope is deliberately narrow: this file verifies changes, it does not ship
+# them. There is no deploy job here — staging and production deployment is a
+# separate, explicitly authorised step and is not something CI should be able
+# to do on its own.
+#
+# Two of the three checks doc/09 names are not in this file because they do not
+# exist in the repository yet:
+#
+#   * "Linting and code formatting checks" — there is no ESLint or Prettier
+#     configuration in any workspace (logged as doc/13 E-010).
+#   * "Automated unit and integration test suites" — no unit test runner is
+#     configured. The integration coverage that does exist is the live smoke
+#     suite, which creates and deletes real accounts against a real database and
+#     therefore runs as its own opt-in job below rather than on every push.
+#
+# Both belong here the moment they exist; until then an empty job would be a
+# green tick meaning nothing.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` from the committed lockfile rather than `npm install`, so a
+      # pull request is checked against exactly the dependency tree it declares.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck every workspace
+        run: npm run typecheck
+
+      # Produces the API bundle the smoke suite runs, the shared contracts
+      # package, and the static client. The client build needs its two public
+      # browser keys present; they are placeholders, not secrets — Supabase
+      # access is governed by Row Level Security, and nothing in the build
+      # contacts the project (every page that would is rendered on demand).
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: build-placeholder
+
+  live-smoke:
+    name: Live smoke suite
+    # Opt-in. The suite creates and deletes real Auth accounts, real proofs and
+    # real storage objects against a real database, so it runs only when someone
+    # has decided it should: set the repository variable RUN_LIVE_SMOKE to
+    # "true" and configure the SUPABASE_* secrets and DATABASE_URL below.
+    #
+    # Point it only at a development Supabase project. The suite is written to
+    # clean up after itself (doc/13 E-023), but it is a data-creating test, not
+    # a read-only one.
+    if: ${{ vars.RUN_LIVE_SMOKE == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: checks
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # The suite serves the confirmation page from the first origin in this
+      # list and asserts the API grants CORS to exactly that origin, so both
+      # sides must agree (doc/11 §4).
+      CORS_ORIGINS: http://localhost:3100
+      SMOKE_WEB_PORT: "3100"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+      - name: Run the live suite
+        # `--yes` skips the confirmation prompt, which CI cannot answer.
+        # SMOKE_API_PORT is kept off the default 4000 for clarity on a shared
+        # runner; the suite fails fast with a readable message if it is taken.
+        run: npm run smoke -- --live --yes --web
+        env:
+          SMOKE_API_PORT: "4100"

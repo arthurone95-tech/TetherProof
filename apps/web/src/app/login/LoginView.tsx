@@ -1,152 +1,115 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useEffect, useActionState, useState } from 'react';
 import { confirmWithCode, registerAccount, requestCode, signIn } from '@/lib/actions';
 import { EMPTY_FORM } from '@/lib/form-state';
-import { Card } from '@/components/ui/Card';
+import { PASSWORD_STRENGTH_LABEL, passwordStrength } from '@/lib/password-strength';
 import { Field } from '@/components/ui/Field';
+import { PasswordField } from '@/components/ui/PasswordField';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 
 type Panel = 'sign-in' | 'register' | 'confirm';
 
-const PANELS: Record<Panel, { heading: string; blurb: string }> = {
+const PANELS: Record<Panel, { heading: string; blurb?: string }> = {
   'sign-in': {
-    heading: 'Sign in',
-    blurb: 'Use the email address and password you registered with.',
+    heading: 'Welcome back',
+    blurb: 'Sign in with the email and password you registered with.',
   },
+  // No blurb: the tabs and role picker already say what this screen is for, and
+  // a form that pushes past the bottom of a laptop screen is worse than a
+  // missing sentence.
   register: {
-    heading: 'Create an account',
-    blurb: 'Workers record proof of work. Employers search it.',
+    heading: 'Create your account',
   },
   confirm: {
-    heading: 'Confirm your account',
-    blurb: 'Enter the code we sent you. It confirms that this address belongs to you.',
+    heading: 'Check your email',
+    blurb: 'Enter the code we sent. It confirms that this address belongs to you.',
   },
 };
+
+const ROLES = [
+  { value: 'worker', label: 'Worker' },
+  { value: 'employer', label: 'Employer' },
+  { value: 'training_provider', label: 'Training provider' },
+] as const;
 
 /**
  * Sign-in, registration, and code confirmation.
  *
  * All three run as server actions so the API's access token never reaches the
- * browser; the only client state here is which panel is showing. The API's messages
- * are written to be shown as-is, so an error is rendered directly rather than
- * replaced with something vaguer.
+ * browser; the only client state here is which panel is showing and what has
+ * been typed into the register panel. The API's messages are written to be shown
+ * as-is, so an error is rendered directly rather than replaced with something
+ * vaguer.
  */
 export function LoginView() {
   const [panel, setPanel] = useState<Panel>('sign-in');
+
+  // Typed on the register panel and carried to the confirm panel, because the
+  // API only ever answers with a masked address. It is the reader's own address.
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   const [signInState, signInAction] = useActionState(signIn, EMPTY_FORM);
   const [registerState, registerAction] = useActionState(registerAccount, EMPTY_FORM);
   const [requestState, requestAction] = useActionState(requestCode, EMPTY_FORM);
   const [confirmState, confirmAction] = useActionState(confirmWithCode, EMPTY_FORM);
 
+  // Registration is followed by verification, so the flow moves there itself.
+  // Keyed on the whole state, not `sentTo`: every attempt returns a fresh
+  // object, so registering twice switches screens twice even when the masked
+  // address comes back identical.
+  useEffect(() => {
+    if (registerState.sentTo) setPanel('confirm');
+  }, [registerState]);
+
+  // Live mismatch with the server's answer as the backstop. Shown only once the
+  // second box has something in it.
+  const mismatch =
+    confirmPassword.length > 0 && confirmPassword !== password
+      ? 'Those passwords do not match.'
+      : undefined;
+  const confirmError =
+    mismatch ?? (registerState.field === 'confirmPassword' ? registerState.error : undefined);
+
   const copy = PANELS[panel];
+  const showTabs = panel !== 'confirm';
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10">
-      <Card>
-        <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">TetherProof</p>
-        <h1 className="mt-2 text-2xl font-bold text-ink-900">{copy.heading}</h1>
-        <p className="mt-2 text-ink-600">{copy.blurb}</p>
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-brand-50 px-4 py-10">
+      {/* Two soft blurred shapes behind the card; purely atmospheric. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute -top-32 -left-24 h-96 w-96 rounded-full bg-brand-100 opacity-70 blur-3xl"
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute -right-24 -bottom-32 h-96 w-96 rounded-full bg-brand-100 opacity-50 blur-3xl"
+      />
 
-        {panel === 'sign-in' ? (
-          <form action={signInAction} className="mt-6 flex flex-col gap-4">
-            <Field
-              name="email"
-              label="Email address"
-              type="email"
-              inputMode="email"
-              autoComplete="email"
-              required
-              error={signInState.field === 'email' ? signInState.error : undefined}
-            />
-            <Field
-              name="password"
-              label="Password"
-              type="password"
-              autoComplete="current-password"
-              required
-              error={signInState.field === 'password' ? signInState.error : undefined}
-            />
-            {signInState.error && !signInState.field ? <FormError message={signInState.error} /> : null}
-            <SubmitButton pendingLabel="Signing in…">Sign in</SubmitButton>
-            <PanelSwitch
-              onSignIn={() => setPanel('register')}
-              onConfirm={() => setPanel('confirm')}
-            />
-          </form>
-        ) : null}
+      <div className="relative w-full max-w-md">
+        <div className="mb-6 flex items-center justify-center gap-2.5">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
+            <ShieldIcon />
+          </span>
+          <span className="text-xl font-bold tracking-tight text-ink-900">TetherProof</span>
+        </div>
 
-        {panel === 'register' ? (
-          <form action={registerAction} className="mt-6 flex flex-col gap-4">
-            <Field
-              name="fullName"
-              label="Your name"
-              autoComplete="name"
-              required
-              error={registerState.field === 'fullName' ? registerState.error : undefined}
-            />
-            <Field
-              name="email"
-              label="Email address"
-              type="email"
-              inputMode="email"
-              autoComplete="email"
-              required
-              error={registerState.field === 'email' ? registerState.error : undefined}
-            />
-            <Field
-              name="password"
-              label="Password"
-              type="password"
-              autoComplete="new-password"
-              required
-              hint="At least 12 characters, with an uppercase letter, a lowercase letter, and a number."
-              error={registerState.field === 'password' ? registerState.error : undefined}
-            />
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="role" className="text-sm font-medium text-ink-900">
-                I am signing up as
-              </label>
-              <select
-                id="role"
-                name="role"
-                defaultValue="worker"
-                className="min-h-12 w-full rounded-xl border border-brand-100 bg-white px-4 text-base text-ink-900"
-              >
-                <option value="worker">A worker</option>
-                <option value="employer">An employer</option>
-                <option value="training_provider">A training provider</option>
-              </select>
-            </div>
-            {registerState.error ? <FormError message={registerState.error} /> : null}
-            <SubmitButton pendingLabel="Creating account…">Create account</SubmitButton>
-            {registerState.sentTo ? (
-              <div role="status" aria-live="polite" className="rounded-xl bg-brand-50 p-4 text-sm text-ink-900">
-                <p className="font-semibold">Check {registerState.sentTo}</p>
-                <p className="mt-1 text-ink-600">
-                  We sent a sign-in code. Enter it below to finish setting up your account.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setPanel('confirm')}
-                  className="mt-3 text-sm font-semibold text-brand-700 underline"
-                >
-                  Enter the code
-                </button>
-              </div>
-            ) : null}
-            <PanelSwitch
-              onSignIn={() => setPanel('sign-in')}
-              onConfirm={() => setPanel('confirm')}
-              signInLabel="I already have an account"
-            />
-          </form>
-        ) : null}
+        <div className="rounded-3xl border border-white/70 bg-white/90 p-6 shadow-xl shadow-brand-700/10 ring-1 ring-brand-100 backdrop-blur sm:p-8">
+          {showTabs ? <Tabs panel={panel} onChange={setPanel} /> : <MailBadge />}
 
-        {panel === 'confirm' ? (
-          <div className="mt-6 flex flex-col gap-6">
-            <form action={requestAction} className="flex flex-col gap-4">
+          <h1
+            className={`text-2xl font-bold tracking-tight text-ink-900 ${showTabs ? 'mt-6' : 'mt-4 text-center'}`}
+          >
+            {copy.heading}
+          </h1>
+          {copy.blurb ? (
+            <p className={`mt-1.5 text-ink-600 ${showTabs ? '' : 'text-center'}`}>{copy.blurb}</p>
+          ) : null}
+
+          {panel === 'sign-in' ? (
+            <form action={signInAction} className="mt-6 flex flex-col gap-4">
               <Field
                 name="email"
                 label="Email address"
@@ -154,81 +117,336 @@ export function LoginView() {
                 inputMode="email"
                 autoComplete="email"
                 required
-                error={requestState.field === 'email' ? requestState.error : undefined}
+                error={signInState.field === 'email' ? signInState.error : undefined}
               />
-              <SubmitButton variant="secondary" pendingLabel="Sending…">
-                Send me a code
-              </SubmitButton>
-              {requestState.error ? <FormError message={requestState.error} /> : null}
-              {requestState.sentTo ? (
-                <p role="status" aria-live="polite" className="text-sm text-ink-600">
-                  If that address has an account, a code is on its way to {requestState.sentTo}. Enter it
-                  below.
-                </p>
+              <PasswordField
+                name="password"
+                label="Password"
+                autoComplete="current-password"
+                required
+                error={signInState.field === 'password' ? signInState.error : undefined}
+              />
+              {signInState.error && !signInState.field ? (
+                <FormError message={signInState.error} />
               ) : null}
+              <SubmitButton pendingLabel="Signing in…">Sign in</SubmitButton>
+              <CodeLink onConfirm={() => setPanel('confirm')} />
             </form>
+          ) : null}
 
-            <form action={confirmAction} className="flex flex-col gap-4 border-t border-brand-100 pt-6">
-              <Field
-                name="email"
-                label="Email address"
-                type="email"
-                inputMode="email"
-                autoComplete="email"
-                required
-                error={confirmState.field === 'email' ? confirmState.error : undefined}
-              />
-              <Field
-                name="code"
-                label="Code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                required
-                error={confirmState.field === 'code' ? confirmState.error : undefined}
-              />
-              {confirmState.error ? <FormError message={confirmState.error} /> : null}
-              <SubmitButton pendingLabel="Checking…">Confirm and sign in</SubmitButton>
+          {/* Two fields to a row from 640px up; below that the pairs stack. */}
+          {panel === 'register' ? (
+            <form action={registerAction} className="mt-6 flex flex-col gap-3.5">
+              <div className="grid gap-3.5 sm:grid-cols-2">
+                <Field
+                  name="fullName"
+                  label="Your name"
+                  autoComplete="name"
+                  required
+                  error={registerState.field === 'fullName' ? registerState.error : undefined}
+                />
+                <Field
+                  name="email"
+                  label="Email address"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  required
+                  onChange={setEmail}
+                  error={registerState.field === 'email' ? registerState.error : undefined}
+                />
+              </div>
+              <div className="grid gap-3.5 sm:grid-cols-2">
+                <PasswordField
+                  name="password"
+                  label="Password"
+                  autoComplete="new-password"
+                  required
+                  linkedHintId="password-hint"
+                  onChange={setPassword}
+                  error={registerState.field === 'password' ? registerState.error : undefined}
+                />
+                {/*
+                  The rules run across both columns rather than sitting inside the
+                  left one, where the sentence stopped at the middle of the card.
+                  Second in the DOM so that on a phone they land directly under the
+                  box they describe; `sm:order-1` moves them below the pair once
+                  there is a wider card to put them on.
+                */}
+                <p id="password-hint" className="text-sm text-ink-600 sm:order-1 sm:col-span-2">
+                  12+ characters: upper, lower and a number.
+                </p>
+                {/* The meter grades the first box but sits under the second, where
+                    the person has just stopped typing. */}
+                <div className="flex flex-col gap-1.5">
+                  <PasswordField
+                    name="confirmPassword"
+                    label="Confirm password"
+                    autoComplete="new-password"
+                    required
+                    onChange={setConfirmPassword}
+                    error={confirmError}
+                  />
+                  <PasswordStrengthMeter value={password} />
+                </div>
+              </div>
+
+              <RolePicker />
+
+              {registerState.error && !registerState.field ? (
+                <FormError message={registerState.error} />
+              ) : null}
+              <SubmitButton pendingLabel="Creating account…">Create account</SubmitButton>
+              <CodeLink onConfirm={() => setPanel('confirm')} />
             </form>
+          ) : null}
 
-            <button
-              type="button"
-              onClick={() => setPanel('sign-in')}
-              className="self-start text-sm font-semibold text-brand-700 underline"
-            >
-              Back to sign in
-            </button>
-          </div>
-        ) : null}
-      </Card>
+          {panel === 'confirm' ? (
+            <div className="mt-6 flex flex-col gap-6">
+              {registerState.sentTo ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="rounded-2xl bg-brand-50 p-4 text-center ring-1 ring-brand-100"
+                >
+                  <p className="text-sm text-ink-600">Code sent to</p>
+                  <p className="mt-0.5 text-base font-semibold break-all text-ink-900">
+                    {registerState.sentTo}
+                  </p>
+                </div>
+              ) : null}
+
+              <form action={confirmAction} className="flex flex-col gap-4">
+                <Field
+                  name="email"
+                  label="Email address"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  defaultValue={email}
+                  required
+                  error={confirmState.field === 'email' ? confirmState.error : undefined}
+                />
+                <Field
+                  name="code"
+                  label="Code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  required
+                  error={confirmState.field === 'code' ? confirmState.error : undefined}
+                />
+                {confirmState.error && !confirmState.field ? (
+                  <FormError message={confirmState.error} />
+                ) : null}
+                <SubmitButton pendingLabel="Checking…">Confirm and sign in</SubmitButton>
+              </form>
+
+              <form
+                action={requestAction}
+                className="flex flex-col gap-3 border-t border-brand-100 pt-5"
+              >
+                <p className="text-sm text-ink-600">Didn’t get a code, or it expired?</p>
+                <input type="hidden" name="email" value={email} />
+                {/* The address field above is the visible one; when it was left empty
+                    here the request form needs its own, so show it only if we have
+                    nothing carried over from registration. */}
+                {email ? null : (
+                  <Field
+                    name="email"
+                    label="Email address"
+                    type="email"
+                    inputMode="email"
+                    autoComplete="email"
+                    required
+                    error={requestState.field === 'email' ? requestState.error : undefined}
+                  />
+                )}
+                <SubmitButton variant="secondary" pendingLabel="Sending…">
+                  Send a new code
+                </SubmitButton>
+                {requestState.error ? <FormError message={requestState.error} /> : null}
+                {requestState.sentTo ? (
+                  <p role="status" aria-live="polite" className="text-sm text-ink-600">
+                    If that address has an account, a code is on its way to {requestState.sentTo}.
+                  </p>
+                ) : null}
+              </form>
+
+              <button
+                type="button"
+                onClick={() => setPanel('sign-in')}
+                className="inline-flex items-center gap-1.5 self-center rounded-lg px-2 py-1 text-sm font-semibold text-brand-700 hover:bg-brand-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+              >
+                <ArrowLeftIcon />
+                Back to sign in
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
     </main>
   );
 }
 
-function PanelSwitch({
-  onSignIn,
-  onConfirm,
-  signInLabel = 'I already have an account',
-}: {
-  onSignIn: () => void;
-  onConfirm: () => void;
-  signInLabel?: string;
-}) {
+/** Sliding two-way switch between sign-in and register. */
+function Tabs({ panel, onChange }: { panel: Panel; onChange: (panel: Panel) => void }) {
+  const items: { id: Exclude<Panel, 'confirm'>; label: string }[] = [
+    { id: 'sign-in', label: 'Sign in' },
+    { id: 'register', label: 'Create account' },
+  ];
+
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-brand-100 pt-4 text-sm">
-      <button type="button" onClick={onSignIn} className="font-semibold text-brand-700 underline">
-        {signInLabel}
-      </button>
-      <button type="button" onClick={onConfirm} className="font-semibold text-brand-700 underline">
-        I have a sign-in code
-      </button>
+    <div role="tablist" aria-label="Account" className="relative grid grid-cols-2 rounded-2xl bg-brand-50 p-1">
+      <span
+        aria-hidden="true"
+        className={`absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-xl bg-white shadow-sm ring-1 ring-brand-100 transition-transform duration-200 ease-out motion-reduce:transition-none ${
+          panel === 'register' ? 'translate-x-full' : 'translate-x-0'
+        }`}
+      />
+      {items.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          role="tab"
+          aria-selected={panel === item.id}
+          onClick={() => onChange(item.id)}
+          className={`relative z-10 min-h-11 rounded-xl text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 ${
+            panel === item.id ? 'text-ink-900' : 'text-ink-600 hover:text-ink-900'
+          }`}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Role as three side-by-side choices instead of a dropdown, so every option is
+ * visible without a click. They are real radio inputs, so the group is keyboard
+ * and screen-reader operable and posts as `role` exactly as the select did.
+ */
+function RolePicker() {
+  return (
+    <fieldset className="flex flex-col gap-1.5">
+      <legend className="mb-1.5 text-sm font-medium text-ink-900">I am signing up as</legend>
+      <div className="grid grid-cols-3 gap-2">
+        {ROLES.map((role) => (
+          <label key={role.value} className="cursor-pointer">
+            <input
+              type="radio"
+              name="role"
+              value={role.value}
+              defaultChecked={role.value === 'worker'}
+              className="peer sr-only"
+            />
+            <span className="flex min-h-12 items-center justify-center rounded-xl border border-brand-100 bg-white px-2 text-center text-sm leading-tight font-medium text-ink-600 transition-colors hover:border-brand-500 peer-checked:border-brand-600 peer-checked:bg-brand-50 peer-checked:font-semibold peer-checked:text-brand-700 peer-checked:ring-1 peer-checked:ring-brand-600 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-600">
+              {role.label}
+            </span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+function CodeLink({ onConfirm }: { onConfirm: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onConfirm}
+      className="self-center rounded-lg px-2 py-1 text-sm font-semibold text-brand-700 hover:bg-brand-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+    >
+      I have a sign-in code
+    </button>
+  );
+}
+
+/** How filled each rung of the bar is, so Weak shows one segment of three. */
+const STRENGTH_FILLED = { weak: 1, medium: 2, strong: 3 } as const;
+
+const STRENGTH_TONE = {
+  weak: { bar: 'bg-red-600', text: 'text-red-800' },
+  medium: { bar: 'bg-amber-500', text: 'text-amber-700' },
+  strong: { bar: 'bg-brand-500', text: 'text-brand-700' },
+} as const;
+
+/**
+ * Three segments and a word. The word carries the meaning; colour alone would
+ * be unreadable to some people. Nothing is announced as it changes, so a live
+ * region does not talk over the person typing.
+ */
+function PasswordStrengthMeter({ value }: { value: string }) {
+  const level = passwordStrength(value);
+  if (level === 'empty') return null;
+
+  const tone = STRENGTH_TONE[level];
+
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex flex-1 gap-1" aria-hidden="true">
+        {([0, 1, 2] as const).map((index) => (
+          <span
+            key={index}
+            className={`h-1.5 flex-1 rounded-full transition-colors duration-200 ${index < STRENGTH_FILLED[level] ? tone.bar : 'bg-brand-100'}`}
+          />
+        ))}
+      </div>
+      <p className={`shrink-0 text-sm ${tone.text}`}>
+        <span className="sr-only">Password strength: </span>
+        <span className="font-semibold">{PASSWORD_STRENGTH_LABEL[level]}</span>
+      </p>
     </div>
   );
 }
 
 function FormError({ message }: { message: string }) {
   return (
-    <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
-      {message}
+    <p
+      role="alert"
+      className="flex items-start gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-800 ring-1 ring-red-100"
+    >
+      <AlertIcon />
+      <span>{message}</span>
     </p>
+  );
+}
+
+function MailBadge() {
+  return (
+    <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-50 text-brand-600 ring-1 ring-brand-100">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3" y="5" width="18" height="14" rx="3" />
+        <path d="m4 7 8 6 8-6" />
+      </svg>
+    </div>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3 4 6v6c0 4.5 3.2 8 8 9 4.8-1 8-4.5 8-9V6l-8-3Z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}
+
+function ArrowLeftIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M19 12H5" />
+      <path d="m12 19-7-7 7-7" />
+    </svg>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg className="mt-0.5 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 8v5" />
+      <path d="M12 16h.01" />
+    </svg>
   );
 }

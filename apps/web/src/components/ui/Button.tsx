@@ -8,7 +8,7 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const base =
-  'inline-flex min-h-14 w-full items-center justify-center rounded-xl px-6 text-base font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-12 sm:w-auto';
+  'inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-xl px-6 text-base font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-12 sm:w-auto';
 
 const variants: Record<Variant, string> = {
   primary: 'bg-brand-600 text-white hover:bg-brand-700',

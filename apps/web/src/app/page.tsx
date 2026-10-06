@@ -1,6 +1,8 @@
 import Link from 'next/link';
+import type { UserRole } from '@tetherproof/shared';
 import { Banner } from '@/components/ui/Banner';
 import { Card } from '@/components/ui/Card';
+import { homeFor } from '@/lib/navigation';
 import { currentProfile } from '@/lib/server/api';
 
 const modules = [
@@ -22,10 +24,8 @@ const modules = [
 ];
 
 /** Where a signed-in member of each role should go. */
-function destinationFor(role: string): string {
-  if (role === 'employer') return '/employer';
-  if (role === 'worker') return '/invites';
-  return '/pending';
+function destinationFor(role: UserRole): string {
+  return homeFor(role);
 }
 
 /**

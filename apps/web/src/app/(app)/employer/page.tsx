@@ -5,11 +5,10 @@ import type {
   CandidateCard,
   CapabilitySpec,
   EmployerApprovalResponse,
-  ProfileResponse,
   SearchResponse,
   SentOffersResponse,
 } from '@tetherproof/shared';
-import { changeSpec, signOut } from '@/lib/actions';
+import { changeSpec } from '@/lib/actions';
 import { apiServer, currentProfile } from '@/lib/server/api';
 import { Banner } from '@/components/ui/Banner';
 import { Card } from '@/components/ui/Card';
@@ -55,8 +54,7 @@ export default async function EmployerDashboard({
 
   const params = await searchParams;
 
-  const [profile, approval, specsResult, sentResult] = await Promise.all([
-    apiServer<ProfileResponse>('/auth/me'),
+  const [approval, specsResult, sentResult] = await Promise.all([
     apiServer<EmployerApprovalResponse>('/employers/approval'),
     apiServer<{ specs: CapabilitySpec[] }>('/employers/specs'),
     apiServer<SentOffersResponse>('/employers/offers'),
@@ -67,23 +65,15 @@ export default async function EmployerDashboard({
   const sendingBlocked = approval.sending.eligibility === 'blocked' ? approval.sending.reason : undefined;
 
   const candidates = params.skill
-    ? (await searchCandidates(params, profile.locationGps)).candidates
+    ? (await searchCandidates(params, user.locationGps)).candidates
     : null;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-4 py-10">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">TetherProof</p>
-          <h1 className="mt-1 text-2xl font-bold text-ink-900 sm:text-3xl">
-            {profile.organizationName ?? profile.fullName ?? 'Employer dashboard'}
-          </h1>
-        </div>
-        <form action={signOut}>
-          <SubmitButton variant="secondary" className="sm:w-auto">
-            Sign out
-          </SubmitButton>
-        </form>
+    <div className="flex flex-col gap-6">
+      <header>
+        <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">
+          {user.organizationName ?? user.fullName ?? 'Employer dashboard'}
+        </h1>
       </header>
 
       {params.error ? <Banner tone="problem">{params.error}</Banner> : null}
@@ -92,8 +82,8 @@ export default async function EmployerDashboard({
       <div className="grid gap-6 lg:grid-cols-2">
         <Card title="Your details">
           <ProfileForm
-            organizationName={profile.organizationName}
-            locationGps={profile.locationGps}
+            organizationName={user.organizationName}
+            locationGps={user.locationGps}
           />
         </Card>
 
@@ -131,7 +121,7 @@ export default async function EmployerDashboard({
                 step={1}
                 defaultValue={params.radiusKm ?? '25'}
                 hint={
-                  profile.locationGps
+                  user.locationGps
                     ? 'Measured from your saved search location.'
                     : 'Ignored until you set a search location.'
                 }
@@ -182,7 +172,7 @@ export default async function EmployerDashboard({
           )}
         </Card>
       </div>
-    </main>
+    </div>
   );
 }
 

@@ -1,5 +1,6 @@
 import type { ProfileResponse } from '@tetherproof/shared';
-import { ApiRequestError } from '../api-error';
+import { cache } from 'react';
+import { ApiRequestError, readFieldIssues } from '../api-error';
 import { readAccessToken } from './session';
 
 /**
@@ -40,6 +41,28 @@ export async function apiPublic<T>(path: string, options: RequestOptions = {}): 
   return send<T>(path, options, false);
 }
 
+/**
+ * Sends a multipart body — a proof and its file — to the API.
+ *
+ * Separate from `apiServer` because that function JSON-encodes whatever it is
+ * handed, which would upload a description of the file rather than the file. The
+ * `FormData` is passed through untouched so the boundary is the one `fetch` chose
+ * and the browser fills in the content type for each part itself.
+ */
+export async function apiServerForm<T>(path: string, formData: FormData): Promise<T> {
+  const token = await readAccessToken();
+  if (!token) throw new ApiRequestError('Please sign in to continue.', 401, 'UNAUTHENTICATED');
+
+  const response = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+    method: 'POST',
+    body: formData,
+    headers: { authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+
+  return readResponse<T>(response);
+}
+
 async function send<T>(path: string, options: RequestOptions, authenticated: boolean): Promise<T> {
   const { body, ...rest } = options;
   const token = authenticated ? await readAccessToken() : null;
@@ -59,16 +82,23 @@ async function send<T>(path: string, options: RequestOptions, authenticated: boo
     cache: 'no-store',
   });
 
+  return readResponse<T>(response);
+}
+
+async function readResponse<T>(response: Response): Promise<T> {
   if (response.status === 204) return undefined as T;
 
   const payload: unknown = await response.json().catch(() => null);
 
   if (!response.ok) {
-    const errorBody = payload as { error?: { message?: string; code?: string } } | null;
+    const errorBody = payload as { error?: { message?: string; code?: string; details?: unknown } } | null;
     throw new ApiRequestError(
       errorBody?.error?.message ?? 'Something went wrong. Please try again.',
       response.status,
       errorBody?.error?.code ?? 'INTERNAL_ERROR',
+      // The field-level reasons, so a server action can point at the input at fault
+      // instead of showing the request-level summary.
+      readFieldIssues(errorBody?.error?.details),
     );
   }
 
@@ -82,8 +112,14 @@ async function send<T>(path: string, options: RequestOptions, authenticated: boo
  * `GET /auth/me` returns. It carries no email address or phone number: a page that
  * needs one to greet somebody is better off asking the API for it deliberately than
  * having every page receive the account's contact details by default.
+ *
+ * Wrapped in React's `cache` because the layout and the page under it both need the
+ * answer, and two uncached calls would ask the API the same question twice for one
+ * render. The memo lasts the length of a single request, so it never carries one
+ * person's profile into another person's page — which is exactly the lifetime `no-store`
+ * was chosen for in the first place.
  */
-export async function currentProfile(): Promise<ProfileResponse | null> {
+export const currentProfile = cache(async (): Promise<ProfileResponse | null> => {
   try {
     return await apiServer<ProfileResponse>('/auth/me');
   } catch (error) {
@@ -93,4 +129,4 @@ export async function currentProfile(): Promise<ProfileResponse | null> {
     if (error instanceof ApiRequestError && error.status === 401) return null;
     throw error;
   }
-}
+});

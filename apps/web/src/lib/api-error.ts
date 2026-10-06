@@ -9,16 +9,65 @@
 export class ApiRequestError extends Error {
   readonly status: number;
   readonly code: string;
+  /**
+   * Field-level reasons the API gave, empty when it gave none.
+   *
+   * The API answers a validation refusal with a message that describes the request
+   * rather than the mistake — `Request body failed validation.` — and puts the part
+   * a person can act on in `details`, such as `Password must be at least 12
+   * characters.` next to the field that failed. Dropping that, as this class used
+   * to, turned every distinct mistake into the same unactionable sentence.
+   */
+  readonly issues: readonly ApiFieldIssue[];
 
-  constructor(message: string, status: number, code: string) {
+  constructor(
+    message: string,
+    status: number,
+    code: string,
+    issues: readonly ApiFieldIssue[] = [],
+  ) {
     super(message);
     this.name = 'ApiRequestError';
     this.status = status;
     this.code = code;
+    this.issues = issues;
   }
 }
 
-/** True when the failure is an authentication or authorization refusal. */
+/** One reason a particular field was refused. */
+export interface ApiFieldIssue {
+  /** Dotted path into the submitted body, such as `password`. */
+  path: string;
+  /** Written to be shown to the person who submitted the form. */
+  message: string;
+}
+
+/**
+ * Reads the API's `details` into field issues, ignoring anything malformed.
+ *
+ * `details` is typed `unknown` at the contract because several endpoints put other
+ * shapes there, and it is read over the network, so every part is checked before
+ * being trusted. An unexpected shape yields no issues rather than throwing — the
+ * original error is still the one worth reporting, and a parser that throws while
+ * handling a failure would replace a real message with `undefined`.
+ */
+export function readFieldIssues(details: unknown): ApiFieldIssue[] {
+  if (!Array.isArray(details)) return [];
+
+  const issues: ApiFieldIssue[] = [];
+  for (const entry of details) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { path, message } = entry as { path?: unknown; message?: unknown };
+    if (typeof path === 'string' && typeof message === 'string') {
+      issues.push({ path, message });
+    }
+  }
+  return issues;
+}
+
+/**
+ * True when the failure is an authentication or authorization refusal.
+ */
 export function isAuthFailure(error: unknown): boolean {
   return error instanceof ApiRequestError && (error.status === 401 || error.status === 403);
 }

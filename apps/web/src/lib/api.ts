@@ -9,7 +9,7 @@
  * page. Anything signed in goes through `lib/server/api.ts` instead, which keeps
  * the access token in an httpOnly cookie and never hands it to the browser.
  */
-import { ApiRequestError } from './api-error';
+import { ApiRequestError, readFieldIssues } from './api-error';
 
 // Re-exported so existing imports keep working. The class itself lives in
 // `lib/api-error.ts`, where the server-side client can reach it too.
@@ -30,11 +30,13 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   const payload: unknown = await response.json().catch(() => null);
 
   if (!response.ok) {
-    const body = payload as { error?: { message?: string; code?: string } } | null;
+    const body = payload as { error?: { message?: string; code?: string; details?: unknown } } | null;
     throw new ApiRequestError(
       body?.error?.message ?? 'Something went wrong. Please try again.',
       response.status,
       body?.error?.code ?? 'INTERNAL_ERROR',
+      // The field-level reasons. Without them every refusal reads the same.
+      readFieldIssues(body?.error?.details),
     );
   }
 

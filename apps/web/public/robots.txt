@@ -1,0 +1,11 @@
+# TetherProof
+#
+# The application itself is not a document set: every signed-in page carries
+# `noindex` already, so this file exists to answer the crawler politely and to
+# keep it off the two paths that should never be fetched.
+User-agent: *
+Disallow: /verify/
+Disallow: /auth/callback
+
+# Verification links carry a live capability in the path. A crawler following
+# one would consume a one-time token it has no business spending.

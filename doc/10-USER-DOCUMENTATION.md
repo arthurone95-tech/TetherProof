@@ -11,6 +11,35 @@ This document outlines the user-facing guides, onboarding flows, and help docume
 * **Universal Sign-Up:** Users access the platform via any mobile or desktop web browser. They register using a mobile phone number or email address and select their primary role (`Worker`, `Employer`, or `Training Provider`).
 * **Role-Based Redirection:** Upon login, users are automatically routed to their tailored dashboard interface optimized for their specific workflow.
 
+### Creating Your Account
+Enter your name, your email address, and a password of at least 12 characters that includes an
+uppercase letter, a lowercase letter, and a number — `Sunrise2026Falls` would do — then type it a
+second time in the confirmation box. The two must be the same, and if they are not the form says so
+under the second box instead of letting a mistyped password become an account you cannot sign in to.
+
+Underneath sits a strength bar reading **Weak**, **Medium**, or **Strong**, which changes as you
+type. It reads Weak until the password meets the rules, Medium once it does, and Strong from
+sixteen characters. The minimum itself stays at twelve. Every password box on this page — the two
+here and the one on sign-in — also has an eye button beside it: the text is hidden as dots to start,
+and pressing the button shows what you actually typed.
+
+If your password does not meet the rules, the reason appears directly under the password box, naming
+what is missing, so there is no guessing which rule you broke. The same applies to an email address
+the platform will not accept: the message shows against that field.
+
+Once the account exists, the form takes you to the confirmation screen itself rather than leaving a
+link at the bottom of the page to find. That screen tells you a code was sent, names the address it
+went to with the middle of it masked — `p***@example.com` — and has your email address filled in
+already. Type the code from the email into the box underneath and press **Confirm and sign in**.
+Until then you have an account but not a working session, which is why the screen also offers to
+send the code again if it does not arrive.
+
+That message may also contain a link. Opening it confirms the account and signs you in straight
+away, taking you to the page for your role — no code to type. The link works from any port or
+address the platform is running on, because it is built from the page you registered on rather than
+written down in advance. If it has already been opened, or a day has passed, it will say so and
+point you back to sign in, where a fresh code can be requested.
+
 ### Deleting Your Account
 From the signed-in home page, open **Delete your account**, then **Delete your account** again on
 the confirmation page. You are signed out and taken back to the landing page, which tells you the
