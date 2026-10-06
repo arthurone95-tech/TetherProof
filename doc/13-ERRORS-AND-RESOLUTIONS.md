@@ -1971,3 +1971,70 @@ itself — five on the API's health response, six on the client's `/login` — b
 header is invisible to typechecking and easy to lose in a middleware reorder, and a check the suite
 makes is one that survives me leaving. Full run after the assertions were added: **257 passed, 0
 failed** (246 before, so all eleven passed first time).
+
+---
+
+## E-040: The smoke suite printed FAIL and still exited 0
+
+* **Status:** Resolved — 2026-10-06, verified by forcing the same failure and asserting exit 1, then a full run asserting exit 0
+* **Found:** 2026-10-06, while re-running the gate after the Vercel build fix — the API failed to boot on one run, the suite printed `FAIL`, and the shell recorded `EXIT=0`.
+* **Related:** `scripts/smoke.mjs`; `doc/11` §4.
+
+### Description
+The gate is worth exactly what its exit code says, and this one could lie.
+The observed run ended:
+
+```
+===== BOOT API =====
+  FAIL  API starts and reports healthy
+===== CLEANUP =====
+EXIT=0
+```
+
+The API-boot block ended with `if (!up) return;`. That `return` left `main()`
+from inside its `try`, so the `finally` block ran `CLEANUP` and control never
+reached the `RESULT` line and `process.exit(failed === 0 ? 0 : 1)` that sit
+*after* the try/finally. Nothing else was pending in the event loop, so Node
+ended the process with code 0 — the one failure mode that stops the suite
+early was exactly the one the exit code did not report. Runs that printed
+`RESULT: 257 passed, 0 failed` were honest; the hole was only in the
+early-exit path, which is the path every aborted run takes.
+
+### Resolution
+Two changes in `scripts/smoke.mjs`:
+
+* the boot block throws instead of returning, so the failure reaches
+  `main().catch`, prints `SMOKE TEST ABORTED` with the reason, still runs
+  `CLEANUP` through the `finally`, and exits 1;
+* a `process.on('exit')` guard makes the rule structural instead of local:
+  once any check has run, the process may only exit 0 through the `RESULT`
+  line, which sets a `finished` flag. Any other early exit — a future
+  `return`, a path that swallows a throw — ends in 1 rather than green.
+
+### Verification
+Both directions, with the port free (the original conditions). The failure
+was forced by giving the spawned API `API_HOST=192.0.2.1`, an address this
+machine cannot bind, so pre-flight sees a free port while the API never
+becomes healthy:
+
+```
+===== BOOT API =====
+  FAIL  API starts and reports healthy
+      code: 'EADDRNOTAVAIL', syscall: 'listen', address: '192.0.2.1', port: 4100
+===== CLEANUP =====
+SMOKE TEST ABORTED: the API did not become healthy on port 4100 (see the FAIL above for its last output)
+NEGATIVE_EXIT=1 (expected 1)
+```
+
+and the unmodified happy path, same script:
+
+```
+===== RESULT: 257 passed, 0 failed =====
+POSITIVE_EXIT=0 (expected 0)
+```
+
+The original boot failure itself never recurred: it appeared once, right
+after `npm run build` had rewritten `apps/api/dist`, and the same binary
+booted in 0.7 s on every attempt afterwards, including two full 257-check
+runs. It is treated as transient; what is fixed here is the exit code,
+which had been wrong all along.

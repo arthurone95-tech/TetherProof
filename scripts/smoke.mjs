@@ -58,6 +58,18 @@ let passed = 0;
 let failed = 0;
 const failures = [];
 
+// Any path that ends the process without reaching the RESULT line — an early
+// return, an abort — must still exit non-zero. The boot failure below used to
+// `return` out of main(), which ran the finally block and then skipped the
+// RESULT/exit logic, so Node ended the process with code 0 after printing
+// FAIL: a gate that can go green after failing. Once a check has run, the
+// only legitimate exit-0 path is the RESULT line setting `finished`.
+let finished = false;
+process.on('exit', (code) => {
+  const started = passed + failed > 0;
+  if (code === 0 && !finished && (failed > 0 || started)) process.exit(1);
+});
+
 function check(name, ok, detail = '') {
   if (ok) {
     passed += 1;
@@ -757,7 +769,7 @@ async function main() {
       }
     }
     check('API starts and reports healthy', up && apiProcess.exitCode === null, up ? 'health 200' : apiLog.slice(-300));
-    if (!up) return;
+    if (!up) throw new Error(`the API did not become healthy on port ${API_PORT} (see the FAIL above for its last output)`);
 
     const health = await api('GET', '/health');
     check('health reports the database as up', health.json?.database === 'up', JSON.stringify(health.json));
@@ -2378,6 +2390,7 @@ async function main() {
     console.log('Failed checks:');
     for (const name of failures) console.log(`  - ${name}`);
   }
+  finished = true;
   process.exit(failed === 0 ? 0 : 1);
 }
 

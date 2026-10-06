@@ -15,6 +15,52 @@ This document outlines the cloud hosting environment, infrastructure topology, d
   * *Object Storage:* Supabase Storage private bucket for media uploads. The bucket is created private by `apps/api/scripts/ensure-proof-bucket.ts` (`npm run storage:ensure-bucket`); public buckets are prohibited. PII scrubbing is performed by the API before upload, not by Storage. The bucket also carries a `file_size_limit` and an `allowed_mime_types` allow-list as a second layer. Supabase's management API accepts both settings and then silently discards them, so the script writes them directly to `storage.buckets` and verifies they persisted (`doc/13` E-017). The API's own type allow-list and size cap remain the first line, because they reject a bad upload before any bytes are transmitted.
 * **Messaging & Communication Gateway:** External third-party API integration (e.g., Twilio or local gateway) for dispatching SMS and WhatsApp verification links.
 
+### 2.1 Deploying the web client to Vercel
+
+The client is one workspace of an npm-workspaces repository, and `@tetherproof/shared` is a build
+artifact: `packages/shared` resolves to `dist/`, `dist/` is gitignored, and `apps/web` imports two
+of its values at runtime rather than only its types. Two consequences decide every setting below:
+
+* The shared package must be **compiled** before `next build` runs, on a machine that has the
+  whole repository checked out.
+* Vercel's Next.js framework default runs `next build` directly, which compiles nothing first —
+  that is the `Module not found: Can't resolve '@tetherproof/shared'` failure. Two files prevent
+  it: `apps/web/package.json` builds the shared package inside its own `build` script, and
+  `apps/web/vercel.json` pins the build command to `npm run build` so the framework default cannot
+  bypass it.
+
+**Project settings** (Settings → General):
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| Root Directory | `apps/web` | Where Next.js actually lives. Set to the repository root, Vercel reports *No Next.js version detected*, because `next` is a dependency of `apps/web`, not of the root package. |
+| Framework Preset | Next.js | Auto-detected from the Root Directory. |
+| Node.js Version | 22.x | `engines.node` is `>=22`. |
+| Install Command | *(leave empty)* | Vercel detects `package-lock.json` and the `workspaces` field at the repository root and installs there, which is what creates the `node_modules/@tetherproof/shared` link in the first place. |
+| Build Command | *(leave empty — `apps/web/vercel.json` supplies `npm run build`)* | Builds `packages/shared`, then `next build`. |
+| Output Directory | *(leave empty — defaults to `.next`)* | |
+
+**Environment variables** (Settings → Environment Variables). Two are read at **build** time and
+the build refuses to start without them (`apps/web/next.config.ts`):
+
+* `NEXT_PUBLIC_SUPABASE_URL`
+* `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+For a deployed site also set `NEXT_PUBLIC_SITE_URL` to the public origin of the client, and on the
+API side set `CORS_ORIGINS` and `WEB_BASE_URL` to that same origin — see §4.2.
+
+**If the build fails** saying it cannot find `../../packages/shared`, the project is excluding
+files from outside the Root Directory; enable the *Include source files outside of the Root
+Directory* option under Settings → Build and Deployment and redeploy.
+
+**Keep exactly one `vercel.json`, in the Root Directory** — that is where Vercel reads it from, so
+a second copy at the repository root competes with it. The root copy that used to exist was an
+experiment for the repository-root Root Directory and has been removed. The alternative
+configuration (Root Directory = `.`) is possible but needs a root `vercel.json` declaring
+`"framework": "nextjs"`, `"buildCommand": "npm run build --workspace @tetherproof/web"` and
+`"outputDirectory": "apps/web/.next"`; without the `framework` field it is that missing field
+which produces *No Next.js version detected*.
+
 ---
 
 ## 3. Deployment Pipeline & CI/CD
