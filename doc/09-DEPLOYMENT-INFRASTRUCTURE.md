@@ -53,6 +53,13 @@ API side set `CORS_ORIGINS` and `WEB_BASE_URL` to that same origin — see §4.2
 files from outside the Root Directory; enable the *Include source files outside of the Root
 Directory* option under Settings → Build and Deployment and redeploy.
 
+**Tailwind's native engine is declared explicitly.** `lightningcss` and `@tailwindcss/oxide` load
+a platform-specific `.node` binary at build time. The root `package.json` declares
+`lightningcss-linux-x64-gnu` and `@tailwindcss/oxide-linux-x64-gnu` in `optionalDependencies`
+(pinned to the hoisted parent versions) so the lockfile always carries the Linux binary that
+Vercel builds on. Without them `npm ci` installs a tree that works on the developer's machine but
+dies on Vercel with `Cannot find module '../lightningcss.linux-x64-gnu.node'` (E-041).
+
 **Keep exactly one `vercel.json`, in the Root Directory** — that is where Vercel reads it from, so
 a second copy at the repository root competes with it. The root copy that used to exist was an
 experiment for the repository-root Root Directory and has been removed. The alternative

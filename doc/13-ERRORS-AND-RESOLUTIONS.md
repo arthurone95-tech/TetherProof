@@ -2038,3 +2038,65 @@ after `npm run build` had rewritten `apps/api/dist`, and the same binary
 booted in 0.7 s on every attempt afterwards, including two full 257-check
 runs. It is treated as transient; what is fixed here is the exit code,
 which had been wrong all along.
+
+## E-041: The Vercel build died on `lightningcss` — the lockfile carried only the Windows native binary
+
+* **Status:** Open — fix implemented and verified locally; closes when a Vercel build passes live (2026-10-07)
+* **Found:** 2026-10-06, third Vercel build of `aabf2b2` — the Root Directory and Install settings now saved correctly, the build reached `next build`, and webpack failed with `Error: Cannot find module '../lightningcss.linux-x64-gnu.node'` required from `/vercel/path0/node_modules/lightningcss/node/index.js`.
+* **Related:** root `package.json` (`optionalDependencies`), `package-lock.json`, `apps/web` (Tailwind v4), `doc/09` §2.1.
+
+### Description
+
+Tailwind v4's PostCSS chain (`@tailwindcss/postcss` → `@tailwindcss/node` → `lightningcss` +
+`@tailwindcss/oxide`) loads its engine from a platform-specific native package. The loader in
+`lightningcss/node/index.js` first tries `require('lightningcss-linux-x64-gnu')` and falls back to
+a relative `../lightningcss.linux-x64-gnu.node` — the exact file Vercel reported missing.
+
+`package-lock.json` recorded **every** platform for `sharp`, `esbuild` and `@next/swc`, but for
+`lightningcss@1.32.0` and `@tailwindcss/oxide@4.3.3` it contained only the `win32-x64-msvc`
+entries — the ones this machine installs — even though both parents list all of their platforms in
+`optionalDependencies`. npm therefore considered the lock complete (`npm ci` passed), so Vercel's
+`npm ci` faithfully installed a tree that cannot start Tailwind's engine on Linux. Local Windows
+builds passed throughout, which is why every local verification had been green.
+
+`@tailwindcss/oxide-linux-x64-gnu` had the identical hole and would have crashed the build
+immediately after `lightningcss` was fixed, so both were closed in one change.
+
+### Resolution
+
+Root `package.json` declares both Linux binaries in `optionalDependencies`, pinned to the hoisted
+parent versions (native bindings must match exactly):
+
+```json
+"optionalDependencies": {
+  "@tailwindcss/oxide-linux-x64-gnu": "4.3.3",
+  "lightningcss-linux-x64-gnu": "1.32.0"
+}
+```
+
+* **Root level, not `apps/web`** — `lightningcss`/`oxide` are hoisted to `/vercel/path0/node_modules`,
+  and `require()` from there only walks *up*; a copy nested under `apps/web/node_modules` would
+  never be found.
+* **`optionalDependencies`, not `devDependencies`** — both packages declare `os: ["linux"]`; as
+  optional they are skipped silently on Windows instead of failing `npm install` with
+  `EBADPLATFORM`, while still being written to the lock and installed on Linux.
+
+`npm install --package-lock-only` recorded both entries at root level with `optional: true`,
+`resolved` and `integrity`. An exhaustive scan of the lock afterwards (every parent's
+`optionalDependencies` checked against installed entries) confirmed no other package needed by
+Vercel's platform is missing; the remaining gaps are exotic platforms (android/freebsd/arm/musl)
+and `fsevents` (macOS-only), none of which this build path uses.
+
+### Verification
+
+* Main repository: `npm install` → exit 0 (Windows skips the Linux optionals silently, no
+  `EBADPLATFORM`).
+* Clean room: fresh `git clone` of `aabf2b2` + the two changed files (`package.json`,
+  `package-lock.json`) → `npm ci` → `npm run build` in `apps/web` with `NODE_ENV=production`,
+  `CI=true` and dummy `NEXT_PUBLIC_*` values. The first attempt died inside `npm ci` on a registry
+  `ECONNRESET` storm ending in npm's `Exit handler never called!` — unrelated network flakiness;
+  retried.
+* Clean-room result (retry): `npm ci` → exit 0, `npm run build` in `apps/web` → **exit 0** —
+  `✓ Compiled successfully`, lint/type checks passed, 12/12 pages generated.
+* Live: pending — the next Vercel deployment is the proof that matters; this entry closes only
+  then.
