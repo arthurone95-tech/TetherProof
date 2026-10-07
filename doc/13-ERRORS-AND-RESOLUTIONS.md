@@ -2041,7 +2041,7 @@ which had been wrong all along.
 
 ## E-041: The Vercel build died on `lightningcss` — the lockfile carried only the Windows native binary
 
-* **Status:** Open — fix implemented and verified locally; closes when a Vercel build passes live (2026-10-07)
+* **Status:** Resolved — 2026-10-07, live: the Vercel build of `c8e309b` completed with `✓ Compiled successfully` and 12/12 pages generated
 * **Found:** 2026-10-06, third Vercel build of `aabf2b2` — the Root Directory and Install settings now saved correctly, the build reached `next build`, and webpack failed with `Error: Cannot find module '../lightningcss.linux-x64-gnu.node'` required from `/vercel/path0/node_modules/lightningcss/node/index.js`.
 * **Related:** root `package.json` (`optionalDependencies`), `package-lock.json`, `apps/web` (Tailwind v4), `doc/09` §2.1.
 
@@ -2100,3 +2100,53 @@ and `fsevents` (macOS-only), none of which this build path uses.
   `✓ Compiled successfully`, lint/type checks passed, 12/12 pages generated.
 * Live: pending — the next Vercel deployment is the proof that matters; this entry closes only
   then.
+## E-042: Sign-in said "We could not sign you in" with no hint of the real cause
+
+* **Status:** Open — implemented and verified locally; closes when the next Vercel build deploys it live
+* **Found:** 2026-10-07, signing in at the live site (`https://tetherproof.vercel.app`) — the form showed the generic fallback and a reader could not tell a service outage from a wrong password.
+* **Related:** `apps/web/src/lib/api-error.ts`, `apps/web/src/lib/server/api.ts`, `apps/web/src/lib/api.ts`, `doc/09` §2.1, `doc/13` E-041.
+
+### Description
+
+Signing in is a server action that calls the TetherProof **API** (`apiPublic('/auth/login')` in
+`lib/actions.ts`); it does not talk to Supabase from the browser. The base URL is
+`NEXT_PUBLIC_API_BASE_URL`, falling back to `http://localhost:4000` (`lib/server/api.ts`). On the
+deployed site that variable is unset until the API is hosted, so the action fetched Vercel's own
+`localhost:4000`, and `fetch` rejected with `ECONNREFUSED`.
+
+The failure was then hidden by design: `messageFor()` only forwards `ApiRequestError` messages,
+because an unexpected error's own text may describe the database or the network rather than
+something the reader can act on. A raw `fetch` rejection is exactly that case, so it fell through
+to `We could not sign you in. Please try again.` — truthful, but indistinguishable from a wrong
+password, with no log entry on the server to say which it was.
+
+### Resolution
+
+A single typed failure for "nothing answered at all", distinct from a refusal:
+
+* `serviceUnreachable()` in `lib/api-error.ts` raises `ApiRequestError('We could not reach
+  TetherProof just now. Please try again in a few moments.', 503, 'SERVICE_UNAVAILABLE')`. Status
+  503 keeps it outside the 401/403 checks that mean "the session is bad": an unreachable API must
+  not look like a rejected session.
+* `lib/server/api.ts` routes both fetch calls through a `request()` helper that catches the
+  rejection, logs the underlying cause (`console.error` with the URL and `cause`, so Vercel
+  function logs can diagnose it), and throws `serviceUnreachable()`.
+* `lib/api.ts` (browser client) does the same without the log line — the browser's network log
+  already carries the technical cause.
+
+The API's own refusal for bad credentials (`Incorrect sign-in details.`) still reaches the form
+whenever the API is the thing answering, so the two situations now read differently.
+
+### Verification
+
+* `tsc --noEmit` for `apps/web` → exit 0.
+* Dead API (dev instance with `NEXT_PUBLIC_API_BASE_URL=http://localhost:4999`): submitting the
+  login form renders the reach message, and the dev log records
+  `[api] could not reach http://localhost:4999/api/v1/auth/login [TypeError: fetch failed] ...
+  code: 'ECONNREFUSED'`.
+* Live API, wrong password (dev instance pointed at the running API on 4000): the form renders
+  the API's own `Incorrect sign-in details.`
+
+Signing in on the deployed site still requires a hosted API with `NEXT_PUBLIC_API_BASE_URL` set
+for Production (and redeployed, since `NEXT_PUBLIC_*` values are inlined at build time). That
+deployment decision is pending; this entry only fixes how the waiting period reads.

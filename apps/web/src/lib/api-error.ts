@@ -71,3 +71,27 @@ export function readFieldIssues(details: unknown): ApiFieldIssue[] {
 export function isAuthFailure(error: unknown): boolean {
   return error instanceof ApiRequestError && (error.status === 401 || error.status === 403);
 }
+
+/**
+ * The failure behind a form's "please try again" when nothing answered at all.
+ *
+ * Raised by both API clients when `fetch` itself rejects — nothing listening on
+ * the configured address, DNS failure, connection dropped — rather than when the
+ * API refused the request. Kept distinct from a refusal on purpose: a person who
+ * mistyped a password and a person whose sign-in button did nothing are two
+ * different problems, and only the second one should be told to wait a moment.
+ * The API's own message (`Incorrect sign-in details.`) still reaches the form
+ * whenever the API is the thing answering.
+ *
+ * The underlying cause is logged on the server, never shown: it would describe
+ * infrastructure to a reader who can do nothing with it. Status 503 so it also
+ * falls outside the 401/403 checks that mean "the session is bad" — an
+ * unreachable API must not look like a rejected session.
+ */
+export function serviceUnreachable(): ApiRequestError {
+  return new ApiRequestError(
+    'We could not reach TetherProof just now. Please try again in a few moments.',
+    503,
+    'SERVICE_UNAVAILABLE',
+  );
+}

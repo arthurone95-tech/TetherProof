@@ -1,6 +1,6 @@
 import type { ProfileResponse } from '@tetherproof/shared';
 import { cache } from 'react';
-import { ApiRequestError, readFieldIssues } from '../api-error';
+import { ApiRequestError, readFieldIssues, serviceUnreachable } from '../api-error';
 import { readAccessToken } from './session';
 
 /**
@@ -53,7 +53,7 @@ export async function apiServerForm<T>(path: string, formData: FormData): Promis
   const token = await readAccessToken();
   if (!token) throw new ApiRequestError('Please sign in to continue.', 401, 'UNAUTHENTICATED');
 
-  const response = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+  const response = await request(`${API_BASE_URL}/api/v1${path}`, {
     method: 'POST',
     body: formData,
     headers: { authorization: `Bearer ${token}` },
@@ -61,6 +61,27 @@ export async function apiServerForm<T>(path: string, formData: FormData): Promis
   });
 
   return readResponse<T>(response);
+}
+
+/**
+ * One `fetch`, with the reason it failed kept where it is useful.
+ *
+ * A rejected `fetch` means the request never reached the API — wrong address,
+ * service down, connection dropped. The cause (which of those, and from which
+ * URL) belongs in the server log, where it can be diagnosed; the caller needs a
+ * typed failure it can show, because a raw network error's text is exactly the
+ * kind of infrastructure detail that should not surface on a form. That
+ * distinction is why a connection failure must not stay a raw throw: every
+ * caller already handles `ApiRequestError`, and none of them can read a
+ * `TypeError: fetch failed`.
+ */
+async function request(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (cause) {
+    console.error(`[api] could not reach ${url}`, cause);
+    throw serviceUnreachable();
+  }
 }
 
 async function send<T>(path: string, options: RequestOptions, authenticated: boolean): Promise<T> {
@@ -71,7 +92,7 @@ async function send<T>(path: string, options: RequestOptions, authenticated: boo
     throw new ApiRequestError('Please sign in to continue.', 401, 'UNAUTHENTICATED');
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+  const response = await request(`${API_BASE_URL}/api/v1${path}`, {
     ...rest,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     headers: {
