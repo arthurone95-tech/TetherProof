@@ -36,7 +36,7 @@ Credentials are owned by Supabase Auth. These endpoints create accounts and exch
   ```
 At least one of `phoneNumber` or `email` is required. Passwords must be at least 12 characters and include an uppercase letter, a lowercase letter, and a number.
 
-Those rules are defined once, in `passwordProblems()` in `@tetherproof/shared`, and both this schema and the web registration form check the same list — so the two cannot disagree about what is acceptable. A refusal comes back with its field-level reasons in `details` (see **§8**), which is how a client knows whether to correct the email or the password.
+Those rules are defined once, in `passwordProblems()` in `@tetherproof/shared`, and both this schema and the web registration form check the same list — so the two cannot disagree about what is acceptable. A refusal comes back with its field-level reasons in `details` (see **§9**), which is how a client knows whether to correct the email or the password.
 
 `redirectOrigin` is **optional**. It is the origin a confirmation link returns to when the member taps the link in their email, and becomes `${redirectOrigin}/auth/callback`. Supplied by the web client, which knows the origin the request actually arrived on; a caller talking to the API directly may omit it, in which case the API falls back to `NEXT_PUBLIC_SITE_URL`, then `WEB_BASE_URL`, then the first entry in `CORS_ORIGINS`, and finally to Supabase's own Site URL.
 
@@ -268,6 +268,115 @@ supplied, when `WEB_BASE_URL` is unset so no link can be built, or when the prov
 three are indistinguishable from the worker's side, which is the point. The token is in the
 response either way, so share it manually. The outcome is recorded on the verification row
 (`dispatch_status`), so a link that never arrived is visible rather than mysterious.
+
+### B. List Own Proofs
+
+* **Endpoint:** `GET /api/v1/workers/proofs`
+* **Description:** The worker's logbook: every proof they submitted, newest first.
+  Returns only the caller's own rows, and media URLs are short-lived signed links minted for this
+  exact request (5-minute expiry), so a row whose media was later removed cannot leak its file.
+* **Authorization:** worker.
+
+Response (200 OK):
+
+```json
+{
+  "proofs": [
+    {
+      "id": "uuid",
+      "skillTag": "Solar Panel Installation",
+      "description": "Replaced two cracked panels and re-commissioned the string.",
+      "submissionGps": "5.6037,-0.1870",
+      "createdAt": "2026-10-07T12:00:00.000Z",
+      "verificationStatus": "pending",
+      "mediaKind": "image",
+      "mediaUrl": "https://…/signed…"
+    }
+  ]
+}
+```
+
+`mediaKind` is derived from the stored content type or extension (`image` or `audio`), and
+`mediaUrl` is a signed storage URL for the worker's own media — an image for a photo proof, and
+for a recording the URL the player needs. `verificationStatus` is one of `pending`, `verified`,
+`rejected`, `fraud_blocked`.
+
+### C. Get One Proof
+
+* **Endpoint:** `GET /api/v1/workers/proofs/{id}`
+* **Description:** One of the caller's proofs with its verification state, for the log detail
+  screen and its correction form.
+* **Authorization:** worker.
+* **Path:** `{id}` must be a UUID. A non-UUID value, an unknown id, or another worker's id all
+  return the same `404` so the endpoint cannot be used to probe which ids exist or belong to
+  whom.
+
+Response (200 OK): the list item shape above plus the fields the screen needs:
+
+```json
+{
+  "proof": {
+    "id": "uuid",
+    "skillTag": "Solar Panel Installation",
+    "description": "Replaced two cracked panels and re-commissioned the string.",
+    "submissionGps": "5.6037,-0.1870",
+    "createdAt": "2026-10-07T12:00:00.000Z",
+    "verificationStatus": "pending",
+    "mediaKind": "image",
+    "mediaUrl": "https://…/signed…",
+    "editable": true,
+    "verificationLinkSent": false,
+    "verificationExpiresAt": "2026-10-14T12:00:00.000Z"
+  }
+}
+```
+
+`editable` is true only while nothing has been sent out for confirmation. `verificationLinkSent`
+reports whether a confirmation link was ever dispatched for this proof, and
+`verificationExpiresAt` when the outstanding single-use link stops working (`null` once used,
+expired, or concluded).
+
+### D. Update One Proof
+
+* **Endpoint:** `PATCH /api/v1/workers/proofs/{id}`
+* **Description:** Corrects a proof before it is sent out for confirmation — the description,
+  the skill, and/or the location. Media is immutable: a file was scrubbed and stored once, and
+  replacing it after the fact would defeat confirmation, so there is no media field on this
+  endpoint at all.
+* **Authorization:** worker; the row must be the caller's own.
+* **Request Body:** a JSON object with at least one of `description` (10–2000 characters),
+  `skillTag` (2–160), or `submissionGps` — a range-checked `lat,lon` pair, or `null` to remove
+  the stored location. An empty object is refused.
+* **Freeze rule (checked at the write, not the read):** an edit is refused with `409
+  CONFLICT` once a verification row for this proof has `dispatch_status = 'sent'` — even if that
+  link later failed to arrive — or once the proof is no longer `pending`. The page shows the edit
+  form only when `editable` is true, but a save that races a dispatched link is still refused
+  here, so the rule holds even if two tabs disagree.
+
+Possible errors: `400 VALIDATION_ERROR` (empty body, out-of-range or malformed coordinates),
+`404` (unknown or non-owned id, or non-UUID id), `409 CONFLICT` (frozen for the reasons above).
+
+### E. Own Overview
+
+* **Endpoint:** `GET /api/v1/workers/overview`
+* **Description:** The dashboard's numbers — the worker's own logs, verifications, and
+  invitations — plus the three most recent proofs for a "recent work" strip.
+* **Authorization:** worker.
+
+Response (200 OK):
+
+```json
+{
+  "totalLogs": 4,
+  "verifiedLogs": 2,
+  "awaitingVerificationLogs": 1,
+  "pendingInvitations": 1,
+  "recent": [ { "…": "three most recent ProofListItem entries, newest first" } ]
+}
+```
+
+All counts are scoped to the caller, and the same care as the list applies: recent entries carry
+signed media URLs minted for this request only.
 
 ---
 
@@ -504,6 +613,12 @@ with the offending parameter under `details`), `429` too many requests, `503`
 the geocoding provider did not answer (`SERVICE_UNAVAILABLE`) — the caller
 keeps the coordinates either way.
 
+Both sides of the lookup soften one transient failure before reporting it: the
+service retries once with a short backoff before it answers `503`, and the web
+app's own name lookup tries once more with 500 ms between attempts. A name is
+presentation — nothing on the proof depends on it — so the extra attempt buys
+most of the value of reliability for almost none of the cost of a hung request.
+
 The provider is Nominatim (OpenStreetMap), reached only from
 `apps/api/src/modules/locations/service.ts`, which is the one file that knows
 the remote address. Requests carry an identifying User-Agent and a 6-second
@@ -512,7 +627,7 @@ sees.
 
 ---
 
-## 8. Standard Error Response Format
+## 9. Standard Error Response Format
 All error responses follow a consistent JSON structure:
 
 ```json
@@ -547,3 +662,14 @@ field it belongs to rather than showing all of them as one undifferentiated bloc
 treat `details` as optional and read it defensively: several endpoints use the same field for other
 shapes of information. Ignoring it entirely is what turned every distinct registration mistake into
 the same unusable sentence — see `doc/13` E-030.
+
+Two codes carry endpoint-specific meaning worth naming:
+
+* **`404` for `PATCH/POST /workers/proofs/{id}`-style routes.** A non-UUID id, an unknown id, and
+  another user's id all answer `404`, so the route cannot be used to enumerate what exists or
+  whose it is. `PATCH` is additionally denied for rows the caller does not own, before any
+  content validation, so a probe learns nothing from the different messages either.
+* **`409 CONFLICT` on `PATCH /workers/proofs/{id}`.** Returned once a confirmation link has been
+  dispatched for the proof or it is no longer `pending`: the entry is frozen because somebody may
+  already have acted on what is written. The message says why, since the condition is temporal
+  rather than a mistake in the request.

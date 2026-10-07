@@ -2161,8 +2161,10 @@ deployment decision is pending; this entry only fixes how the waiting period rea
   a description, and a phone number, tapping **Log this work** opened a screen reading *"That page
   did not load — Nothing you entered was lost, and nothing was saved either"* instead of the
   submission result.
-* **Related:** `apps/web/src/app/(app)/dashboard/page.tsx`, `apps/web/src/app/(app)/dashboard/LogWorkForm.tsx`,
-  `apps/web/src/app/(app)/error.tsx`, `doc/13` E-042.
+* **Related:** `apps/web/src/app/(app)/workspace/LogWorkForm.tsx` (moved here from
+  `apps/web/src/app/(app)/dashboard/` in the logbook restructure; the dashboard is now an overview
+  with no sibling fetches on the form's post-submission re-render path — its one fetch is
+  try/caught), `apps/web/src/app/(app)/error.tsx`, `doc/13` E-042.
 
 ### Description
 
@@ -2211,7 +2213,8 @@ job twice.
 * **Found:** 2026-10-07, worker testing on a phone: tapping **Use my location** filled a large
   text box with `5.6037,-0.1870`. The sensor worked, but the interface presented the outcome as
   numbers to interpret, which is the opposite of how people experience a place.
-* **Related:** `apps/web/src/app/(app)/dashboard/LogWorkForm.tsx`, `apps/web/src/lib/use-geolocation.ts`,
+* **Related:** `apps/web/src/app/(app)/workspace/LogWorkForm.tsx` (moved here from
+  `apps/web/src/app/(app)/dashboard/` in the logbook restructure), `apps/web/src/lib/use-geolocation.ts`,
   `apps/api/src/modules/locations/*`, `doc/07` §7.
 
 ### Description
@@ -2246,6 +2249,16 @@ timeout made a slow GPS fix read as a failure.
   "Patrice Lumumba Road, Accra, Ghana"; the stored value stayed `latitude,longitude` in the hidden
   field, and a stale name from a previous fix could not leak into a new submission. The on-device
   check after the automatic deploy confirmed the phone experience on the live site.
+
+### Follow-up hardening (2026-10-07, logbook restructure)
+
+The lookup is now soft on both sides. The API's reverse-geocode retries once with a short backoff
+before answering `503`; the web's own name lookup retries once more (500 ms between attempts); and
+the GPS hook retries once on a transient failure before reporting a distinct `failed` state with
+its own message, so a slow fix no longer reads as a refusal. The coordinates are never at risk
+whatever the name lookup does — verified live in the restructure run: typing `5.6037,-0.1870` saved
+exactly that pair into the submission, and the log detail rendered `5.6037, -0.1871` after a
+deliberate edit.
 
 ---
 
@@ -2291,3 +2304,37 @@ the sign-in page.
 * **Workaround used for verification:** replaying the identical request from outside the harness
   with a normal `Origin` header ran the full submission to success ("Work logged" panel rendered,
   proof row created).
+
+---
+
+## E-047: The web workspace was not running, and port 3001 belonged to another project
+
+* **Status:** Resolved (workaround) — 2026-10-07. The web dev server ran and the logbook flow was
+  verified against it; why the watcher's web child had vanished is not yet determined.
+* **Found:** 2026-10-07, before browser-verifying the logbook restructure. The `concurrently` root
+  process (`npm run dev`) had only its `api` child alive; no TetherProof `next dev` was listening
+  on any port, and port 3001 — the port the smoke tooling assumes for the web — was serving an
+  unrelated project's `next dev` ("Veben").
+* **Related:** `apps/web`, `scripts/smoke.mjs` (defaults `SMOKE_WEB_PORT` to 3100; the web dev
+  default is 3000/3001), the `concurrently` launcher at the repo root.
+
+### Description
+
+Requests to the expected web port returned another application's HTML, and the harness browser
+loaded that unrelated app, so it was impossible to browser-check the new pages without first
+determining what was actually listening. The root `npm run dev` process owned only the API child;
+there was no evidence of why the web child had stopped (it was not in the process tree at all).
+
+### Resolution
+
+Started the web workspace explicitly on an unambiguous port (`next dev -p 3100` from
+`apps/web`), leaving the API dev server (still on 4000) untouched.
+
+### Verification
+
+The full signed-in run completed against the dev server on 3100: dashboard overview, workspace
+form, a real submission (media + description + skill + typed coordinates), the "View all logs"
+shortcut, the logs list, the log detail, an edit that changed the stored description and
+coordinates, and the frozen-entry note after a verification link was marked as sent. All rendered
+and interacted correctly. The one persistent harness quirk (E-046) did not reproduce for the
+login submission this time — the action POST completed and the session was written normally.
