@@ -8,10 +8,12 @@ import type {
   AuthResponse,
   AuthSession,
   ConfirmationChallenge,
+  ProofUpdateResponse,
+  UpdateProofInput,
   UserRole,
 } from '@tetherproof/shared';
 import { ApiRequestError } from './api-error';
-import type { AuthCallbackResult, FormState, ProofFormState } from './form-state';
+import type { AuthCallbackResult, FormState, ProofEditState, ProofFormState } from './form-state';
 import { formErrorFor } from './form-state';
 import { homeFor } from './navigation';
 import { apiPublic, apiServer, apiServerForm, currentProfile } from './server/api';
@@ -508,6 +510,13 @@ const PROOF_FIELD_FOR_PATH: Record<string, NonNullable<ProofFormState['field']>>
   verifierPhone: 'verifierPhone',
 };
 
+/** The same mapping for the edit form, which has no verifier-phone field. */
+const PROOF_EDIT_FIELD_FOR_PATH: Partial<Record<string, NonNullable<ProofEditState['field']>>> = {
+  description: 'description',
+  skillTag: 'skillTag',
+  submissionGps: 'submissionGps',
+};
+
 /**
  * Everything storage accepts, and nothing else.
  *
@@ -627,6 +636,86 @@ export async function submitProof(
       return { error: error.message };
     }
     return { error: 'We could not log that. Please try again.' };
+  }
+}
+
+/**
+ * Edits one of the caller's log entries, within the freeze rule.
+ *
+ * The API decides whether an edit is still allowed — a log freezes once its
+ * confirmation link has actually been sent out, or once it has been confirmed —
+ * so this action only shapes what was typed and lets the API's refusal, with
+ * its own wording, come back to the form.
+ *
+ * The location boxes are seeded from the stored pair, so an empty pair is a
+ * deliberate clear rather than an omission; the API's `submissionGps: null`
+ * removes the stored location.
+ */
+export async function updateProof(
+  _previous: ProofEditState,
+  formData: FormData,
+): Promise<ProofEditState> {
+  const proofId = String(formData.get('proofId') ?? '');
+  const description = String(formData.get('description') ?? '').trim();
+  const skillTag = String(formData.get('skillTag') ?? '').trim();
+  const draftLat = String(formData.get('lat') ?? '').trim();
+  const draftLng = String(formData.get('lng') ?? '').trim();
+
+  if (description.length < 10) {
+    return { error: 'Describe the work in at least 10 characters.', field: 'description' };
+  }
+  if (description.length > 2000) {
+    return { error: 'Keep the description under 2000 characters.', field: 'description' };
+  }
+  if (skillTag.length < 2) {
+    return { error: 'Enter the skill this work belongs to.', field: 'skillTag' };
+  }
+  if (skillTag.length > 160) {
+    return { error: 'Keep the skill name under 160 characters.', field: 'skillTag' };
+  }
+
+  const changes: UpdateProofInput = { description, skillTag };
+
+  if (!draftLat && !draftLng) {
+    changes.submissionGps = null;
+  } else {
+    if (!draftLat || !draftLng) {
+      return {
+        error: 'Enter both latitude and longitude, or leave both empty to remove the location.',
+        field: 'submissionGps',
+      };
+    }
+    const candidate = `${draftLat},${draftLng}`;
+    if (!/^-?\d{1,3}(\.\d+)?,-?\d{1,3}(\.\d+)?$/.test(candidate)) {
+      return {
+        error: 'Enter coordinates as latitude, longitude — for example 5.6037,-0.1870.',
+        field: 'submissionGps',
+      };
+    }
+    const latitude = Number(draftLat);
+    const longitude = Number(draftLng);
+    if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+      return { error: 'Location coordinates are out of range.', field: 'submissionGps' };
+    }
+    changes.submissionGps = candidate;
+  }
+
+  try {
+    await apiServer<ProofUpdateResponse>(`/workers/proofs/${proofId}`, {
+      method: 'PATCH',
+      body: changes,
+    });
+    redirect(`/logs/${proofId}?updated=1`);
+  } catch (error) {
+    if (isRedirect(error)) throw error;
+    if (error instanceof ApiRequestError) {
+      const first = error.issues[0];
+      if (first && PROOF_EDIT_FIELD_FOR_PATH[first.path]) {
+        return { error: first.message, field: PROOF_EDIT_FIELD_FOR_PATH[first.path] };
+      }
+      return { error: error.message };
+    }
+    return { error: 'We could not save those changes. Please try again.' };
   }
 }
 

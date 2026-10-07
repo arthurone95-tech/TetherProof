@@ -76,6 +76,21 @@ export interface ProofSubmissionView {
 export const EMPTY_PROOF: ProofFormState = {};
 
 /**
+ * Result of editing an existing log entry.
+ *
+ * A separate, smaller state from `ProofFormState`: editing sends no media and
+ * succeeds by re-rendering the entry, so it only needs to name which field was
+ * refused and why.
+ */
+export interface ProofEditState {
+  error?: string;
+  field?: 'description' | 'skillTag' | 'submissionGps';
+}
+
+/** The state of an edit form that has not been submitted yet. */
+export const EMPTY_PROOF_EDIT: ProofEditState = {};
+
+/**
  * Outcome of handing a confirmation link's session to the application.
  *
  * Returned rather than redirected on, because the page that reads it also has to

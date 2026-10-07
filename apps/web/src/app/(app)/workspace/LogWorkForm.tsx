@@ -1,10 +1,12 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
 import { submitProof } from '@/lib/actions';
 import { EMPTY_PROOF, type ProofFormState, type ProofSubmissionView } from '@/lib/form-state';
 import { locateMessage, useGeolocation } from '@/lib/use-geolocation';
+import { prettyCoords } from '@/lib/gps';
 import { Field } from '@/components/ui/Field';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 
@@ -225,9 +227,7 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
     const request = ++nameRequestRef.current;
     setNaming(true);
     try {
-      const { placeName: name } = await apiFetch<{ placeName: string | null }>(
-        `/locations/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`,
-      );
+      const name = await lookupName(lat, lon, 1);
       if (nameRequestRef.current !== request) return;
       setPlaceName(name);
       setPlaceFailed(name === null);
@@ -237,6 +237,28 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
       setPlaceFailed(true);
     } finally {
       if (nameRequestRef.current === request) setNaming(false);
+    }
+  }
+
+  /**
+   * Naming a place is presentation — the coordinates are the record and are
+   * already safe — so one transient failure is worth one retry before the area
+   * is admitted unnamed. The retry happens here rather than in the API because
+   * it is cheap at this layer: the naming call carries no session state, and
+   * the API's own retry is what the server's outbound side needs.
+   */
+  async function lookupName(lat: string, lon: string, attempt: number): Promise<string | null> {
+    try {
+      const { placeName } = await apiFetch<{ placeName: string | null }>(
+        `/locations/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`,
+      );
+      return placeName;
+    } catch (error) {
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return lookupName(lat, lon, attempt + 1);
+      }
+      throw error;
     }
   }
 
@@ -397,8 +419,7 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
       <fieldset className="min-w-0 rounded-xl border border-brand-100 p-4">
         <legend className="px-1 text-sm font-medium text-ink-900">Where it happened</legend>
         <p className="mb-3 text-sm text-ink-600">
-          Optional. Use your phone&apos;s GPS and the area is named for you — the coordinates are
-          kept, but read as the small line under it, not as a form to fill.
+          Optional. Use your phone&apos;s GPS and the area is named for you.
         </p>
 
         {/*
@@ -424,9 +445,9 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
               onClick={openManualCoords}
               className="inline-flex min-h-11 items-center rounded-xl border border-brand-100 px-4 text-sm font-semibold text-ink-600 transition-colors hover:border-brand-600 hover:text-brand-700"
             >
-              Type coordinates instead
+              Type coordinates
             </button>
-            <span className="text-sm text-ink-600">Leaving it out is fine too.</span>
+            <span className="text-sm text-ink-600">Not sharing is fine.</span>
           </div>
         ) : null}
 
@@ -665,13 +686,21 @@ function LoggedPanel({
         </p>
       </div>
 
-      <button
-        type="button"
-        onClick={onLogAnother}
-        className="inline-flex min-h-11 items-center self-start rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50"
-      >
-        Log another job
-      </button>
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={onLogAnother}
+          className="inline-flex min-h-11 items-center justify-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50"
+        >
+          Log another job
+        </button>
+        <Link
+          href="/logs"
+          className="inline-flex min-h-11 items-center justify-center rounded-xl border border-brand-100 px-4 text-sm font-semibold text-ink-600 transition-colors hover:border-brand-600 hover:text-brand-700"
+        >
+          View all logs
+        </Link>
+      </div>
     </div>
   );
 }
@@ -693,13 +722,4 @@ function formatClock(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
-
-/** The stored pair, with the GPS precision taken off for reading. */
-function prettyCoords(gps: string): string {
-  const [lat, lon] = gps.split(',');
-  const latNum = Number(lat);
-  const lonNum = Number(lon);
-  if (Number.isFinite(latNum) && Number.isFinite(lonNum)) return `${latNum}, ${lonNum}`;
-  return gps;
 }
