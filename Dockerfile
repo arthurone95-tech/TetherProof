@@ -12,8 +12,10 @@ WORKDIR /repo
 
 # Manifests first, so the dependency layer can be cached independently of
 # source changes. npm ci resolves the whole workspace, so every workspace
-# manifest must be present before it can run.
-COPY package.json package-lock.json ./
+# manifest must be present before it can run. tsconfig.base.json is extended
+# by every workspace's tsconfig ("../../tsconfig.base.json") and must be
+# present too, or tsc fails with TS5083.
+COPY package.json package-lock.json tsconfig.base.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/shared/package.json packages/shared/package.json
