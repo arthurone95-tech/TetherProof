@@ -70,6 +70,71 @@ which produces *No Next.js version detected*.
 
 ---
 
+### 2.2 Deploying the API to Railway
+
+The API is a container that talks to the same Supabase project the web client uses — Postgres
+through `DATABASE_URL`, Storage for proof media, and Supabase Auth. Railway only runs the Node
+process; no new database or provider is required.
+
+**Repository side** (this repo):
+
+* `Dockerfile` at the repository root, multi-stage: `npm ci` for the whole workspace, builds
+  `packages/shared` then `apps/api`, and copies the compiled tree into a slim `node:24-alpine`
+  runner (matching the pinned `.nvmrc`). The runner keeps the full `node_modules` (with the
+  workspace symlink that resolves `@tetherproof/shared`), which trades image size for resolution
+  certainty — fine for Railway, which bills CPU and memory, not disk.
+* `.dockerignore` keeps `node_modules`, `dist`, `.env` and `.next` out of the build context.
+* `apps/api/src/config/env.ts` makes `API_PORT` fall back to the platform-injected `PORT`, then
+  4000, so the container listens where the platform's proxy expects it. Without that fallback a
+  deployment that only sets `PORT` would listen on 4000 and be healthy and unreachable at once.
+* `railway.json` pins `build.builder` to `DOCKERFILE` (Railway otherwise auto-detects npm and
+  runs the *root* build, which compiles the web client too and fails without `NEXT_PUBLIC_*`
+  build-time variables), sets `deploy.startCommand` to the same command the Dockerfile's `CMD`
+  runs, and configures the health check and restart policy.
+
+**In the Railway dashboard** (Settings → General on a new service):
+
+| Setting | Value |
+| --- | --- |
+| Deploy from | GitHub repo `arthurone95-tech/TetherProof`, branch `main` |
+| Service type | Dockerfile — pinned by `railway.json` at the repository root (auto-detection would otherwise run the root npm build and fail) |
+| Root Directory | repository root (the Dockerfile lives here) |
+| Health Check Path | `GET /api/v1/health` |
+
+**Environment variables** (Service → Variables). The API refuses to start without the required
+ones, so a missing variable fails loudly instead of half-working:
+
+| Variable | Value |
+| --- | --- |
+| `NODE_ENV` | `production` |
+| `API_HOST` | `0.0.0.0` — the localhost default only accepts same-machine connections, so a proxied container would listen and be unreachable at the same time |
+| `SUPABASE_URL` | Supabase → Settings → API → project URL |
+| `SUPABASE_ANON_KEY` | Supabase → Settings → API → anon/public key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API → service_role key (server-only, never exposed to the browser) |
+| `DATABASE_URL` | Supabase → Settings → Database → connection string (prefer the session pooler on port 5432) |
+| `VERIFIER_PHONE_SALT` | At least 16 characters. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Randomly generated per process in production refuses to start (`apps/api/src/config/env.ts`) |
+
+Strongly recommended:
+
+| Variable | Value |
+| --- | --- |
+| `CORS_ORIGINS` | `https://tetherproof.vercel.app` — production accepts only what is listed here |
+| `WEB_BASE_URL` | `https://tetherproof.vercel.app` |
+| `NEXT_PUBLIC_SITE_URL` | `https://tetherproof.vercel.app` |
+| `LOG_LEVEL` | `info` |
+
+Everything else has a production-safe default. `DATABASE_SSL=true` is the switch to try if the
+API boots but reports the database down. `MESSAGING_PROVIDER=log` is the correct value until
+Twilio is configured (E-027).
+
+**After the deployment is green:**
+
+1. Run the schema migrations once against production: `npm run db:migrate --workspace @tetherproof/api` with the production `DATABASE_URL` set (a one-off Railway command, or locally against the production connection string).
+2. Give the API a stable public URL (a custom domain, or keep the generated `*.up.railway.app`).
+3. Set `NEXT_PUBLIC_API_BASE_URL` on Vercel (Production) to that URL and redeploy the web client — `NEXT_PUBLIC_*` values are baked in at build time (E-042 notes the fallback that applies until then).
+
+---
+
 ## 3. Deployment Pipeline & CI/CD
 * **Version Control & Branching:** GitHub repository structure featuring protected `main` (production) and `staging` branches. Direct commits to `main` are strictly prohibited.
 * **Automated Checks (CI):** Every pull request automatically triggers GitHub Actions to run:

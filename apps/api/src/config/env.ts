@@ -17,7 +17,20 @@ const envSchema = z.object({
   PRODUCT_NAME: z.string().min(1).default('TetherProof'),
 
   API_HOST: z.string().min(1).default('127.0.0.1'),
-  API_PORT: z.coerce.number().int().positive().default(4000),
+  /**
+   * The port the API listens on.
+   *
+   * Falls back to the platform-injected `PORT` — the convention every PaaS
+   * (Railway, Render, Fly) uses to tell an app where to listen — then to 4000.
+   * Without the fallback a container started with only `PORT` set would listen
+   * on 4000 while the platform's proxy watched `PORT`, and the service would
+   * be healthy and unreachable at the same time.
+   */
+  API_PORT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(Number(process.env.PORT) || 4000),
   /**
    * The origin the browser talks to is `NEXT_PUBLIC_API_BASE_URL`, which the
    * client workspace reads from the same root `.env`. There is deliberately no
