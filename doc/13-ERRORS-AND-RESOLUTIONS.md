@@ -2155,8 +2155,8 @@ deployment decision is pending; this entry only fixes how the waiting period rea
 
 ## E-043: After "Log this work" the whole page was replaced by "That page did not load"
 
-* **Status:** Fix verified end-to-end on the production build (2026-10-07); live confirmation on
-  the deployed site follows the deploy.
+* **Status:** **Resolved** — 2026-10-07. Fix verified end-to-end on the production build, then
+  confirmed live on the deployed site from the reporting device after the automatic deploy.
 * **Found:** 2026-10-07, worker on a phone at the deployed site. After selecting a job, a photo,
   a description, and a phone number, tapping **Log this work** opened a screen reading *"That page
   did not load — Nothing you entered was lost, and nothing was saved either"* instead of the
@@ -2199,15 +2199,15 @@ job twice.
 * One environment note surfaced during the run: this browser harness rewrites the `Origin` header
   of React's server-action POSTs to the literal string `null`, which crashes Next's own action
   handler before application code runs (see E-046). Replaying the identical request with a normal
-  `Origin` header succeeded, so the application flow itself is sound. A live check on the reported
-  device is the final step.
+  `Origin` header succeeded, so the application flow itself is sound. The live check followed the
+  automatic deploy: the reporting device loads the workspace and logs work cleanly.
 
 ---
 
 ## E-044: "Use my location" handed the worker a coordinate box instead of a place
 
-* **Status:** Fix verified (2026-10-07): endpoint confirmed live; placement and fallback flows
-  confirmed on the production build. Remaining: the on-device check after deploy.
+* **Status:** **Resolved** — 2026-10-07. Endpoint confirmed live; placement and fallback flows
+  confirmed on the production build and then on-device after the automatic deploy.
 * **Found:** 2026-10-07, worker testing on a phone: tapping **Use my location** filled a large
   text box with `5.6037,-0.1870`. The sensor worked, but the interface presented the outcome as
   numbers to interpret, which is the opposite of how people experience a place.
@@ -2244,8 +2244,8 @@ timeout made a slow GPS fix read as a failure.
 * On the production build: the GPS button named the location ("Black Star Square, Accra, Ghana")
   with the coordinates as the small secondary line; typing `5.6037,-0.1870` produced
   "Patrice Lumumba Road, Accra, Ghana"; the stored value stayed `latitude,longitude` in the hidden
-  field, and a stale name from a previous fix could not leak into a new submission. An on-device
-  check after deploy confirms the phone experience.
+  field, and a stale name from a previous fix could not leak into a new submission. The on-device
+  check after the automatic deploy confirmed the phone experience on the live site.
 
 ---
 
