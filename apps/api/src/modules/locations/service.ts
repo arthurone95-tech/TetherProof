@@ -36,24 +36,41 @@ export async function reverseGeocode(
 ): Promise<ReverseGeocodeResult> {
   const url = `${NOMINATIM_REVERSE_URL}?format=jsonv2&zoom=16&accept-language=en&lat=${encodeURIComponent(latitude)}&lon=${encodeURIComponent(longitude)}`;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  // Transient failures are real: a dropped connection or a slow network answers
+  // "we could not reach the provider" when a normal retry would have gone
+  // through. One retry is the whole budget; the provider's usage policy and the
+  // API's own rate limiter are the reasons it stays at one.
+  let payload: unknown = null;
+  let lastFailure: unknown = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        headers: {
+          accept: 'application/json',
+          'user-agent': 'TetherProof/0.1 (server-side reverse geocoding for worker work logs)',
+        },
+        signal: controller.signal,
+      });
+      payload = await response.json().catch(() => null);
+      break;
+    } catch (cause) {
+      lastFailure = cause;
+      // A second attempt after a wall-clock delay, so a provider that is simply
+      // slow is not hammered with two immediate calls.
+      if (attempt === 1) await new Promise((resolve) => setTimeout(resolve, 600));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
-  let payload: unknown;
-  try {
-    const response = await fetch(url, {
-      headers: {
-        accept: 'application/json',
-        'user-agent': 'TetherProof/0.1 (server-side reverse geocoding for worker work logs)',
-      },
-      signal: controller.signal,
+  if (payload === null && lastFailure !== null) {
+    logger.warn('Reverse geocoding request failed', {
+      url,
+      error: lastFailure instanceof Error ? lastFailure.message : String(lastFailure),
     });
-    payload = await response.json().catch(() => null);
-  } catch (cause) {
-    logger.warn('Reverse geocoding request failed', { url, error: cause instanceof Error ? cause.message : String(cause) });
     throw AppError.serviceUnavailable('We could not name that place. The coordinates were still saved.');
-  } finally {
-    clearTimeout(timer);
   }
 
   const placeName = composePlace(payload);

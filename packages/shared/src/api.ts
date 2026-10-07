@@ -1,4 +1,4 @@
-import type { EmployerVerificationStatus, UserRole } from './enums.js';
+import type { EmployerVerificationStatus, UserRole, VerificationStatus } from './enums.js';
 
 /**
  * Error codes returned by the TetherProof API.
@@ -250,4 +250,86 @@ export interface AuthResponse {
   session: AuthSession | null;
   /** Present when the account still needs to prove ownership of its channel. */
   confirmation: ConfirmationChallenge | null;
+}
+
+// ---------------------------------------------------------------------------
+// Worker proof logbook
+// ---------------------------------------------------------------------------
+
+/** The kind of media attached to a proof, for choosing how to render it. */
+export type ProofMediaKind = 'image' | 'audio';
+
+/**
+ * One row of a worker's own logbook, as listed by `GET /workers/proofs` and
+ * previewed on the dashboard overview.
+ *
+ * `mediaUrl` is a short-lived signed URL minted at read time for the caller
+ * only. It is never persisted (a leaked database row cannot be turned into a
+ * media link) and it expires after five minutes, so a page that stays open is
+ * expected to refetch. Audio proofs get a URL too so the list can offer
+ * playback; the client renders a placeholder square for the thumbnail either
+ * way.
+ */
+export interface ProofListItem {
+  id: string;
+  skillTag: string;
+  description: string;
+  createdAt: string;
+  verificationStatus: VerificationStatus;
+  submissionGps: string | null;
+  mediaKind: ProofMediaKind;
+  mediaUrl: string;
+}
+
+export interface ProofsResponse {
+  proofs: ProofListItem[];
+}
+
+/**
+ * A single log entry's detail, for the logbook detail screen.
+ *
+ * `editable` is the freeze rule: a log can be edited only while its
+ * verification is still pending AND no verification link has actually been
+ * sent to anyone. Once a link is out — or the proof has been verified,
+ * rejected, or blocked — the record is frozen, so an edited record can never
+ * be confirmed by a link that was already handed out.
+ */
+export interface ProofDetail extends ProofListItem {
+  /** Whether the worker may change this entry right now. */
+  editable: boolean;
+  /** Whether a confirmation link was already delivered for this entry. */
+  verificationLinkSent: boolean;
+  /** When the outstanding single-use link stops working. Null once used/expired/concluded. */
+  verificationExpiresAt: string | null;
+}
+
+export interface ProofDetailResponse {
+  proof: ProofDetail;
+}
+
+/** What an existing log may change. All fields optional; at least one required. */
+export interface UpdateProofInput {
+  description?: string;
+  skillTag?: string;
+  /** Null explicitly clears the stored location; omitting it leaves it as is. */
+  submissionGps?: string | null;
+}
+
+export interface ProofUpdateResponse {
+  proof: ProofDetail;
+}
+
+/**
+ * The numbers a worker's dashboard leads with, from `GET /workers/overview`.
+ *
+ * Counts are derived from the caller's own rows only. `recent` is the latest
+ * few entries with thumbnails, so the landing page shows the record rather
+ * than only a row of numbers.
+ */
+export interface WorkerOverviewResponse {
+  totalLogs: number;
+  verifiedLogs: number;
+  awaitingVerificationLogs: number;
+  pendingInvitations: number;
+  recent: ProofListItem[];
 }

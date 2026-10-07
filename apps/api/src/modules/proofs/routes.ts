@@ -4,10 +4,33 @@ import { mediaUploadRateLimiter } from '../../middleware/rate-limit.js';
 import { acceptProofMedia } from '../../middleware/upload.js';
 import { validateBody } from '../../middleware/validate.js';
 import { AppError } from '../../lib/errors.js';
-import { proofSubmissionSchema } from './schemas.js';
-import { submitProof } from './service.js';
+import { proofSubmissionSchema, proofUpdateSchema } from './schemas.js';
+import {
+  getWorkerProof,
+  listWorkerProofs,
+  submitProof,
+  updateWorkerProof,
+  workerOverview,
+} from './service.js';
 
 export const proofRouter = Router();
+
+/**
+ * Rejects a route parameter that cannot be a proof id.
+ *
+ * The expression layer would answer a non-UUID with a Postgres syntax error
+ * (a 500 that leaks nothing but tells a caller nothing either); refusing it
+ * here turns the same request into the same 404 an unknown id gets.
+ */
+function requireProofId(value: string | undefined): string {
+  if (
+    !value ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  ) {
+    throw AppError.notFound('That log entry was not found.');
+  }
+  return value;
+}
 
 /**
  * Worker proof submission.
@@ -49,6 +72,75 @@ proofRouter.post(
       });
 
       res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/**
+ * The caller's own logbook, newest first.
+ *
+ * Everything returned is derived from the caller's rows and a signed media URL
+ * minted for them at read time, so the list cannot leak another worker's
+ * record even if a session were misused.
+ */
+proofRouter.get(
+  '/proofs',
+  authenticate,
+  authorize('worker'),
+  async (req, res, next) => {
+    try {
+      res.json(await listWorkerProofs(req.auth!.userId));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/** The numbers the dashboard leads with, plus the latest entries. */
+proofRouter.get(
+  '/overview',
+  authenticate,
+  authorize('worker'),
+  async (req, res, next) => {
+    try {
+      res.json(await workerOverview(req.auth!.userId));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/** One log entry, with its freeze state and outstanding-link expiry. */
+proofRouter.get(
+  '/proofs/:id',
+  authenticate,
+  authorize('worker'),
+  async (req, res, next) => {
+    try {
+      res.json(await getWorkerProof(req.auth!.userId, requireProofId(req.params.id)));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/**
+ * Applies an allowed edit to one of the caller's log entries.
+ *
+ * The write re-checks the freeze rule (see `updateWorkerProof`), so a link
+ * sent between page load and save refuses the save rather than confirming
+ * different text than was sent.
+ */
+proofRouter.patch(
+  '/proofs/:id',
+  authenticate,
+  authorize('worker'),
+  validateBody(proofUpdateSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await updateWorkerProof(req.auth!.userId, requireProofId(req.params.id), req.body));
     } catch (error) {
       next(error);
     }

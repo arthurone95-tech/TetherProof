@@ -39,3 +39,30 @@ export const proofSubmissionSchema = z.object({
 });
 
 export type ProofSubmissionInput = z.infer<typeof proofSubmissionSchema>;
+
+/**
+ * What an existing log may change.
+ *
+ * Everything is optional, and at least one field must actually be supplied —
+ * a PATCH that changes nothing is a request error, not a successful no-op.
+ * `submissionGps` accepts null explicitly, which clears the stored location;
+ * omitting it leaves the stored value untouched.
+ */
+export const proofUpdateSchema = z
+  .object({
+    description: z
+      .string()
+      .trim()
+      .min(10, 'Describe the work in at least 10 characters.')
+      .max(2000, 'Keep the description under 2000 characters.')
+      .optional(),
+    skillTag: z.string().trim().min(2, 'Enter the skill this work belongs to.').max(160).optional(),
+    submissionGps: gpsSchema.nullable().optional(),
+  })
+  .refine(
+    (value) =>
+      value.description !== undefined || value.skillTag !== undefined || value.submissionGps !== undefined,
+    { message: 'Nothing to change was supplied.' },
+  );
+
+export type ProofUpdateInput = z.infer<typeof proofUpdateSchema>;

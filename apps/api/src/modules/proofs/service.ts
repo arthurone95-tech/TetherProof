@@ -1,10 +1,29 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
+import type {
+  ProofDetailResponse,
+  ProofListItem,
+  ProofMediaKind,
+  ProofsResponse,
+  UpdateProofInput,
+  WorkerOverviewResponse,
+} from '@tetherproof/shared';
 import { env } from '../../config/env.js';
 import { db } from '../../db/client.js';
-import { capabilityBlocks, profiles, users, verifications, workProofLogs } from '../../db/schema.js';
+import {
+  capabilityBlocks,
+  directOffers,
+  profiles,
+  users,
+  verifications,
+  workProofLogs,
+} from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
 import { sendVerificationLink } from '../../lib/messaging/index.js';
-import { deleteWorkProofMedia, uploadWorkProofMedia } from '../../lib/storage.js';
+import {
+  createSignedMediaUrl,
+  deleteWorkProofMedia,
+  uploadWorkProofMedia,
+} from '../../lib/storage.js';
 import { generateVerificationToken, hashVerificationToken, hashVerifierPhone } from '../../lib/token.js';
 import type { UploadedMedia } from '../../middleware/upload.js';
 import type { ProofSubmissionInput } from './schemas.js';
@@ -55,7 +74,7 @@ export interface ProofSubmissionResult {
  */
 async function resolveCapabilityBlock(
   workerId: string,
-  input: ProofSubmissionInput,
+  input: { skillTag: string; capabilityBlockId?: string },
 ): Promise<{ id: string; skillTag: string }> {
   if (input.capabilityBlockId) {
     const owned = await db
@@ -270,4 +289,206 @@ async function dispatchLink(input: {
   // recipient's number. The generic reason plus the server log is the record.
   await record('failed', result.reason ?? 'The messaging provider did not accept the message.');
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Worker logbook
+// ---------------------------------------------------------------------------
+
+/**
+ * The media kind of a stored proof object, read from the vetted extension.
+ *
+ * Images get an actual thumbnail square; audio gets a playable placeholder.
+ * The extension is safe to trust here because it was assigned by the upload
+ * path from the allow-list, never taken from a caller.
+ */
+function mediaKindFor(path: string | null): ProofMediaKind {
+  const extension = path?.split('.').pop()?.toLowerCase() ?? '';
+  return ['mp3', 'm4a', 'aac'].includes(extension) ? 'audio' : 'image';
+}
+
+/** A proof row joined with the skill tag of the block it hangs on. */
+interface ProofRow {
+  id: string;
+  description: string;
+  mediaUrl: string | null;
+  verificationStatus: ProofListItem['verificationStatus'];
+  submissionGps: string | null;
+  createdAt: Date;
+  skillTag: string | null;
+}
+
+async function proofRows(workerId: string, proofId?: string): Promise<ProofRow[]> {
+  const query = db
+    .select({
+      id: workProofLogs.id,
+      description: workProofLogs.description,
+      mediaUrl: workProofLogs.mediaUrl,
+      verificationStatus: workProofLogs.verificationStatus,
+      submissionGps: workProofLogs.submissionGps,
+      createdAt: workProofLogs.createdAt,
+      skillTag: capabilityBlocks.skillTag,
+    })
+    .from(workProofLogs)
+    .leftJoin(capabilityBlocks, eq(capabilityBlocks.id, workProofLogs.capabilityBlockId))
+    .where(
+      proofId
+        ? and(eq(workProofLogs.id, proofId), eq(workProofLogs.workerId, workerId))
+        : eq(workProofLogs.workerId, workerId),
+    )
+    .orderBy(desc(workProofLogs.createdAt));
+
+  return proofId ? query.limit(1) : query;
+}
+
+/**
+ * Turns a row into the response shape, minting the read-time signed URL.
+ *
+ * One storage call per row. Lists are short and this is the only way media can
+ * leave the private bucket, so the trade is deliberate.
+ */
+async function toListItem(row: ProofRow): Promise<ProofListItem> {
+  return {
+    id: row.id,
+    skillTag: row.skillTag ?? 'Unlabelled work',
+    description: row.description,
+    createdAt: row.createdAt.toISOString(),
+    verificationStatus: row.verificationStatus,
+    submissionGps: row.submissionGps,
+    mediaKind: mediaKindFor(row.mediaUrl),
+    mediaUrl: row.mediaUrl ? await createSignedMediaUrl(row.mediaUrl) : '',
+  };
+}
+
+/**
+ * The link state behind the freeze rule.
+ *
+ * A proof is editable only while nothing has been handed out for it. `linkSent`
+ * is true once a verification link was actually accepted by a messaging
+ * provider — after that, editing the record would make the confirmation mean
+ * something other than what was sent.
+ */
+async function verificationState(
+  proofId: string,
+): Promise<{ linkSent: boolean; expiresAt: string | null }> {
+  const [latest] = await db
+    .select({
+      dispatchStatus: verifications.dispatchStatus,
+      response: verifications.response,
+      expiresAt: verifications.expiresAt,
+    })
+    .from(verifications)
+    .where(eq(verifications.workProofId, proofId))
+    .orderBy(desc(verifications.createdAt))
+    .limit(1);
+
+  if (!latest) return { linkSent: false, expiresAt: null };
+
+  const linkSent = latest.dispatchStatus === 'sent';
+  const outstanding = latest.response === 'none' && latest.expiresAt.getTime() > Date.now();
+  return { linkSent, expiresAt: outstanding ? latest.expiresAt.toISOString() : null };
+}
+
+/** The caller's own proof row, or a 404 that does not reveal others' rows. */
+async function findOwnedRow(workerId: string, proofId: string): Promise<ProofRow> {
+  const [row] = await proofRows(workerId, proofId);
+  if (!row) throw AppError.notFound('That log entry was not found.');
+  return row;
+}
+
+/** Lists the caller's logged work, newest first. */
+export async function listWorkerProofs(workerId: string): Promise<ProofsResponse> {
+  const rows = await proofRows(workerId);
+  return { proofs: await Promise.all(rows.map(toListItem)) };
+}
+
+/** One log entry with its editability and outstanding-link state. */
+export async function getWorkerProof(
+  workerId: string,
+  proofId: string,
+): Promise<ProofDetailResponse> {
+  const row = await findOwnedRow(workerId, proofId);
+  const { linkSent, expiresAt } = await verificationState(proofId);
+
+  return {
+    proof: {
+      ...(await toListItem(row)),
+      editable: row.verificationStatus === 'pending' && !linkSent,
+      verificationLinkSent: linkSent,
+      verificationExpiresAt: expiresAt,
+    },
+  };
+}
+
+/**
+ * Applies an allowed edit to one of the caller's log entries.
+ *
+ * The freeze rule is re-checked here, at the write, not only at read time: a
+ * link sent between the page load and the save must refuse the save, or the
+ * confirmed record would silently differ from the one confirmed.
+ */
+export async function updateWorkerProof(
+  workerId: string,
+  proofId: string,
+  input: UpdateProofInput,
+): Promise<ProofDetailResponse> {
+  const row = await findOwnedRow(workerId, proofId);
+  const { linkSent } = await verificationState(proofId);
+
+  if (row.verificationStatus !== 'pending') {
+    throw AppError.conflict('This log has already been verified and can no longer be edited.');
+  }
+  if (linkSent) {
+    throw AppError.conflict(
+      'A confirmation link was already sent for this log, so it can no longer be edited.',
+    );
+  }
+
+  const changes: Record<string, unknown> = {};
+  if (input.description !== undefined) changes.description = input.description;
+  // Null clears the stored location; the field is otherwise left untouched.
+  if (input.submissionGps !== undefined) changes.submissionGps = input.submissionGps;
+  if (input.skillTag !== undefined) {
+    const block = await resolveCapabilityBlock(workerId, { skillTag: input.skillTag });
+    changes.capabilityBlockId = block.id;
+  }
+
+  const [updated] = await db
+    .update(workProofLogs)
+    .set(changes)
+    .where(eq(workProofLogs.id, proofId))
+    .returning({ id: workProofLogs.id });
+
+  if (!updated) throw AppError.notFound('That log entry was not found.');
+
+  return getWorkerProof(workerId, proofId);
+}
+
+/**
+ * The numbers the worker dashboard leads with.
+ *
+ * Counts come from the caller's own rows only. The `recent` slice reuses the
+ * list path so thumbnails and statuses are rendered once, in one shape.
+ */
+export async function workerOverview(workerId: string): Promise<WorkerOverviewResponse> {
+  const [statuses, invitations] = await Promise.all([
+    db
+      .select({ status: workProofLogs.verificationStatus })
+      .from(workProofLogs)
+      .where(eq(workProofLogs.workerId, workerId)),
+    db
+      .select({ id: directOffers.id })
+      .from(directOffers)
+      .where(and(eq(directOffers.workerId, workerId), eq(directOffers.status, 'pending'))),
+  ]);
+
+  const proofs = await listWorkerProofs(workerId);
+
+  return {
+    totalLogs: statuses.length,
+    verifiedLogs: statuses.filter((row) => row.status === 'verified').length,
+    awaitingVerificationLogs: statuses.filter((row) => row.status === 'pending').length,
+    pendingInvitations: invitations.length,
+    recent: proofs.proofs.slice(0, 3),
+  };
 }
