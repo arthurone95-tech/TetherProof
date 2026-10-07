@@ -246,10 +246,14 @@ export function LoginView() {
                 className="flex flex-col gap-3 border-t border-brand-100 pt-5"
               >
                 <p className="text-sm text-ink-600">Didn’t get a code, or it expired?</p>
-                <input type="hidden" name="email" value={email} />
-                {/* The address field above is the visible one; when it was left empty
-                    here the request form needs its own, so show it only if we have
-                    nothing carried over from registration. */}
+                {/*
+                  Exactly one email carrier: a hidden one when registration carried
+                  an address over, a visible box when it did not. Rendering the
+                  hidden input unconditionally would put an empty value first under
+                  this name, and `formData.get('email')` reads the first one — so
+                  "Send a new code" would always refuse to send.
+                */}
+                {email ? <input type="hidden" name="email" value={email} /> : null}
                 {email ? null : (
                   <Field
                     name="email"

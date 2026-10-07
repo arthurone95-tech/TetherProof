@@ -59,6 +59,20 @@ export class AppError extends Error {
   }
 
   /**
+   * The API is fine but a service it depends on is not — here, the geocoding
+   * provider. The message stays shown because it tells the caller what to do
+   * next, unlike a 500 whose honesty is a generic sentence.
+   */
+  static serviceUnavailable(message: string): AppError {
+    return new AppError({
+      code: ERROR_CODES.SERVICE_UNAVAILABLE,
+      message,
+      status: 503,
+      expose: true,
+    });
+  }
+
+  /**
    * Builds an error with a specific contract code and status.
    *
    * Used where the meaning matters to a client branching on `code`, such as a

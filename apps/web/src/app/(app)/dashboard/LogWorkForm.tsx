@@ -1,6 +1,7 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState } from 'react';
+import { apiFetch } from '@/lib/api';
 import { submitProof } from '@/lib/actions';
 import { EMPTY_PROOF, type ProofFormState, type ProofSubmissionView } from '@/lib/form-state';
 import { locateMessage, useGeolocation } from '@/lib/use-geolocation';
@@ -45,8 +46,27 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
   const [state, formAction] = useActionState(submitProof, EMPTY_PROOF as ProofFormState);
 
   const [kind, setKind] = useState<MediaKind>('photo');
+
+  // Where the job happened. `gps` is the stored "latitude,longitude" value; the
+  // rest is what the worker sees and how they typed it. The GPS button fills the
+  // value in and a place name is looked up for it, so a person is handed an area
+  // name with coordinates underneath instead of being asked to read a number
+  // pair. Typing coordinates remains, but as a fallback, not the main event.
   const [gps, setGps] = useState('');
+  const [placeName, setPlaceName] = useState<string | null>(null);
+  const [naming, setNaming] = useState(false);
+  const [placeFailed, setPlaceFailed] = useState(false);
+  const [typingCoords, setTypingCoords] = useState(false);
+  const [draftLat, setDraftLat] = useState('');
+  const [draftLng, setDraftLng] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  // The location section's own message. It is separate from `notice` (which is
+  // the evidence section's voice), so the two blocks can never repeat each
+  // other's errors under both fieldsets.
+  const [coordsNotice, setCoordsNotice] = useState<string | null>(null);
+  // Discards a naming answer that arrives after the location was replaced or
+  // cleared, so a slow network cannot slap yesterday's name onto today's place.
+  const nameRequestRef = useRef(0);
 
   // `undefined` means "not asked yet", which is what the server rendered too, so
   // the button for it appears after mount rather than disagreeing with the HTML.
@@ -180,9 +200,93 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
     }
   }
 
+  /**
+   * Shares the phone's GPS fix and names the place it returned.
+   *
+   * The coordinates are the record; the name is presentation. So a place that
+   * cannot be named still gets its coordinates stored, and the sentence merely
+   * says so instead of pretending the sensor failed.
+   */
   async function shareLocation(): Promise<void> {
     const fix = await locate();
-    if (fix) setGps(`${fix.latitude.toFixed(6)},${fix.longitude.toFixed(6)}`);
+    if (!fix) return;
+
+    const lat = fix.latitude.toFixed(6);
+    const lon = fix.longitude.toFixed(6);
+    setGps(`${lat},${lon}`);
+    setPlaceName(null);
+    setPlaceFailed(false);
+    setTypingCoords(false);
+    setCoordsNotice(null);
+    await namePlace(lat, lon);
+  }
+
+  async function namePlace(lat: string, lon: string): Promise<void> {
+    const request = ++nameRequestRef.current;
+    setNaming(true);
+    try {
+      const { placeName: name } = await apiFetch<{ placeName: string | null }>(
+        `/locations/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`,
+      );
+      if (nameRequestRef.current !== request) return;
+      setPlaceName(name);
+      setPlaceFailed(name === null);
+    } catch {
+      if (nameRequestRef.current !== request) return;
+      setPlaceName(null);
+      setPlaceFailed(true);
+    } finally {
+      if (nameRequestRef.current === request) setNaming(false);
+    }
+  }
+
+  function openManualCoords(): void {
+    const [lat = '', lon = ''] = gps.split(',');
+    setDraftLat(lat);
+    setDraftLng(lon);
+    setTypingCoords(true);
+    setCoordsNotice(null);
+  }
+
+  /**
+   * Accepts a hand-typed pair, validating it with the same rule the submission
+   * repeats before it reaches the API, so a bad pair is fixed where it was typed.
+   */
+  function saveManualCoords(): void {
+    const lat = draftLat.trim();
+    const lon = draftLng.trim();
+    const candidate = `${lat},${lon}`;
+
+    if (!/^-?\d{1,3}(\.\d+)?,-?\d{1,3}(\.\d+)?$/.test(candidate)) {
+      setCoordsNotice('Enter coordinates as latitude, longitude — for example 5.6037,-0.1870.');
+      return;
+    }
+    const latNum = Number(lat);
+    const lonNum = Number(lon);
+    if (Math.abs(latNum) > 90 || Math.abs(lonNum) > 180) {
+      setCoordsNotice(
+        'Those coordinates are out of range (latitude −90 to 90, longitude −180 to 180).',
+      );
+      return;
+    }
+
+    setGps(candidate);
+    setPlaceName(null);
+    setPlaceFailed(false);
+    setTypingCoords(false);
+    setCoordsNotice(null);
+    void namePlace(lat, lon);
+  }
+
+  function clearLocation(): void {
+    nameRequestRef.current += 1;
+    setGps('');
+    setPlaceName(null);
+    setPlaceFailed(false);
+    setTypingCoords(false);
+    setDraftLat('');
+    setDraftLng('');
+    setCoordsNotice(null);
   }
 
   const evidenceError = state.field === 'media_file' ? state.error : undefined;
@@ -199,7 +303,7 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
         hint="One skill per job. It joins the block you already have for it, or starts one."
       />
 
-      <fieldset className="rounded-xl border border-brand-100 p-4">
+      <fieldset className="min-w-0 rounded-xl border border-brand-100 p-4">
         <legend className="px-1 text-sm font-medium text-ink-900">The evidence</legend>
 
         <div role="group" aria-label="Kind of evidence" className="flex gap-2">
@@ -290,31 +394,136 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
         hint="At least 10 characters. The person confirming it reads this, so say what was actually done."
       />
 
-      <fieldset className="rounded-xl border border-brand-100 p-4">
+      <fieldset className="min-w-0 rounded-xl border border-brand-100 p-4">
         <legend className="px-1 text-sm font-medium text-ink-900">Where it happened</legend>
-        <p className="mb-4 text-sm text-ink-600">
-          Optional, and never read from the file itself: whatever location the photo carries is
-          stripped before it is stored, so this box is the only record of place there is.
+        <p className="mb-3 text-sm text-ink-600">
+          Optional. Use your phone&apos;s GPS and the area is named for you — the coordinates are
+          kept, but read as the small line under it, not as a form to fill.
         </p>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={shareLocation}
-            disabled={locateState === 'locating'}
-            className="inline-flex min-h-11 items-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {locateState === 'locating'
-              ? 'Finding you…'
-              : gps
-                ? 'Update my location'
-                : 'Use my location'}
-          </button>
+        {/*
+          The stored value is carried invisibly: the API keeps latitude,longitude
+          and nothing else, so the box has to exist for the form, not for the
+          worker. When it is absent the submission reads the empty carrier as "I
+          chose not to share where this happened".
+        */}
+        <input type="hidden" name="submissionGps" value={gps} />
 
-          {!gps ? (
-            <span className="text-sm text-ink-600">Not shared, which is fine.</span>
-          ) : null}
-        </div>
+        {!gps && !typingCoords ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={shareLocation}
+              disabled={locateState === 'locating'}
+              className="inline-flex min-h-11 items-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {locateState === 'locating' ? 'Finding you…' : 'Use my location'}
+            </button>
+            <button
+              type="button"
+              onClick={openManualCoords}
+              className="inline-flex min-h-11 items-center rounded-xl border border-brand-100 px-4 text-sm font-semibold text-ink-600 transition-colors hover:border-brand-600 hover:text-brand-700"
+            >
+              Type coordinates instead
+            </button>
+            <span className="text-sm text-ink-600">Leaving it out is fine too.</span>
+          </div>
+        ) : null}
+
+        {gps ? (
+          <div className="flex flex-col gap-3">
+            <div className="rounded-xl border border-brand-100 bg-brand-50/60 px-4 py-3">
+              <p className="text-base font-semibold text-ink-900">
+                {naming
+                  ? 'Naming this place…'
+                  : placeName ?? 'These coordinates could not be named'}
+              </p>
+              <p className="mt-0.5 font-mono text-xs text-ink-600">{prettyCoords(gps)}</p>
+              {placeFailed ? (
+                <p className="mt-1 text-xs text-ink-600">
+                  The area could not be named, but the coordinates were saved.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={shareLocation}
+                disabled={locateState === 'locating'}
+                className="inline-flex min-h-11 items-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {locateState === 'locating' ? 'Finding you…' : 'Update my location'}
+              </button>
+              {!typingCoords ? (
+                <button
+                  type="button"
+                  onClick={openManualCoords}
+                  className="inline-flex min-h-11 items-center rounded-xl border border-brand-100 px-4 text-sm font-semibold text-ink-600 transition-colors hover:border-brand-600 hover:text-brand-700"
+                >
+                  Type coordinates
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={clearLocation}
+                className="text-sm font-semibold text-ink-600 hover:text-ink-900"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {typingCoords ? (
+          <div className="mt-3 rounded-xl border border-brand-100 p-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-ink-900">
+                Latitude
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  value={draftLat}
+                  onChange={(event) => setDraftLat(event.target.value)}
+                  placeholder="5.6037"
+                  className="min-h-11 rounded-xl border border-brand-100 bg-white px-3 text-base text-ink-900 placeholder:text-ink-600/60"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-ink-900">
+                Longitude
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  value={draftLng}
+                  onChange={(event) => setDraftLng(event.target.value)}
+                  placeholder="-0.1870"
+                  className="min-h-11 rounded-xl border border-brand-100 bg-white px-3 text-base text-ink-900 placeholder:text-ink-600/60"
+                />
+              </label>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={saveManualCoords}
+                className="inline-flex min-h-11 items-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50"
+              >
+                Save location
+              </button>
+              <button
+                type="button"
+                onClick={() => setTypingCoords(false)}
+                className="text-sm font-semibold text-ink-600 hover:text-ink-900"
+              >
+                Cancel
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-ink-600">
+              Stored as latitude, longitude. The place name is looked up from these too.
+            </p>
+          </div>
+        ) : null}
 
         {locateState !== 'locating' && locateMessage(locateState) ? (
           <p role="status" className="mt-2 text-sm text-ink-600">
@@ -322,43 +531,17 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
           </p>
         ) : null}
 
-        {/*
-          A box, not a hidden input. The refusal messages above both end with
-          "You can type the coordinates instead", and a field nobody can see is
-          not an alternative to anything — it is a dead end with a promise
-          attached. The sensor fills this in; the keyboard is a full peer.
-        */}
-        <div className="mt-4 flex flex-col gap-1.5">
-          <label htmlFor="submissionGps" className="text-sm font-medium text-ink-900">
-            Coordinates
-          </label>
-          <input
-            id="submissionGps"
-            name="submissionGps"
-            value={gps}
-            onChange={(event) => setGps(event.target.value)}
-            placeholder="5.6037,-0.1870"
-            inputMode="decimal"
-            autoComplete="off"
-            aria-invalid={state.field === 'submissionGps' ? true : undefined}
-            aria-describedby={
-              state.field === 'submissionGps'
-                ? 'submissionGps-error submissionGps-hint'
-                : 'submissionGps-hint'
-            }
-            className={`min-h-12 w-full rounded-xl border bg-white px-4 text-base text-ink-900 placeholder:text-ink-600/60 ${
-              state.field === 'submissionGps' ? 'border-red-700' : 'border-brand-100'
-            }`}
-          />
-          <p id="submissionGps-hint" className="text-sm text-ink-600">
-            Latitude, longitude. The button fills this in, or type it: 5.6037,-0.1870
+        {coordsNotice ? (
+          <p role="alert" className="mt-3 text-sm font-medium text-red-800">
+            {coordsNotice}
           </p>
-          {state.field === 'submissionGps' ? (
-            <p id="submissionGps-error" role="alert" className="text-sm font-medium text-red-800">
-              {state.error}
-            </p>
-          ) : null}
-        </div>
+        ) : null}
+
+        {state.field === 'submissionGps' ? (
+          <p role="alert" className="mt-2 text-sm font-medium text-red-800">
+            {state.error}
+          </p>
+        ) : null}
       </fieldset>
 
       <Field
@@ -510,4 +693,13 @@ function formatClock(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+/** The stored pair, with the GPS precision taken off for reading. */
+function prettyCoords(gps: string): string {
+  const [lat, lon] = gps.split(',');
+  const latNum = Number(lat);
+  const lonNum = Number(lon);
+  if (Number.isFinite(latNum) && Number.isFinite(lonNum)) return `${latNum}, ${lonNum}`;
+  return gps;
 }

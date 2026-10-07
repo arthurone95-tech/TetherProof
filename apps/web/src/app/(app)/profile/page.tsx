@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { Card } from '@/components/ui/Card';
+import { signOut } from '@/lib/actions';
 import { currentProfile } from '@/lib/server/api';
+import { SignOutButton } from '@/components/shell/SignOutButton';
 import { ProfileForm } from './ProfileForm';
 
 export const metadata: Metadata = {
@@ -42,6 +44,16 @@ export default async function ProfilePage() {
           organizationName={profile.organizationName}
           locationGps={profile.locationGps}
         />
+      </Card>
+
+      <Card title="Sign out">
+        <p className="text-sm text-ink-600">
+          Ends your session on this device only. Your account and your proof record stay on the
+          platform, and you can sign back in whenever you need to.
+        </p>
+        <form action={signOut} className="mt-4">
+          <SignOutButton />
+        </form>
       </Card>
     </div>
   );

@@ -39,7 +39,7 @@ export function useGeolocation() {
       navigator.geolocation.getCurrentPosition(
         (value) => resolve(value),
         () => resolve(null),
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 },
       );
     });
 

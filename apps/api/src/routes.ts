@@ -6,6 +6,7 @@ import {
   inviteRouter,
 } from './modules/employers/routes.js';
 import { healthRouter } from './modules/health/routes.js';
+import { locationRouter } from './modules/locations/routes.js';
 import { proofRouter } from './modules/proofs/routes.js';
 import { verificationRouter } from './modules/verifications/routes.js';
 
@@ -16,6 +17,10 @@ export const apiRouter = Router();
 apiRouter.use('/', healthRouter);
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/verifications', verificationRouter);
+
+// Turns the browser's GPS fixes into place names. Public and rate limited; see
+// the module for why it does not sit with the signed-in routes.
+apiRouter.use('/locations', locationRouter);
 
 // Mounted at `/workers` so the full path is `/api/v1/workers/proofs`, matching
 // the API documentation. A proof is owned by the worker who performed the work.

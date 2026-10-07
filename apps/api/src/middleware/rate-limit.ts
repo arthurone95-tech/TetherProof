@@ -84,6 +84,21 @@ export const verificationRateLimiter = build(
   'Too many requests. Please wait a moment and try again.',
 );
 
+/**
+ * Applies to reverse-geocoding.
+ *
+ * Every accepted request costs an outbound call to the geocoding provider, and
+ * the endpoint needs no session, so an anonymous caller could otherwise burn
+ * the provider's budget or the API's egress by repeating it. The window is
+ * wide because a worker legitimately locates a handful of jobs across a
+ * session.
+ */
+export const locationRateLimiter = build(
+  60,
+  15 * 60 * 1000,
+  'Too many location requests. Please wait a few minutes and try again.',
+);
+
 export const globalRateLimiter = build(300, 60 * 1000, 'Too many requests. Please slow down.');
 
 export const rateLimitConfig = {

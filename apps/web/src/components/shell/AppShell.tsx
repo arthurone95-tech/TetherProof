@@ -1,8 +1,6 @@
 import Link from 'next/link';
-import { signOut } from '@/lib/actions';
 import type { NavItem } from '@/lib/navigation';
 import { PrimaryNav } from './PrimaryNav';
-import { SignOutButton } from './SignOutButton';
 
 interface AppShellProps {
   /** Where the brand mark goes: the member's own home, not the marketing page. */
@@ -16,10 +14,15 @@ interface AppShellProps {
 /**
  * The frame every signed-in page sits inside.
  *
- * Before this, each page drew its own brand line and its own sign-out button, so
- * moving between two screens meant the chrome disappeared and reappeared, and the
- * only way to reach a third screen was to know its address. One shell fixes both:
- * navigation is always in the same place, and the current page is marked on it.
+ * Before this, each page drew its own brand line, so moving between two screens
+ * meant the chrome disappeared and reappeared, and the only way to reach a third
+ * screen was to know its address. One shell fixes that: navigation is always in
+ * the same place, and the current page is marked on it.
+ *
+ * Sign-out deliberately does not live here. It is the one action a member never
+ * needs in a hurry, and keeping it out of a bar every page shares means it cannot
+ * be hit by a stray tap on the way to something else. It lives on the profile
+ * page instead, next to the account it ends.
  *
  * The header is sticky rather than fixed, so it occupies layout space and never
  * covers the first line of a heading. The tab row for a phone is a sibling rather
@@ -44,9 +47,6 @@ export function AppShell({ home, identity, items, children }: AppShellProps) {
               <PrimaryNav items={items} variant="bar" />
             </div>
             <span className="hidden max-w-48 truncate text-sm text-ink-600 sm:block">{identity}</span>
-            <form action={signOut}>
-              <SignOutButton />
-            </form>
           </div>
         </div>
       </header>

@@ -36,7 +36,7 @@ Credentials are owned by Supabase Auth. These endpoints create accounts and exch
   ```
 At least one of `phoneNumber` or `email` is required. Passwords must be at least 12 characters and include an uppercase letter, a lowercase letter, and a number.
 
-Those rules are defined once, in `passwordProblems()` in `@tetherproof/shared`, and both this schema and the web registration form check the same list — so the two cannot disagree about what is acceptable. A refusal comes back with its field-level reasons in `details` (see **§7**), which is how a client knows whether to correct the email or the password.
+Those rules are defined once, in `passwordProblems()` in `@tetherproof/shared`, and both this schema and the web registration form check the same list — so the two cannot disagree about what is acceptable. A refusal comes back with its field-level reasons in `details` (see **§8**), which is how a client knows whether to correct the email or the password.
 
 `redirectOrigin` is **optional**. It is the origin a confirmation link returns to when the member taps the link in their email, and becomes `${redirectOrigin}/auth/callback`. Supplied by the web client, which knows the origin the request actually arrived on; a caller talking to the API directly may omit it, in which case the API falls back to `NEXT_PUBLIC_SITE_URL`, then `WEB_BASE_URL`, then the first entry in `CORS_ORIGINS`, and finally to Supabase's own Site URL.
 
@@ -469,7 +469,50 @@ inferred, because an approval that cannot be audited is not a control worth havi
 
 ---
 
-## 7. Standard Error Response Format
+## 7. Location Endpoints
+
+A single public helper behind the web app's "Use my location": it turns the
+phone's GPS coordinates into a place/area name, so a worker sees "Patrice
+Lumumba Road, Accra, Ghana" instead of being asked to read a number pair. It is
+public (like the health probe) because naming a coordinate pair carries no
+per-account data; the CORS allow-list and a rate limiter are what keep the
+surface honest.
+
+### A. Reverse Geocode
+
+* **Endpoint:** `GET /api/v1/locations/reverse?lat={lat}&lon={lon}`
+* **Description:** Names the place nearest a coordinate pair. The name is
+  presentation only — the web app keeps the coordinates as the stored record —
+  and it is never persisted on a proof.
+* **Query Parameters:** `lat` and `lon` in decimal degrees, coerced from text
+  and range-checked (`lat` −90..90, `lon` −180..180).
+* **Authorization:** none.
+* **Rate limit:** 60 requests per 15 minutes per IP.
+
+Response (200 OK):
+
+```json
+{
+  "placeName": "Patrice Lumumba Road, Accra, Ghana"
+}
+```
+
+`placeName` may be `null` when the provider has nothing to call that spot.
+
+Possible errors: `400` malformed or out-of-range coordinates (`VALIDATION_ERROR`,
+with the offending parameter under `details`), `429` too many requests, `503`
+the geocoding provider did not answer (`SERVICE_UNAVAILABLE`) — the caller
+keeps the coordinates either way.
+
+The provider is Nominatim (OpenStreetMap), reached only from
+`apps/api/src/modules/locations/service.ts`, which is the one file that knows
+the remote address. Requests carry an identifying User-Agent and a 6-second
+timeout, satisfying the provider's usage policy at the low volume this endpoint
+sees.
+
+---
+
+## 8. Standard Error Response Format
 All error responses follow a consistent JSON structure:
 
 ```json

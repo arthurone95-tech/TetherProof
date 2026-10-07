@@ -2150,3 +2150,144 @@ whenever the API is the thing answering, so the two situations now read differen
 Signing in on the deployed site still requires a hosted API with `NEXT_PUBLIC_API_BASE_URL` set
 for Production (and redeployed, since `NEXT_PUBLIC_*` values are inlined at build time). That
 deployment decision is pending; this entry only fixes how the waiting period reads.
+
+---
+
+## E-043: After "Log this work" the whole page was replaced by "That page did not load"
+
+* **Status:** Fix verified end-to-end on the production build (2026-10-07); live confirmation on
+  the deployed site follows the deploy.
+* **Found:** 2026-10-07, worker on a phone at the deployed site. After selecting a job, a photo,
+  a description, and a phone number, tapping **Log this work** opened a screen reading *"That page
+  did not load — Nothing you entered was lost, and nothing was saved either"* instead of the
+  submission result.
+* **Related:** `apps/web/src/app/(app)/dashboard/page.tsx`, `apps/web/src/app/(app)/dashboard/LogWorkForm.tsx`,
+  `apps/web/src/app/(app)/error.tsx`, `doc/13` E-042.
+
+### Description
+
+The submission is a server action (`submitProof`), and it never throws: every failure becomes
+form state. The error boundary came from a different step. Once a form action settles, Next.js
+re-renders the current route, and the dashboard was a server component that also fetched
+`/invites/offers` (the "Waiting for you" card) and the caller's profile. Either fetch throwing on
+that re-render let `(app)/error.tsx` replace the entire screen — including the "Work logged" panel
+the action had just produced.
+
+The boundary's copy made it worse. "Nothing was saved either" is only true when the crash happened
+before anything ran; after a server action it may well have landed, and the sentence then told the
+worker the opposite of the truth. Repeating the submission "until it works" could record the same
+job twice.
+
+### Resolution
+
+* Removed the dashboard's only other server-side fetch. The "Waiting for you" card is gone — it
+  duplicated the Invitations tab — so the post-submission re-render now re-executes just the auth
+  profile fetch that every signed-in page already depends on.
+* Rewrote the error boundary copy to say *check* instead of promise: if the reader had just logged
+  work, confirm whether it saved before submitting again, because a second attempt could record the
+  job twice.
+* The form's own reachability errors (E-042) remain the primary failure path for a dead API.
+
+### Verification
+
+* The signed-in dashboard renders a single "Log completed work" card; the page HTML has no
+  `/invites/offers` fetch and none of the removed cards.
+* The complete submission ran end-to-end against the production build: the `submitProof` action
+  decoded and validated the form, uploaded the multipart proof to the API, scrubbed the image,
+  created the proof row, and re-rendered the dashboard with the **Work logged** panel describing
+  the result.
+* One environment note surfaced during the run: this browser harness rewrites the `Origin` header
+  of React's server-action POSTs to the literal string `null`, which crashes Next's own action
+  handler before application code runs (see E-046). Replaying the identical request with a normal
+  `Origin` header succeeded, so the application flow itself is sound. A live check on the reported
+  device is the final step.
+
+---
+
+## E-044: "Use my location" handed the worker a coordinate box instead of a place
+
+* **Status:** Fix verified (2026-10-07): endpoint confirmed live; placement and fallback flows
+  confirmed on the production build. Remaining: the on-device check after deploy.
+* **Found:** 2026-10-07, worker testing on a phone: tapping **Use my location** filled a large
+  text box with `5.6037,-0.1870`. The sensor worked, but the interface presented the outcome as
+  numbers to interpret, which is the opposite of how people experience a place.
+* **Related:** `apps/web/src/app/(app)/dashboard/LogWorkForm.tsx`, `apps/web/src/lib/use-geolocation.ts`,
+  `apps/api/src/modules/locations/*`, `doc/07` §7.
+
+### Description
+
+The workspace showed the detected location as a big editable coordinates field and told the worker
+"Latitude, longitude. The button fills this in, or type it." A normal user understands a
+place/community/area name, not a number pair; the primary experience should be the name, with
+coordinates as secondary detail and typing as a fallback. On top of that, a 10-second geolocation
+timeout made a slow GPS fix read as a failure.
+
+### Resolution
+
+* New public endpoint `GET /api/v1/locations/reverse?lat=..&lon=..` names a coordinate pair via
+  Nominatim (OpenStreetMap) — keyless, no billing setup, an identifying User-Agent, a 6-second
+  timeout, and a 60-per-15-minutes per-IP rate limit. The provider address lives only in
+  `apps/api/src/modules/locations/service.ts`.
+* The location section in the Workspace now leads with the detected **area name** and shows the
+  coordinates as a small secondary line. Naming failure is non-fatal: coordinates are always kept,
+  with a sentence saying so.
+* Typing is a two-small-field fallback ("Type coordinates instead"), validated with the same rule
+  the submission repeats, and the stored value travels in a hidden field so the API contract
+  (`submissionGps` = `latitude,longitude`) is unchanged.
+* Geolocation timeout raised 10 s to 15 s.
+
+### Verification
+
+* `tsc --noEmit` passes for both workspaces.
+* The endpoint answered live with `{"placeName":"Black Star Square, Accra, Ghana"}` for a real
+  coordinate, and a `400` with field-level details for out-of-range input.
+* On the production build: the GPS button named the location ("Black Star Square, Accra, Ghana")
+  with the coordinates as the small secondary line; typing `5.6037,-0.1870` produced
+  "Patrice Lumumba Road, Accra, Ghana"; the stored value stayed `latitude,longitude` in the hidden
+  field, and a stale name from a previous fix could not leak into a new submission. An on-device
+  check after deploy confirms the phone experience.
+
+---
+
+## E-045: "Send a new code" refused every attempt even with the email filled in
+
+* **Status:** Resolved — 2026-10-07. Fix verified: the code request succeeds.
+* **Found:** 2026-10-07 on the sign-in page. The request-code form rendered two `email` inputs and
+  the hidden one came first, so `formData.get('email')` always returned the empty hidden input and
+  the action answered "Enter your email address." no matter what was typed.
+* **Related:** `apps/web/src/app/login/LoginView.tsx`.
+
+### Description
+
+A hidden email input was there to carry the email between steps, but when there was no carried
+email it still rendered with an empty value, sitting before the visible input in the form. A server
+action reads a form by field name, so it kept reading the hidden empty one.
+
+### Resolution
+
+The hidden input now renders only when there is a carried email to carry. With one email input in
+the form, `formData.get('email')` reads what the person typed.
+
+### Verification
+
+The request-code action runs from the fixed form and the code request succeeds. No other change to
+the sign-in page.
+
+---
+
+## E-046: Server-action POSTs crash before the action runs when the client sends `Origin: null`
+
+* **Status:** Documented; not an application defect. Root-caused so later verification runs do not
+  chase it as an app bug.
+* **Found:** 2026-10-07 while verifying the proof-submission flow. React's server-action POSTs
+  arrived at Next.js with `Origin: null`; Next's action handler calls `new URL(req.headers['origin'])`
+  (`next/dist/server/app-render/action-handler.js`) and throws `ERR_INVALID_URL` with `input: 'null'`
+  before any application code runs. Both the dev and the production runtime hit it.
+* **Evidence it is environmental:** plain `fetch` POSTs from the same page carry the correct origin
+  (confirmed with a local echo server and a temporary server-side header log); only React's own
+  form-action dispatch is affected, and the value is already `null` when it reaches the server.
+* **Why it is not the reporter's bug (E-043):** a browser on the deployed site sends its own origin,
+  so this path cannot fire for the person who hit the work-log error page.
+* **Workaround used for verification:** replaying the identical request from outside the harness
+  with a normal `Origin` header ran the full submission to success ("Work logged" panel rendered,
+  proof row created).

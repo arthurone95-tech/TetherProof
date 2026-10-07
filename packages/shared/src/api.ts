@@ -19,6 +19,8 @@ export const ERROR_CODES = {
   /** A one-time sign-in code was absent, malformed, wrong, or already used. */
   AUTH_CODE_INVALID: 'AUTH_CODE_INVALID',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
+  /** A dependency the API depends on did not answer; the API itself is up. */
+  SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
