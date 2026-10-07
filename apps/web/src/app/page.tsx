@@ -125,6 +125,26 @@ export default async function HomePage({
           </Card>
         ))}
       </div>
+
+      <footer className="border-t border-brand-100 pt-6">
+        <nav
+          aria-label="Legal and support pages"
+          className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-ink-600"
+        >
+          <Link href="/about" className="hover:text-ink-900">
+            About
+          </Link>
+          <Link href="/help" className="hover:text-ink-900">
+            Help
+          </Link>
+          <Link href="/terms" className="hover:text-ink-900">
+            Terms &amp; Conditions
+          </Link>
+          <Link href="/privacy" className="hover:text-ink-900">
+            Privacy Policy
+          </Link>
+        </nav>
+      </footer>
     </main>
   );
 }

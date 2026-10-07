@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import type { NavItem } from '@/lib/navigation';
+import type { MoreItem, NavItem } from '@/lib/navigation';
+import { MoreMenu } from './MoreMenu';
 import { PrimaryNav } from './PrimaryNav';
 
 interface AppShellProps {
@@ -8,6 +9,8 @@ interface AppShellProps {
   /** Who is signed in, as the header states it. */
   identity: string;
   items: NavItem[];
+  /** Secondary destinations behind the more/hamburger menu. */
+  more: MoreItem[];
   children: React.ReactNode;
 }
 
@@ -18,6 +21,11 @@ interface AppShellProps {
  * meant the chrome disappeared and reappeared, and the only way to reach a third
  * screen was to know its address. One shell fixes that: navigation is always in
  * the same place, and the current page is marked on it.
+ *
+ * The four primary tabs render twice — a top bar on a wide screen, a bottom
+ * row on a phone — from the same list, with the phone row preferring each
+ * tab's short label. Secondary destinations share one "more" menu in the
+ * header, which is a hamburger on a phone and a labelled control on desktop.
  *
  * Sign-out deliberately does not live here. It is the one action a member never
  * needs in a hurry, and keeping it out of a bar every page shares means it cannot
@@ -30,11 +38,11 @@ interface AppShellProps {
  * it the containing block for a fixed descendant and pin the tabs to the header
  * instead of the bottom of the screen.
  */
-export function AppShell({ home, identity, items, children }: AppShellProps) {
+export function AppShell({ home, identity, items, more, children }: AppShellProps) {
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-40 border-b border-brand-100 bg-white">
-        <div className="mx-auto flex w-full max-w-5xl items-center gap-3 px-4 py-2.5">
+        <div className="mx-auto flex w-full max-w-5xl items-center gap-3 px-4 py-3">
           <Link
             href={home}
             className="text-sm font-semibold tracking-wide text-brand-600 uppercase hover:text-brand-700"
@@ -42,10 +50,11 @@ export function AppShell({ home, identity, items, children }: AppShellProps) {
             TetherProof
           </Link>
 
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-1 sm:gap-3">
             <div className="hidden md:block">
               <PrimaryNav items={items} variant="bar" />
             </div>
+            <MoreMenu items={more} />
             <span className="hidden max-w-48 truncate text-sm text-ink-600 sm:block">{identity}</span>
           </div>
         </div>

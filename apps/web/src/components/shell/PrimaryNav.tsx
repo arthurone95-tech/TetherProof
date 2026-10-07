@@ -8,8 +8,9 @@ interface PrimaryNavProps {
   items: NavItem[];
   /**
    * `bar` sits in the header on a wide screen; `tabs` is the row pinned to the
-   * bottom of a phone, where four labels across a header would be neither
-   * readable nor hit accurately.
+   * bottom of a phone. Labels are responsive: the tabs variant prefers each
+   * item's short mobile label (Home, Work) so four tabs stay readable with a
+   * thumb, while the bar shows the full destination names.
    */
   variant: 'bar' | 'tabs';
 }
@@ -49,7 +50,7 @@ export function PrimaryNav({ items, variant }: PrimaryNavProps) {
                 >
                   <NavIcon name={item.icon} className="h-5 w-5" />
                 </span>
-                {item.label}
+                {item.mobileLabel ?? item.label}
               </Link>
             </li>
           );
@@ -105,6 +106,14 @@ function NavIcon({ name, className }: { name: NavItem['icon']; className: string
   };
 
   switch (name) {
+    case 'home':
+      return (
+        <svg {...shared}>
+          <path d="m4 11.5 8-7 8 7" />
+          <path d="M6 9.5V19a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9.5" />
+          <path d="M10 20v-5h4v5" />
+        </svg>
+      );
     case 'workspace':
       return (
         <svg {...shared}>
@@ -112,6 +121,13 @@ function NavIcon({ name, className }: { name: NavItem['icon']; className: string
           <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
           <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
           <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
+        </svg>
+      );
+    case 'logs':
+      return (
+        <svg {...shared}>
+          <path d="M8.5 6.5h12M8.5 12h12M8.5 17.5h12" />
+          <path d="M4 6.5h1M4 12h1M4 17.5h1" />
         </svg>
       );
     case 'invitations':

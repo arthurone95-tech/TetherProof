@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import { AppShell } from '@/components/shell/AppShell';
-import { ROLE_LABEL, homeFor, navFor } from '@/lib/navigation';
+import { ROLE_LABEL, homeFor, moreFor, navFor } from '@/lib/navigation';
 import { currentProfile } from '@/lib/server/api';
 
 /**
@@ -26,7 +26,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   const identity = profile.fullName ? `${profile.fullName} · ${roleLabel}` : roleLabel;
 
   return (
-    <AppShell home={homeFor(profile.role)} identity={identity} items={navFor(profile.role)}>
+    <AppShell home={homeFor(profile.role)} identity={identity} items={navFor(profile.role)} more={moreFor(profile.role)}>
       {children}
     </AppShell>
   );
