@@ -13,6 +13,13 @@ This document defines the user interface (UI) and user experience (UX) standards
 * **Zero-Friction External Views:** Client verification pages (accessed via SMS/WhatsApp links) must require zero app installation, zero sign-up, and complete their action in a single tap.
 * **Human & Intentional Aesthetics:** Avoid robotic or cluttered layouts. Use clean typography, intuitive spacing, and clear visual hierarchy.
 
+### 2.1 Iconography
+* **One icon set, from Lucide:** every icon is imported by name from `lucide-react`. A product whose subject is verified capability cannot have three icon families — mismatched geometry is what makes an interface read as unfinished. Hand-drawn SVG is not accepted.
+* **One stroke weight:** Lucide's default is 2, slightly heavier than this interface has always used, so each icon passes `strokeWidth={ICON_STROKE_WIDTH}` (`1.8`) rather than relying on the default. The constant lives in `apps/web/src/components/ui/icon.ts` and is the only place the weight is defined.
+* **Size comes from Tailwind:** icons are sized by a class at the call site (`h-6 w-6`, `h-5 w-5`, `h-4 w-4`) so they sit on the same scale as the text and boxes around them, at any breakpoint. Icons are vectors, so a larger size on a wide screen stays sharp.
+* **Colour is inherited:** icons are never given a colour of their own — they take `currentColor` from the container, which is how hover and active states already work.
+* **Meaning never rests on the icon alone:** a decorative icon is `aria-hidden`; an icon that is the only content of a control carries an `aria-label` on the control, so a screen reader announces the action and not the shape.
+
 ---
 
 ## 3. Persona-Specific UI Views & Flows

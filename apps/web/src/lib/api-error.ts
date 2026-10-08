@@ -73,6 +73,24 @@ export function isAuthFailure(error: unknown): boolean {
 }
 
 /**
+ * True when the API refused the *credentials* — the password or the email did not
+ * match — rather than refusing the request, the account or the session.
+ *
+ * The distinction decides where a form puts the message. Only this case is
+ * something the person can fix by editing the password box, so only this case
+ * points the error at it. Everything else — a 500, a 503, a service that could
+ * not be reached — is shown at the top of the form instead, because putting
+ * "we could not reach the server" under the password box tells the reader their
+ * password is the problem, which is the one thing it is not.
+ *
+ * Narrower than `isAuthFailure`, which also covers a session that has expired on
+ * an already-signed-in page.
+ */
+export function isCredentialRefusal(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.status === 401;
+}
+
+/**
  * The failure behind a form's "please try again" when nothing answered at all.
  *
  * Raised by both API clients when `fetch` itself rejects — nothing listening on

@@ -8,6 +8,8 @@
  * and the account's name is shown where the account is read, not stamped onto a
  * circle everywhere.
  */
+import { User } from 'lucide-react';
+import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 export function ProfileAvatar({
   avatarUrl,
   size = 'md',
@@ -37,18 +39,7 @@ export function ProfileAvatar({
       aria-hidden="true"
       className={`${frame} flex shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-600 ring-1 ring-brand-100`}
     >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.8}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className={iconSize}
-      >
-        <circle cx="12" cy="8.5" r="3.5" />
-        <path d="M5 19.5a7 7 0 0 1 14 0" />
-      </svg>
+      <User className={iconSize} strokeWidth={ICON_STROKE_WIDTH} />
     </div>
   );
 }

@@ -299,10 +299,35 @@ export async function confirm(input: ConfirmInput): Promise<AuthResponse> {
 }
 
 /**
+ * What a person is told when the identity provider could not answer at all.
+ *
+ * Deliberately not a statement about their credentials: see `login` for why the
+ * two cases must not share a message. Points at the sign-in code as the way
+ * forward, because that path does not depend on the password being remembered
+ * correctly and does not depend on this one request succeeding.
+ */
+const SIGN_IN_UNAVAILABLE =
+  'We could not sign you in just now. Check your connection and try again, or use a sign-in code instead.';
+
+/**
  * Verifies credentials through Supabase Auth.
  *
  * The Supabase message is intentionally not forwarded, so an attacker cannot
  * use the response to learn whether a phone number or email is registered.
+ *
+ * Every provider error used to become `Incorrect sign-in details.`, which was
+ * false in the case that mattered most: Supabase reports a rejected password and
+ * a network it could not reach through the same field, so a person offline, or
+ * behind a captive portal, was told their password was wrong and changed it —
+ * the one action that turns a temporary problem into a real one. Only the code
+ * that genuinely means "these credentials did not match" is answered with a
+ * credential refusal now; every other failure is answered as what it is, a
+ * service that could not decide.
+ *
+ * Provider codes are logged rather than branched on beyond that one case: a
+ * refusal that distinguished an unconfirmed account from an unknown one would
+ * turn the sign-in answer into an account-enumeration oracle, which is the very
+ * thing this endpoint is written to prevent.
  */
 export async function login(input: LoginInput): Promise<AuthResponse> {
   const credentials = input.email
@@ -316,8 +341,27 @@ export async function login(input: LoginInput): Promise<AuthResponse> {
   // privilege, so there is no reason to involve the admin client here.
   const { data, error } = await supabaseAuth.auth.signInWithPassword(credentials);
 
-  if (error || !data.user || !data.session) {
-    throw AppError.unauthorized('Incorrect sign-in details.');
+  if (error) {
+    if (error.code === 'invalid_credentials') {
+      throw AppError.unauthorized('Incorrect sign-in details.');
+    }
+    logger.warn('[auth] sign-in was not answered by the identity provider', {
+      code: error.code,
+      status: error.status,
+      message: error.message,
+    });
+    throw AppError.serviceUnavailable(SIGN_IN_UNAVAILABLE);
+  }
+
+  if (!data.user || !data.session) {
+    // No complaint from the provider, yet nothing to sign in with: the request was
+    // answered, just not with a verdict. Treated the same as an unanswered one,
+    // because claiming the credentials were refused would be inventing a fact.
+    logger.warn('[auth] sign-in returned no session and no error', {
+      user: Boolean(data.user),
+      session: Boolean(data.session),
+    });
+    throw AppError.serviceUnavailable(SIGN_IN_UNAVAILABLE);
   }
 
   return {

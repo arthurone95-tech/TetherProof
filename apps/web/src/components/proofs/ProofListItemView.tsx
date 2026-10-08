@@ -1,5 +1,7 @@
 import type { ProofListItem, VerificationStatus } from '@tetherproof/shared';
 import Link from 'next/link';
+import { AudioLines } from 'lucide-react';
+import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 
 /**
  * One logged job in the logbook and on the dashboard's recent list.
@@ -52,20 +54,7 @@ function Thumbnail({ item }: { item: ProofListItem }) {
       aria-hidden="true"
       className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-brand-100 bg-brand-50 text-brand-600"
     >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.8}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="h-6 w-6"
-      >
-        <path d="M4 8.5h10M16 8.5h4" />
-        <path d="M4 15.5h10M16 15.5h4" />
-        <circle cx="3.2" cy="8.5" r="0.9" fill="currentColor" stroke="none" />
-        <circle cx="3.2" cy="15.5" r="0.9" fill="currentColor" stroke="none" />
-      </svg>
+      <AudioLines className="h-6 w-6" strokeWidth={ICON_STROKE_WIDTH} />
     </div>
   );
 }

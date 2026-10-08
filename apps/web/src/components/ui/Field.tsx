@@ -18,6 +18,18 @@ interface FieldProps {
   error?: string;
   hint?: ReactNode;
   defaultValue?: string | number;
+  /**
+   * Controlled value, for a form that must survive its own submission.
+   *
+   * React resets an uncontrolled form once its action finishes, whether the
+   * action succeeded or failed, so a person whose sign-in was refused came back
+   * to two empty boxes. A controlled field is not reset, so what was typed
+   * survives and only the one wrong letter has to be changed.
+   *
+   * Use this for anything a person would be annoyed to type twice, and leave
+   * single-shot forms on `defaultValue`.
+   */
+  value?: string;
   placeholder?: string;
   autoComplete?: string;
   inputMode?: 'text' | 'numeric' | 'decimal' | 'email' | 'tel';
@@ -29,9 +41,10 @@ interface FieldProps {
   /**
    * Notified with the field's text on every keystroke.
    *
-   * The input stays uncontrolled — `defaultValue` is still what seeds it — so a
-   * form that has been submitted keeps what the person typed. This only reports,
-   * which is what a strength meter or an address carried to the next screen needs.
+   * Passing this alongside `value` makes the field controlled, which is how a
+   * form keeps what was typed across a submission. Without a `value` the input
+   * stays uncontrolled and this only reports, which is all a strength meter or
+   * an address carried to the next screen needs.
    */
   onChange?: (value: string) => void;
   /**
@@ -71,6 +84,7 @@ export function Field({
   error,
   hint,
   defaultValue,
+  value,
   placeholder,
   autoComplete,
   inputMode,
@@ -105,7 +119,8 @@ export function Field({
             required={required}
             rows={rows}
             maxLength={maxLength}
-            defaultValue={defaultValue}
+            defaultValue={value === undefined ? defaultValue : undefined}
+            value={value}
             placeholder={placeholder}
             onChange={report ? (event) => report(event.target.value) : undefined}
             aria-invalid={error ? true : undefined}
@@ -125,7 +140,8 @@ export function Field({
               max={max}
               maxLength={maxLength}
               step={step}
-              defaultValue={defaultValue}
+              defaultValue={value === undefined ? defaultValue : undefined}
+              value={value}
               placeholder={placeholder}
               autoComplete={autoComplete}
               inputMode={inputMode}

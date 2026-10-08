@@ -12,7 +12,7 @@ import type {
   UpdateProofInput,
   UserRole,
 } from '@tetherproof/shared';
-import { ApiRequestError } from './api-error';
+import { ApiRequestError, isCredentialRefusal } from './api-error';
 import type { AuthCallbackResult, FormState, ProofEditState, ProofFormState } from './form-state';
 import { formErrorFor } from './form-state';
 import { homeFor } from './navigation';
@@ -64,10 +64,18 @@ export async function signIn(_previous: FormState, formData: FormData): Promise<
     redirect(landingFor(result.user.role));
   } catch (error) {
     if (isRedirect(error)) throw error;
-    return {
-      error: messageFor(error, 'We could not sign you in. Please try again.'),
-      field: 'password',
-    };
+    /**
+     * Only a refused password is reported against the password box.
+     *
+     * This used to name the field whatever went wrong, so a dropped connection —
+     * or an API that was restarting, or a rate limit — put "we could not sign you
+     * in" directly under the password box. Read from the side, that is a claim
+     * about the password, and the obvious response to it is to retype the
+     * password. A form-level message leaves the fields alone and says what
+     * actually happened.
+     */
+    const failure = formErrorFor(error, 'We could not sign you in. Please try again.');
+    return isCredentialRefusal(error) ? { ...failure, field: 'password' } : { error: failure.error };
   }
 }
 
@@ -442,10 +450,17 @@ export async function uploadAvatar(_previous: FormState, formData: FormData): Pr
     revalidatePath('/profile');
     return { done: true };
   } catch (error) {
-    return {
-      error: messageFor(error, 'We could not update your photo. Please try again.'),
-      field: 'avatar_file',
-    };
+    /**
+     * Field-level only when the API names one.
+     *
+     * The three refusals above are the file's own fault and say so. Anything
+     * arriving here is the upload that did not complete — a dropped connection, a
+     * size the API refused server-side — and reporting that beside the file picker
+     * sends the reader hunting for a bad photo that is perfectly good. Same rule as
+     * the sign-in form: a message goes next to the input only when that input is
+     * what is wrong.
+     */
+    return formErrorFor(error, 'We could not update your photo. Please try again.');
   }
 }
 

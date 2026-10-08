@@ -1,10 +1,13 @@
 'use client';
 
 import { useEffect, useActionState, useState } from 'react';
+import { ArrowLeft, CircleAlert, Mail, ShieldCheck } from 'lucide-react';
 import { confirmWithCode, registerAccount, requestCode, signIn } from '@/lib/actions';
 import { EMPTY_FORM } from '@/lib/form-state';
 import { PASSWORD_STRENGTH_LABEL, passwordStrength } from '@/lib/password-strength';
+import { forgetRememberedEmail, readRememberedEmail, rememberEmail } from '@/lib/remembered-email';
 import { Field } from '@/components/ui/Field';
+import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 import { PasswordField } from '@/components/ui/PasswordField';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 
@@ -50,6 +53,33 @@ export function LoginView() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+
+  /**
+   * The sign-in panel's own two fields, kept apart from the register panel's.
+   *
+   * Controlled rather than left to the browser, because React resets an
+   * uncontrolled form once its action finishes — whether it succeeded or failed.
+   * A refused sign-in therefore used to come back to two empty boxes, which is the
+   * worst possible moment to make somebody type a long password again. Holding
+   * them here means a wrong letter is corrected rather than the whole field
+   * retyped, and the password is still never written anywhere.
+   */
+  const [signInPassword, setSignInPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [remember, setRemember] = useState(true);
+
+  /**
+   * Offer last time's address back, the way every ordinary site does.
+   *
+   * Read after mount rather than during the first render, because the value lives
+   * in this browser's storage and the first render also happens on the server,
+   * where there is no storage to read. A remembered address arriving a moment
+   * after the box appears beats making the person type it again.
+   */
+  useEffect(() => {
+    const remembered = readRememberedEmail();
+    if (remembered) setEmail(remembered);
+  }, []);
 
   const [signInState, signInAction] = useActionState(signIn, EMPTY_FORM);
   const [registerState, registerAction] = useActionState(registerAccount, EMPTY_FORM);
@@ -109,13 +139,29 @@ export function LoginView() {
           ) : null}
 
           {panel === 'sign-in' ? (
-            <form action={signInAction} className="mt-6 flex flex-col gap-4">
+            <form
+              action={signInAction}
+              className="mt-6 flex flex-col gap-4"
+              /*
+                Saves the address at the moment a sign-in is attempted, which is
+                when a browser normally would — and never the password, which
+                `lib/remembered-email.ts` explains in full. Unticking the box
+                erases what was saved, so the choice is the reader's rather than
+                the application's.
+              */
+              onSubmit={() => {
+                if (remember) rememberEmail(email);
+                else forgetRememberedEmail();
+              }}
+            >
               <Field
                 name="email"
                 label="Email address"
                 type="email"
                 inputMode="email"
                 autoComplete="email"
+                value={email}
+                onChange={setEmail}
                 required
                 error={signInState.field === 'email' ? signInState.error : undefined}
               />
@@ -123,9 +169,21 @@ export function LoginView() {
                 name="password"
                 label="Password"
                 autoComplete="current-password"
+                value={signInPassword}
+                onChange={setSignInPassword}
                 required
                 error={signInState.field === 'password' ? signInState.error : undefined}
               />
+              <label className="-mt-1 flex w-fit cursor-pointer items-center gap-2 text-sm text-ink-600">
+                <input
+                  type="checkbox"
+                  name="rememberEmail"
+                  checked={remember}
+                  onChange={(event) => setRemember(event.target.checked)}
+                  className="h-4 w-4 rounded border-brand-100 accent-brand-600"
+                />
+                Remember my email on this device
+              </label>
               {signInState.error && !signInState.field ? (
                 <FormError message={signInState.error} />
               ) : null}
@@ -151,8 +209,9 @@ export function LoginView() {
                   type="email"
                   inputMode="email"
                   autoComplete="email"
-                  required
+                  value={email}
                   onChange={setEmail}
+                  required
                   error={registerState.field === 'email' ? registerState.error : undefined}
                 />
               </div>
@@ -223,7 +282,8 @@ export function LoginView() {
                   type="email"
                   inputMode="email"
                   autoComplete="email"
-                  defaultValue={email}
+                  value={email}
+                  onChange={setEmail}
                   required
                   error={confirmState.field === 'email' ? confirmState.error : undefined}
                 />
@@ -232,6 +292,8 @@ export function LoginView() {
                   label="Code"
                   inputMode="numeric"
                   autoComplete="one-time-code"
+                  value={code}
+                  onChange={setCode}
                   required
                   error={confirmState.field === 'code' ? confirmState.error : undefined}
                 />
@@ -261,6 +323,8 @@ export function LoginView() {
                     type="email"
                     inputMode="email"
                     autoComplete="email"
+                    value={email}
+                    onChange={setEmail}
                     required
                     error={requestState.field === 'email' ? requestState.error : undefined}
                   />
@@ -419,38 +483,27 @@ function FormError({ message }: { message: string }) {
 function MailBadge() {
   return (
     <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-50 text-brand-600 ring-1 ring-brand-100">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <rect x="3" y="5" width="18" height="14" rx="3" />
-        <path d="m4 7 8 6 8-6" />
-      </svg>
+      <Mail aria-hidden="true" className="h-[26px] w-[26px]" strokeWidth={ICON_STROKE_WIDTH} />
     </div>
   );
 }
 
 function ShieldIcon() {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 3 4 6v6c0 4.5 3.2 8 8 9 4.8-1 8-4.5 8-9V6l-8-3Z" />
-      <path d="m9 12 2 2 4-4" />
-    </svg>
+    <ShieldCheck aria-hidden="true" className="h-5 w-5" strokeWidth={ICON_STROKE_WIDTH} />
   );
 }
 
 function ArrowLeftIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M19 12H5" />
-      <path d="m12 19-7-7 7-7" />
-    </svg>
-  );
+  return <ArrowLeft aria-hidden="true" className="h-4 w-4" strokeWidth={ICON_STROKE_WIDTH} />;
 }
 
 function AlertIcon() {
   return (
-    <svg className="mt-0.5 shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 8v5" />
-      <path d="M12 16h.01" />
-    </svg>
+    <CircleAlert
+      aria-hidden="true"
+      className="mt-0.5 shrink-0 h-4 w-4"
+      strokeWidth={ICON_STROKE_WIDTH}
+    />
   );
 }

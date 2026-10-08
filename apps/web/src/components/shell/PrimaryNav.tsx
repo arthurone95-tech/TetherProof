@@ -2,7 +2,18 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import {
+  House,
+  LayoutGrid,
+  List,
+  Mail,
+  MoreHorizontal,
+  SlidersHorizontal,
+  User,
+  type LucideIcon,
+} from 'lucide-react';
 import type { NavItem } from '@/lib/navigation';
+import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 
 interface PrimaryNavProps {
   items: NavItem[];
@@ -93,72 +104,22 @@ function isActive(href: string, pathname: string): boolean {
   return pathname.startsWith(href.endsWith('/') ? href : `${href}/`);
 }
 
-function NavIcon({ name, className }: { name: NavItem['icon']; className: string }) {
-  const shared = {
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.8,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    'aria-hidden': true,
-    className,
-  };
+/**
+ * One icon per destination. The mapping is exhaustive by type, so adding a
+ * destination to the navigation without an icon is a compile error rather than a
+ * blank square in the tab row.
+ */
+const NAV_ICONS: Record<NavItem['icon'], LucideIcon> = {
+  home: House,
+  workspace: LayoutGrid,
+  logs: List,
+  invitations: Mail,
+  profile: User,
+  settings: SlidersHorizontal,
+  more: MoreHorizontal,
+};
 
-  switch (name) {
-    case 'home':
-      return (
-        <svg {...shared}>
-          <path d="m4 11.5 8-7 8 7" />
-          <path d="M6 9.5V19a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9.5" />
-          <path d="M10 20v-5h4v5" />
-        </svg>
-      );
-    case 'workspace':
-      return (
-        <svg {...shared}>
-          <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
-          <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
-          <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
-          <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
-        </svg>
-      );
-    case 'logs':
-      return (
-        <svg {...shared}>
-          <path d="M8.5 6.5h12M8.5 12h12M8.5 17.5h12" />
-          <path d="M4 6.5h1M4 12h1M4 17.5h1" />
-        </svg>
-      );
-    case 'invitations':
-      return (
-        <svg {...shared}>
-          <rect x="3" y="5.5" width="18" height="13" rx="2" />
-          <path d="m3.8 7.5 8.2 5.6 8.2-5.6" />
-        </svg>
-      );
-    case 'profile':
-      return (
-        <svg {...shared}>
-          <circle cx="12" cy="8.5" r="3.5" />
-          <path d="M5 19.5a7 7 0 0 1 14 0" />
-        </svg>
-      );
-    case 'settings':
-      return (
-        <svg {...shared}>
-          <path d="M4 7.5h9M19 7.5h1M4 16.5h3M13 16.5h7" />
-          <circle cx="16" cy="7.5" r="2.2" />
-          <circle cx="10" cy="16.5" r="2.2" />
-        </svg>
-      );
-    case 'more':
-      return (
-        <svg {...shared}>
-          <circle cx="5.5" cy="12" r="1.5" fill="currentColor" stroke="none" />
-          <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
-          <circle cx="18.5" cy="12" r="1.5" fill="currentColor" stroke="none" />
-        </svg>
-      );
-  }
+function NavIcon({ name, className }: { name: NavItem['icon']; className: string }) {
+  const Icon = NAV_ICONS[name];
+  return <Icon aria-hidden="true" className={className} strokeWidth={ICON_STROKE_WIDTH} />;
 }
