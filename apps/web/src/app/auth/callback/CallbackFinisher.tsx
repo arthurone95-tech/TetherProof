@@ -100,7 +100,7 @@ export function CallbackFinisher() {
   if (error === null) {
     return (
       <Card>
-        <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">TetherProof</p>
+        <p className="text-sm font-semibold tracking-wide text-brand-600">TetherProof</p>
         <h1 className="mt-2 text-2xl font-bold text-ink-900">Signing you in</h1>
         <p className="mt-4 text-ink-600" role="status">
           Confirming your account and opening your workspace.
@@ -111,7 +111,7 @@ export function CallbackFinisher() {
 
   return (
     <Card>
-      <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">TetherProof</p>
+      <p className="text-sm font-semibold tracking-wide text-brand-600">TetherProof</p>
       <h1 className="mt-2 text-2xl font-bold text-ink-900">That link did not work</h1>
       <div className="mt-4">
         <Banner tone="problem" title="Sign-in link not accepted">

@@ -1,16 +1,14 @@
 import Link from 'next/link';
-import type { MoreItem, NavItem } from '@/lib/navigation';
-import { MoreMenu } from './MoreMenu';
+import type { NavItem } from '@/lib/navigation';
+import { HeaderAvatar } from './HeaderAvatar';
 import { PrimaryNav } from './PrimaryNav';
 
 interface AppShellProps {
   /** Where the brand mark goes: the member's own home, not the marketing page. */
   home: string;
-  /** Who is signed in, as the header states it. */
-  identity: string;
+  /** The member's photo (or the person-icon placeholder), from the API. */
+  avatarUrl: string | null;
   items: NavItem[];
-  /** Secondary destinations behind the more/hamburger menu. */
-  more: MoreItem[];
   children: React.ReactNode;
 }
 
@@ -22,10 +20,16 @@ interface AppShellProps {
  * screen was to know its address. One shell fixes that: navigation is always in
  * the same place, and the current page is marked on it.
  *
- * The four primary tabs render twice — a top bar on a wide screen, a bottom
- * row on a phone — from the same list, with the phone row preferring each
- * tab's short label. Secondary destinations share one "more" menu in the
- * header, which is a hamburger on a phone and a labelled control on desktop.
+ * The primary tabs render twice — a top bar on a wide screen, a bottom row on a
+ * phone — from the same list, with the phone row preferring each tab's short
+ * label and ending in More, the bottom-right corner where a thumb travels least.
+ * Account lives at the top-right as the member's own avatar, a photo or the
+ * person-icon placeholder, with no label around it; it links to the profile
+ * page. The one page that does not carry it is the profile page itself — an
+ * anchor to where you already are is just noise, and the page's own avatar
+ * stands in for the corner there. Everything less than daily (invitations,
+ * settings, the static pages) sits on the More page, behind that bottom-right
+ * corner.
  *
  * Sign-out deliberately does not live here. It is the one action a member never
  * needs in a hurry, and keeping it out of a bar every page shares means it cannot
@@ -38,33 +42,38 @@ interface AppShellProps {
  * it the containing block for a fixed descendant and pin the tabs to the header
  * instead of the bottom of the screen.
  */
-export function AppShell({ home, identity, items, more, children }: AppShellProps) {
+export function AppShell({ home, avatarUrl, items, children }: AppShellProps) {
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-40 border-b border-brand-100 bg-white">
         <div className="mx-auto flex w-full max-w-5xl items-center gap-3 px-4 py-3">
           <Link
             href={home}
-            className="text-sm font-semibold tracking-wide text-brand-600 uppercase hover:text-brand-700"
+            className="text-lg font-semibold tracking-wide text-brand-600 hover:text-brand-700"
           >
             TetherProof
           </Link>
 
-          <div className="ml-auto flex items-center gap-1 sm:gap-3">
-            <div className="hidden md:block">
-              <PrimaryNav items={items} variant="bar" />
-            </div>
-            <MoreMenu items={more} />
-            <span className="hidden max-w-48 truncate text-sm text-ink-600 sm:block">{identity}</span>
+          <div className="hidden md:block">
+            <PrimaryNav items={items} variant="bar" />
           </div>
+
+          {/*
+            The account corner sits inside its own client component because the
+            avatar doubles as the way to the profile page, and an anchor to where
+            you already are is just noise — the corner hides on the profile page
+            itself.
+          */}
+          <HeaderAvatar avatarUrl={avatarUrl} />
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-7 pb-32 md:pb-14">{children}</main>
 
       {/*
-        A phone gets four tabs along the bottom, where a thumb reaches. The
-        padding under the content keeps the last card clear of them.
+        A phone gets the tabs along the bottom, where a thumb reaches. More is
+        the last tab, so it sits in the bottom-right corner. The padding under
+        the content keeps the last card clear of the row.
       */}
       <nav
         aria-label="Main"

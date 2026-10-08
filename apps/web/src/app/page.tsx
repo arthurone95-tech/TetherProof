@@ -53,7 +53,7 @@ export default async function HomePage({
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-4 py-12">
       <header className="space-y-3">
-        <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">TetherProof</p>
+        <p className="text-sm font-semibold tracking-wide text-brand-600">TetherProof</p>
         <h1 className="text-3xl font-bold text-ink-900 sm:text-4xl">Proof of work, not promises.</h1>
         <p className="text-lg text-ink-600">
           TetherProof turns completed jobs into verified capability. Employers hire on what was actually

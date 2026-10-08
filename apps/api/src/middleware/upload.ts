@@ -11,6 +11,7 @@
  * and never reaches storage.
  */
 import multer from 'multer';
+import type { RequestHandler } from 'express';
 import { env } from '../config/env.js';
 import { AppError } from '../lib/errors.js';
 
@@ -34,6 +35,22 @@ export const proofUpload = multer({
 }).single('media_file');
 
 /**
+ * Single-file parser for the `avatar_file` field on the profile-image route.
+ *
+ * Profile images are small, so their own size cap is applied here, before a byte
+ * is buffered, exactly as the proof upload applies its own.
+ */
+export const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: env.STORAGE_MAX_AVATAR_BYTES,
+    files: 1,
+    fields: 4,
+    parts: 8,
+  },
+}).single('avatar_file');
+
+/**
  * Adapts multer's callback middleware to Express error propagation.
  *
  * Multer signals its own failures, such as a body over the size cap, through a
@@ -41,27 +58,38 @@ export const proofUpload = multer({
  * swallowed and the request would hang until the client timed out, so they are
  * translated into the project's error envelope here.
  */
-export function acceptProofMedia(req: unknown, res: unknown, next: (error?: unknown) => void): void {
-  proofUpload(req as never, res as never, (error: unknown) => {
-    if (!error) {
-      next();
-      return;
-    }
-
-    if (error instanceof multer.MulterError) {
-      if (error.code === 'LIMIT_FILE_SIZE') {
-        next(
-          AppError.badRequest(
-            `Files must be smaller than ${Math.floor(env.STORAGE_MAX_UPLOAD_BYTES / (1024 * 1024))} MB.`,
-          ),
-        );
+function acceptUpload(
+  parse: RequestHandler,
+  sizeMessage: string,
+): (req: unknown, res: unknown, next: (error?: unknown) => void) => void {
+  return (req, res, next) => {
+    parse(req as never, res as never, (error: unknown) => {
+      if (!error) {
+        next();
         return;
       }
 
-      next(AppError.badRequest('The upload could not be read. Please try again.'));
-      return;
-    }
+      if (error instanceof multer.MulterError) {
+        if (error.code === 'LIMIT_FILE_SIZE') {
+          next(AppError.badRequest(sizeMessage));
+          return;
+        }
 
-    next(error);
-  });
+        next(AppError.badRequest('The upload could not be read. Please try again.'));
+        return;
+      }
+
+      next(error);
+    });
+  };
 }
+
+export const acceptProofMedia = acceptUpload(
+  proofUpload,
+  `Files must be smaller than ${Math.floor(env.STORAGE_MAX_UPLOAD_BYTES / (1024 * 1024))} MB.`,
+);
+
+export const acceptAvatarMedia = acceptUpload(
+  avatarUpload,
+  `Profile images must be smaller than ${Math.floor(env.STORAGE_MAX_AVATAR_BYTES / (1024 * 1024))} MB.`,
+);

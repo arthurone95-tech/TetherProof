@@ -14,6 +14,11 @@ import { db } from '../../db/client.js';
 import { orphanedProofMedia, profiles, users } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
 import { confirmationCallbackUrl } from '../../lib/redirect.js';
+import {
+  createSignedAvatarUrl,
+  deleteProfileAvatar,
+  uploadProfileAvatar,
+} from '../../lib/storage.js';
 import { supabaseAdmin, supabaseAuth } from '../../lib/supabase.js';
 import type {
   ConfirmInput,
@@ -349,6 +354,18 @@ export async function login(input: LoginInput): Promise<AuthResponse> {
  * the bucket does not agree with.
  */
 export async function deleteAccount(userId: string): Promise<AccountDeletionResult> {
+  // The profile image path must be captured before the delete, because the same
+  // trigger that records proof objects also scrubs every `profiles` column —
+  // reading the path afterwards would always see null. Unlike proof media, the
+  // avatar object is never queued in `orphaned_proof_media`, so keeping it under
+  // the caller's id means it survives them; it is removed explicitly below.
+  const [avatarRow] = await db
+    .select({ path: profiles.avatarUrl })
+    .from(profiles)
+    .where(eq(profiles.userId, userId))
+    .limit(1);
+  const avatarPath = avatarRow?.path ?? null;
+
   const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
 
   if (error) {
@@ -370,8 +387,20 @@ export async function deleteAccount(userId: string): Promise<AccountDeletionResu
       like(orphanedProofMedia.path, `${userId}/%`),
     );
 
+  let avatarRemoved = 0;
+  let avatarPending = 0;
+  if (avatarPath) {
+    // Removed here rather than through the queue: the path was captured before
+    // the delete, so it still points at this account's photo.
+    if (await deleteProfileAvatar(avatarPath)) {
+      avatarRemoved += 1;
+    } else {
+      avatarPending += 1;
+    }
+  }
+
   if (queued.length === 0) {
-    return { mediaRemoved: 0, mediaPending: 0 };
+    return { mediaRemoved: avatarRemoved, mediaPending: avatarPending };
   }
 
   // Grouped by bucket because the recorded bucket is read back from
@@ -413,7 +442,29 @@ export async function deleteAccount(userId: string): Promise<AccountDeletionResu
     });
   }
 
-  return { mediaRemoved: removed.size, mediaPending: queued.length - removed.size };
+  return {
+    mediaRemoved: removed.size + avatarRemoved,
+    mediaPending: queued.length - removed.size + avatarPending,
+  };
+}
+
+/**
+ * Turns a stored avatar path into a short-lived URL for the response.
+ *
+ * A missing or unreadable object must never break the profile read: the app
+ * layout fetches the profile on every page and a failure there redirects the
+ * user to sign in. Any storage problem therefore degrades to `null` — the same
+ * value an account without a photo returns — instead of throwing.
+ */
+async function signedAvatarUrl(path: string | null): Promise<string | null> {
+  if (!path) {
+    return null;
+  }
+  try {
+    return await createSignedAvatarUrl(path);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -446,7 +497,7 @@ export async function getProfile(userId: string): Promise<ProfileResponse> {
   if (!row) {
     throw AppError.notFound('Profile not found.');
   }
-  return row;
+  return { ...row, avatarUrl: await signedAvatarUrl(row.avatarUrl) };
 }
 
 /**
@@ -497,5 +548,71 @@ export async function updateProfile(userId: string, input: UpdateProfileInput) {
     // nothing would be worse than refusing.
     throw AppError.notFound('That account was not found.');
   }
-  return row;
+  return { ...row, avatarUrl: await signedAvatarUrl(row.avatarUrl) };
+}
+
+/**
+ * Stores a new profile image and retires the previous one.
+ *
+ * The bytes are scrubbed of location metadata by the storage helper before they
+ * are stored, and the object path is a random UUID the caller cannot influence,
+ * the same guarantees the proof upload makes. Only this endpoint may write the
+ * column, so a client-supplied avatar URL can never be rendered.
+ *
+ * The visible swap is one-way: the profile row is pointed at the new object
+ * first, and only the object the row no longer references is deleted. A failure
+ * between the two leaves the new object stored but unreferenced, never a profile
+ * whose photo is gone, which is why the write happens before the delete.
+ */
+export async function updateAvatar(
+  userId: string,
+  file: { buffer: Buffer; contentType: string; size: number },
+): Promise<{ avatarUrl: string | null }> {
+  const [current] = await db
+    .select({ path: profiles.avatarUrl })
+    .from(profiles)
+    .where(eq(profiles.userId, userId))
+    .limit(1);
+
+  const stored = await uploadProfileAvatar(userId, file);
+
+  await db
+    .insert(profiles)
+    .values({ userId, avatarUrl: stored.path })
+    .onConflictDoUpdate({ target: profiles.userId, set: { avatarUrl: stored.path } });
+
+  if (current?.path) {
+    // No longer referenced by the row, so at worst this orphans a file; the row
+    // must never point at a photo the user replaced. Failure is logged inside.
+    await deleteProfileAvatar(current.path);
+  }
+
+  return { avatarUrl: await signedAvatarUrl(stored.path) };
+}
+
+/**
+ * Removes the caller's profile image, if there is one.
+ *
+ * Idempotent, like the rest of account deletion: removing a photo that was
+ * already removed answers success with `avatarUrl: null`. The row is cleared
+ * before the object is deleted so a removal that fails partway never leaves the
+ * profile pointing at a photo its owner asked to delete.
+ */
+export async function removeAvatar(userId: string): Promise<{ avatarUrl: null }> {
+  const [current] = await db
+    .select({ path: profiles.avatarUrl })
+    .from(profiles)
+    .where(eq(profiles.userId, userId))
+    .limit(1);
+
+  await db
+    .insert(profiles)
+    .values({ userId, avatarUrl: null })
+    .onConflictDoUpdate({ target: profiles.userId, set: { avatarUrl: null } });
+
+  if (current?.path) {
+    await deleteProfileAvatar(current.path);
+  }
+
+  return { avatarUrl: null };
 }

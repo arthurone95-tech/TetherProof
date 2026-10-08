@@ -1,6 +1,13 @@
 import { Router } from 'express';
+import { AppError } from '../../lib/errors.js';
 import { authenticate } from '../../middleware/auth.js';
-import { authRateLimiter, codeVerificationRateLimiter, confirmationRateLimiter } from '../../middleware/rate-limit.js';
+import {
+  authRateLimiter,
+  codeVerificationRateLimiter,
+  confirmationRateLimiter,
+  mediaUploadRateLimiter,
+} from '../../middleware/rate-limit.js';
+import { acceptAvatarMedia } from '../../middleware/upload.js';
 import { validateBody } from '../../middleware/validate.js';
 import {
   confirm,
@@ -8,7 +15,9 @@ import {
   getProfile,
   login,
   register,
+  removeAvatar,
   requestConfirmation,
+  updateAvatar,
   updateProfile,
 } from './service.js';
 import {
@@ -109,6 +118,54 @@ authRouter.patch('/profile', authenticate, validateBody(updateProfileSchema), as
   try {
     const updated = await updateProfile(req.auth!.userId, req.body);
     res.status(200).json(updated);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Uploads or replaces the caller's profile image.
+ *
+ * A multipart body carrying a single `avatar_file` field. The image is scrubbed
+ * of location metadata and stored as a random-UUID object only this endpoint may
+ * write — the profile update schema deliberately accepts no `avatarUrl`, so a
+ * caller-supplied URL can never be rendered.
+ *
+ * Rate-limited like proof media, because re-encoding an image is the same
+ * class of work.
+ */
+authRouter.post(
+  '/avatar',
+  authenticate,
+  mediaUploadRateLimiter,
+  acceptAvatarMedia,
+  async (req, res, next) => {
+    try {
+      const file = req.file;
+      if (!file) {
+        throw AppError.badRequest('Choose a photo to upload.');
+      }
+      const result = await updateAvatar(req.auth!.userId, {
+        buffer: file.buffer,
+        contentType: file.mimetype,
+        size: file.size,
+      });
+      res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/**
+ * Removes the caller's profile image.
+ *
+ * Idempotent — an account with no photo still answers success, with `null`,
+ * exactly as account deletion does for media that is already gone.
+ */
+authRouter.delete('/avatar', authenticate, async (req, res, next) => {
+  try {
+    res.status(200).json(await removeAvatar(req.auth!.userId));
   } catch (error) {
     next(error);
   }

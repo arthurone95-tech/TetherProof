@@ -99,6 +99,14 @@ const envSchema = z.object({
     .positive()
     .default(10 * 1024 * 1024),
 
+  // Profile image bucket
+  STORAGE_AVATARS_BUCKET: z.string().min(1).default('profile-avatars'),
+  STORAGE_MAX_AVATAR_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5 * 1024 * 1024),
+
   VERIFICATION_TOKEN_TTL: z.coerce.number().int().positive().default(259_200),
 
   /**

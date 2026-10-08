@@ -167,3 +167,134 @@ export async function createSignedMediaUrl(
 
   return data.signedUrl;
 }
+
+/**
+ * Allowed profile-image types, mapped to the stored extension.
+ *
+ * Images only — a voice recording is not a profile picture — and every type must
+ * be scrubbable by `media-scrub.ts`, for the same reason the proof list insists
+ * on it: a type whose location metadata cannot be stripped has no business being
+ * stored under a promise of privacy.
+ */
+const AVATAR_CONTENT_TYPES = new Map<string, string>([
+  ['image/jpeg', 'jpg'],
+  ['image/png', 'png'],
+  ['image/webp', 'webp'],
+  ['image/heic', 'heic'],
+]);
+
+export function isAllowedAvatarType(contentType: string): boolean {
+  return AVATAR_CONTENT_TYPES.has(contentType.toLowerCase());
+}
+
+export interface StoredAvatar {
+  bucket: string;
+  path: string;
+  sizeBytes: number;
+  contentType: string;
+}
+
+/**
+ * Stores a profile image, scrubbed of metadata, in the avatars bucket.
+ *
+ * The same guarantees as proof media: the declared type selects the scrubber and
+ * the stored extension, the scrubber confirms the bytes really are that
+ * container, and the object path is a random UUID so a caller can influence
+ * neither the filename nor the path.
+ *
+ * `upsert: false` because an upload is one-shot; the caller deletes the previous
+ * avatar separately, and letting a new upload overwrite the old object would
+ * make a failed database write orphan the new file instead of the old one.
+ */
+export async function uploadProfileAvatar(
+  userId: string,
+  file: { buffer: Buffer; contentType: string; size: number },
+): Promise<StoredAvatar> {
+  const declaredType = file.contentType.toLowerCase();
+  const extension = AVATAR_CONTENT_TYPES.get(declaredType);
+
+  if (!extension) {
+    throw AppError.badRequest('That file type is not supported. Use a JPG, PNG, WebP or HEIC image.');
+  }
+
+  if (file.size <= 0) {
+    throw AppError.badRequest('The uploaded file is empty.');
+  }
+
+  if (file.size > env.STORAGE_MAX_AVATAR_BYTES) {
+    throw AppError.badRequest(
+      `Profile images must be smaller than ${Math.floor(env.STORAGE_MAX_AVATAR_BYTES / (1024 * 1024))} MB.`,
+    );
+  }
+
+  const scrubbed = await scrubImage(file.buffer, declaredType);
+
+  if (scrubbed.buffer.length === 0) {
+    throw AppError.badRequest('That image could not be read.');
+  }
+
+  const path = `${userId}/${randomUUID()}.${extension}`;
+
+  const { error } = await supabaseAdmin.storage
+    .from(env.STORAGE_AVATARS_BUCKET)
+    .upload(path, scrubbed.buffer, {
+      contentType: scrubbed.contentType,
+      upsert: false,
+    });
+
+  if (error) {
+    logger.error('Profile image upload failed', {
+      userId,
+      bucket: env.STORAGE_AVATARS_BUCKET,
+      path,
+      contentType: scrubbed.contentType,
+      sizeBytes: scrubbed.buffer.length,
+      reason: error.message,
+      status: error.status,
+    });
+    throw AppError.internal('The image could not be stored.');
+  }
+
+  return {
+    bucket: env.STORAGE_AVATARS_BUCKET,
+    path,
+    sizeBytes: scrubbed.buffer.length,
+    contentType: scrubbed.contentType,
+  };
+}
+
+/**
+ * Removes a stored profile image, reporting whether the object is gone.
+ *
+ * The caller decides what a failure means — an account deletion counts it as
+ * pending, an avatar replacement logs and moves on — so the outcome is returned
+ * rather than decided in here.
+ */
+export async function deleteProfileAvatar(path: string): Promise<boolean> {
+  const { error } = await supabaseAdmin.storage.from(env.STORAGE_AVATARS_BUCKET).remove([path]);
+  if (error) {
+    logger.error('Profile image removal failed', {
+      bucket: env.STORAGE_AVATARS_BUCKET,
+      path,
+      reason: error.message,
+    });
+    return false;
+  }
+  return true;
+}
+
+/** Issues a short-lived signed URL for a stored profile image. Never public. */
+export async function createSignedAvatarUrl(
+  path: string,
+  expiresInSeconds = 300,
+): Promise<string> {
+  const { data, error } = await supabaseAdmin.storage
+    .from(env.STORAGE_AVATARS_BUCKET)
+    .createSignedUrl(path, expiresInSeconds);
+
+  if (error || !data?.signedUrl) {
+    throw AppError.notFound('That image is no longer available.');
+  }
+
+  return data.signedUrl;
+}

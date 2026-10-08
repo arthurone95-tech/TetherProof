@@ -14,7 +14,7 @@ import { ApiRequestError } from './api-error';
  */
 export interface FormState {
   error?: string;
-  field?: 'email' | 'password' | 'confirmPassword' | 'fullName' | 'organizationName' | 'code' | 'requiredSkill';
+  field?: 'email' | 'password' | 'confirmPassword' | 'fullName' | 'organizationName' | 'code' | 'requiredSkill' | 'avatar_file';
   /**
    * True once an action has completed successfully.
    *

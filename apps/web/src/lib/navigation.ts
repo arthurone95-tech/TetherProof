@@ -1,7 +1,7 @@
 import type { UserRole } from '@tetherproof/shared';
 
 /** One destination in the signed-in navigation. */
-export type NavIcon = 'home' | 'workspace' | 'logs' | 'invitations' | 'profile' | 'settings';
+export type NavIcon = 'home' | 'workspace' | 'logs' | 'invitations' | 'profile' | 'settings' | 'more';
 
 export interface NavItem {
   href: string;
@@ -15,7 +15,7 @@ export interface NavItem {
   icon: NavIcon;
 }
 
-/** A secondary destination behind the more/hamburger menu. */
+/** One destination on the More page. */
 export interface MoreItem {
   href: string;
   label: string;
@@ -40,40 +40,36 @@ export function homeFor(role: UserRole): string {
   }
 }
 
-/** What each role is called in the interface. */
-export const ROLE_LABEL: Record<UserRole, string> = {
-  worker: 'Worker',
-  employer: 'Employer',
-  training_provider: 'Training provider',
-  admin: 'Administrator',
-};
-
 /**
- * The four primary tabs.
+ * The primary tabs, ending in More.
  *
- * Workers live in four places: see the overview, log the next job, read the
- * record, and manage the account. The log form is deliberately its own tab —
- * it is the one task a worker came to do, and mixing it into a scrolling
- * dashboard would bury it under content. Everything else (invitations,
- * settings, static pages) sits behind the more menu so the four tabs stay
- * readable on a phone.
+ * Workers live in three places: see the overview, log the next job, and read the
+ * record. Account is reached from the avatar in the header, and everything else
+ * (invitations, settings, static pages) sits on the More page, so the everyday
+ * tabs stay readable on a phone. The log form is deliberately its own tab — it
+ * is the one task a worker came to do, and mixing it into a scrolling dashboard
+ * would bury it under content.
+ *
+ * More is the last tab on purpose: on a phone it is the bottom-right corner,
+ * where a thumb travels least, and the flat destinations it leads to are all
+ * optional.
  */
 const WORKER_NAV: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', mobileLabel: 'Home', icon: 'home' },
   { href: '/workspace', label: 'Workspace', mobileLabel: 'Work', icon: 'workspace' },
   { href: '/logs', label: 'Logs', icon: 'logs' },
-  { href: '/profile', label: 'Profile', icon: 'profile' },
+  { href: '/more', label: 'More', icon: 'more' },
 ];
 
-/** Employers keep two tabs; settings and the docs sit behind the more menu. */
+/** Employers keep one tab plus More; account and the docs live behind the avatar and More. */
 const EMPLOYER_NAV: NavItem[] = [
   { href: '/employer', label: 'Workspace', icon: 'workspace' },
-  { href: '/profile', label: 'Profile', icon: 'profile' },
+  { href: '/more', label: 'More', icon: 'more' },
 ];
 
 const PLACEHOLDER_NAV: NavItem[] = [
   { href: '/pending', label: 'Workspace', icon: 'workspace' },
-  { href: '/profile', label: 'Profile', icon: 'profile' },
+  { href: '/more', label: 'More', icon: 'more' },
 ];
 
 export function navFor(role: UserRole): NavItem[] {
@@ -83,7 +79,7 @@ export function navFor(role: UserRole): NavItem[] {
 }
 
 /**
- * What hides behind the more (hamburger) menu.
+ * What lives on the More page.
  *
  * Invitations is worker-only; every signed-in role gets settings plus the four
  * static pages. Static pages are public, but a signed-in person reaching them

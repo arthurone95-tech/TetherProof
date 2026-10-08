@@ -2338,3 +2338,136 @@ shortcut, the logs list, the log detail, an edit that changed the stored descrip
 coordinates, and the frozen-entry note after a verification link was marked as sent. All rendered
 and interacted correctly. The one persistent harness quirk (E-046) did not reproduce for the
 login submission this time — the action POST completed and the session was written normally.
+
+---
+
+## E-048: Follow-up batch � profile owner view, avatar upload, signed-in info header, header sizing, brand casing
+
+* **Status:** Resolved
+* **Found:** 2026-10-08, during review of the previously shipped build.
+
+### Description
+
+Four follow-ups from review of the shipped interface:
+
+1. **Profile page opened straight into an edit form.** A profile visit answers "who am I", not
+   "finish filling this form", so the page now opens read-only � photo, name, organisation,
+   location � and editing starts only from an explicit **Edit profile** action.
+2. **Info pages signed in showed "Sign in".** A member reaching Help from the more menu was
+   told to sign in again. The info header now branches on session state like the app shell: a
+   signed-in visitor keeps the more (hamburger) menu and their identity; a signed-out visitor
+   keeps the "Sign in" link. The slim info footer is unchanged.
+3. **Header sizes.** The header geometry stays as it was, but the app name grew from
+   `text-sm` to `text-lg` (14px ? 18px) and the hamburger from `h-5 w-5` to `h-6 w-6`
+   (20px ? 24px), on a `min-h-11` (44px) button.
+4. **Brand casing.** Every mark that styled the app name `uppercase` now renders "TetherProof"
+   in its true casing (AppShell, info header, marketing page, sign-in/verification interstitials).
+   Marketing section labels and logbook headings keep their deliberate `uppercase` � those are
+   not the product name.
+
+### Resolution
+
+Avatar storage was the new capability this batch needed: `POST /auth/avatar` (multipart
+`avatar_file`) and `DELETE /auth/avatar`, both authenticated and rate-limited like proof media.
+Images are scrubbed of metadata (sharp re-encoding), stored as random-UUID objects in a private
+`profile-avatars` bucket (applied by the generalized `storage:ensure-bucket` script), and served
+only through short-lived signed URLs minted at read time. `updateProfileSchema` still accepts no
+caller-supplied `avatarUrl` � a smuggled field is stripped, never applied � and account deletion
+now also removes the avatar object, counted in `mediaRemoved`. The storage helper
+`deleteProfileAvatar` reports success so deletion counts stay honest.
+
+### Verification
+
+API (dev server on 4000): register ? confirm ? upload (201, object in `profile-avatars/`),
+signed URL served real bytes, replace removed the previous object, smuggled `avatarUrl` in a
+profile PATCH was stripped, remove returned `null`, and deleting the account removed the avatar
+object (`mediaRemoved: 1`) with the earlier signed URL dead afterwards. No objects left behind in
+either bucket.
+
+Web (dev server on 3100): signed in as a throwaway worker � dashboard header brand 18px / weight
+600 / no uppercase and 24px hamburger on a 44px button; `/profile` opened read-only with
+**Edit profile**, the form appeared only after clicking it; a real file upload showed the photo
+with "Your photo is updated." and an image decoded from storage; **Remove photo** cleared it with
+"Your photo was removed."; `/help` while signed in showed the hamburger and its full menu
+(Invitations, Settings, Help, About, Terms, Privacy) and no "Sign in" link; after sign-out the
+info header reverted to brand + "Sign in"; the landing brand read "TetherProof". Web typecheck and
+the production `next build` both pass.
+
+---
+
+## E-049: Follow-up batch 2 - the avatar editor sheet and the rearranged navigation
+
+* **Status:** Resolved
+* **Found:** 2026-10-08, as follow-ups 5 and 6 from review of the previously shipped build.
+* **Supersedes:** the navigation half of E-048 (items 1-2 there described the header "More"
+  control and the read-only profile; this entry replaces them with what shipped).
+
+### Description
+
+Two more follow-ups, both in the web app only - no API change in this batch:
+
+1. **The photo area still looked like a form widget.** Task 5: in the profile image area there
+   must be no Upload button, no "Choose file" button, and no file-name text. Tapping the avatar
+   opens a simple, native-feeling image editor: the current photo shown large, a pencil icon to
+   pick a new photo from the gallery, a trash icon to remove it, and Save and Cancel along the
+   top. After picking a photo the person stays on the same view; nothing leaves the device until
+   Save. Save uploads (or removes), then the sheet closes and the page shows the result. The
+   trash is disabled when there is no photo to remove.
+2. **The hamburger/More menu is gone.** Task 6: the header now carries the brand and the desktop
+   nav bar on the right, and the account avatar (photo or person icon, no initials, no text
+   around it) sits top-right and opens the Profile page. The phone's bottom-right corner holds a
+   "More" tab that opens a dedicated `/more` page listing Invitations (worker), Settings, Help,
+   About, Terms & Conditions and Privacy Policy. The Profile tab is removed from the primary
+   nav. The info-page header mirrors the app shell (avatar top-right when signed in, "Sign in"
+   when not), and the info footer gains a "More" link while signed in.
+
+### Resolution
+
+The avatar editor is `apps/web/src/app/(app)/profile/AvatarEditor.tsx`, a bottom sheet
+(`role="dialog"`, `aria-modal`) rendered only while the avatar tap keeps it open, so its action
+state and object URL reset on every session. It drives the existing `uploadAvatar` /
+`removeAvatar` server actions imperatively through `useActionState`; a picked file is previewed
+with a revocable object URL, Save dispatches exactly one action (upload when picked, remove when
+the trash was used, none when nothing changed), and a `done` effect closes the sheet so the
+revalidated page shows the result. Success messages are dropped - the visible outcome is the
+photo itself. The person icon replaces the old initials everywhere via the shared
+`ProfileAvatar` component (`sm`/`md`/`lg`).
+
+The navigation is rearranged in `lib/navigation.ts` (each role's primary list ends in
+`{ href: '/more', label: 'More', icon: 'more' }`, no Profile tab), `PrimaryNav.tsx` gains the
+three-dot `more` icon, `AppShell.tsx` drops the `MoreMenu`/identity props for a header of brand +
+desktop bar + `ml-auto` avatar link, the new `(app)/more/page.tsx` renders `moreFor(role)`, and
+`MoreMenu.tsx` is deleted. The info header/footer branch on session state, and the Help page copy
+now says "under More, in Invitations" instead of "under the more menu (.)".
+
+### Verification
+
+Browser walk (dev server on 3100, throwaway worker): header had brand + desktop bar + avatar
+top-right with no button beside it, no text around the avatar, and no Profile tab; the phone nav
+ended in More (bottom-right; `aria-current` on `/more`). Avatar tap opened the editor with
+Save/Cancel, a large person icon, a pencil (Choose) and a disabled trash. Picking a file kept the
+sheet open with a local preview; Save uploaded the file (signed storage URL rendered in the
+profile) and closed the sheet; the editor reopened showing the photo with the trash enabled;
+trash + Save removed it and the person icon returned. `/more` listed Invitations, Settings, Help,
+About, Terms & Conditions and Privacy Policy; `/help` while signed in showed brand + avatar and a
+footer "More" link; after sign-out it showed brand + "Sign in" with no More link. The landing
+brand read "TetherProof". Web typecheck and the production `next build` both pass.
+
+### Note: dev-server corruption while verifying
+
+Running the production build against the running dev server corrupted `apps/web/.next` (the
+shell logged `Cannot find module './571.js'` and `[TypeError: Invalid URL]` on `/login`), which
+made client pages fail to hydrate and sign-in 500. This is E-037 in a new disguise: the fix is
+the documented one - stop the dev server before building, delete `.next`, restart dev - after
+which every flow above went green. No application code was involved.
+
+### Follow-up during review: the corner avatar on the profile page
+
+Review pointed out that the header's top-right avatar is the way to the profile page - and on
+the profile page itself that is an anchor to where the user already is, a second avatar sitting
+next to the one the page is showing. The corner now hides there. The avatar link moved into a
+small client component, `HeaderAvatar` (`apps/web/src/components/shell/HeaderAvatar.tsx`), that
+reads `usePathname` and returns nothing on `/profile` (or a future nested `/profile/*`), while
+`AppShell` stays a server component and the header keeps the identical layout on every other
+page. Verified in the browser: avatar present on `/dashboard` and `/more`, absent on `/profile`
+where the header is brand + tabs and the page's own large avatar stands in for the corner.

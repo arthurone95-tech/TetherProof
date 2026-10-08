@@ -23,7 +23,7 @@ const sections = [
   },
   {
     title: 'Invitations',
-    body: 'An employer who sees your verified record can invite you with a note and a skill requirement. Pending invitations sit under the more menu (⋯) in Invitations, and you can accept or decline them there. Accepting confirms your interest; declining is final for that invitation.',
+    body: 'An employer who sees your verified record can invite you with a note and a skill requirement. Pending invitations sit under More, in Invitations, and you can accept or decline them there. Accepting confirms your interest; declining is final for that invitation.',
   },
   {
     title: 'Account and privacy',

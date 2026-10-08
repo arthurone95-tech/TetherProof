@@ -11,12 +11,14 @@ export const metadata: Metadata = {
 };
 
 /**
- * Where a member edits what their account says about them.
+ * Where a member reads and edits what their account says about them.
  *
  * This is a destination the navigation needed before it could be honest about
  * having one: a header offering "Profile" with no page behind it would be a link
- * to a 404. It holds the three things the API's profile actually carries that a
- * member may change — name, organisation, location — and nothing else.
+ * to a 404. It shows the three things the API's profile actually carries that a
+ * member may change — photo, name, organisation, location — in a read-only view
+ * that is only opened for editing on request, so the page answers "who am I"
+ * rather than presenting a form as the whole answer.
  *
  * No email address, and not as an oversight: `ProfileResponse` does not carry one.
  * Identity data stays in Supabase Auth and is not duplicated into the profile the
@@ -31,9 +33,9 @@ export default async function ProfilePage() {
       <header>
         <h1 className="text-2xl font-bold text-ink-900">Your profile</h1>
         <p className="mt-2 text-ink-600">
-          Your name, your organisation if you have one, and the point distances are measured
-          from. Employers search on verified proof counts, so this page is about your account
-          rather than about what a search returns.
+          Your photo, your name, your organisation if you have one, and the point distances are
+          measured from. Employers search on verified proof counts, so this page is about your
+          account rather than about what a search returns.
         </p>
       </header>
 
@@ -43,6 +45,7 @@ export default async function ProfilePage() {
           fullName={profile.fullName}
           organizationName={profile.organizationName}
           locationGps={profile.locationGps}
+          avatarUrl={profile.avatarUrl}
         />
       </Card>
 

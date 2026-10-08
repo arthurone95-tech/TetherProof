@@ -112,6 +112,13 @@ details has to ask for them deliberately through another endpoint rather than re
 by default alongside the profile. It does include `locationGps`, which is the caller's own
 value, so a profile form can be prefilled with the location that was actually saved.
 
+`avatarUrl` is **not the stored path** and is not a URL the client ever supplied: it is a
+short-lived signed URL minted at read time (5-minute expiry) from whatever object the account
+currently has, or `null` when there is none. A missing or unreadable object degrades to `null`
+rather than failing the read, because the app layout depends on this endpoint and must never
+redirect somebody to sign in because their photo is broken. Only the endpoints in **H** and
+**I** can write the column.
+
 ### F. Update Own Profile
 * **Endpoint:** `PATCH /api/v1/auth/profile`
 * **Description:** Updates the caller's own profile fields. Any field may be omitted to leave
@@ -123,10 +130,16 @@ value, so a profile form can be prefilled with the location that was actually sa
   {
     "fullName": "Ama Mensah",
     "organizationName": "Accra Solar Ltd",
-    "locationGps": "5.6037,-0.1870",
-    "avatarUrl": "https://…"
+    "locationGps": "5.6037,-0.1870"
   }
   ```
+
+No `avatarUrl` field exists here, and one sent anyway is stripped by validation before it can
+reach the write. The schema deliberately accepts no client-supplied avatar URL — arbitrary
+third-party URLs would be rendered as a person's photo, and the URL is not how a photo is
+stored. A profile image is written only through the multipart endpoints **H** (upload) and
+**I** (remove), which scrub the bytes and store a random-UUID object the client cannot
+influence.
 
 Response (200 OK): Returns the updated profile. This is an **upsert**, not an update: accounts
 provisioned outside `/auth/register` — by an administrator or a service-role `createUser` —
@@ -178,9 +191,54 @@ afterwards.
 See `doc/13` E-025 and E-029 for why deletion anonymises rather than cascading, and `doc/08`
 for the retention policy in full.
 
+A profile image, when one is set, is also removed here. Its path is read before the account
+delete (the deletion trigger scrubs every `profiles` column, so reading afterwards would see
+nothing) and the object is then removed through the Storage API, counted in `mediaRemoved`.
+
 ---
 
-### H. Confirmation Link Return (`/auth/callback`)
+### H. Upload Profile Photo
+* **Endpoint:** `POST /api/v1/auth/avatar`
+* **Description:** Sets or replaces the caller's profile image. Any authenticated role may call it.
+* **Authorization:** `Authorization: Bearer <access_token>`
+* **Rate limit:** 20 requests per 15 minutes per IP — the same limiter as proof uploads,
+  because re-encoding an image is the same class of work.
+* **Request Body (Multipart Form-Data):**
+
+  `avatar_file` is the photo, as multipart binary. Accepted types are `image/jpeg`,
+  `image/png`, `image/webp`, and `image/heic` — images only, and every type must be
+  scrubbable. Files are size-capped by `STORAGE_MAX_AVATAR_BYTES` (default 5 MB) twice: by
+  multer before a byte is buffered, and by the `profile-avatars` bucket itself.
+
+  The bytes are scrubbed of metadata exactly as proof media are (sharp re-encoding drops
+  EXIF and any GPS block), and the object is stored under a random UUID in the caller's own
+  folder. Uploading a replacement removes the previous object, and only after the profile row
+  already points at the new one — a failure partway through can orphan a file but can never
+  leave the profile pointing at a photo the user replaced.
+
+Response (201 Created):
+
+```json
+{ "avatarUrl": "https://signed-url…" }
+```
+
+`avatarUrl` is a fresh short-lived signed URL (5-minute expiry), minted from the object that
+was just stored. It is **never** a path from storage and never a caller-invented address.
+
+### I. Remove Profile Photo
+* **Endpoint:** `DELETE /api/v1/auth/avatar`
+* **Description:** Removes the caller's profile image, if there is one. Idempotent — an
+  account with no photo still answers success with `null`, exactly as account deletion does
+  for media that is already gone.
+* **Authorization:** `Authorization: Bearer <access_token>`
+
+Response (200 OK): `{ "avatarUrl": null }`. The profile row is cleared before the object is
+deleted, so a removal that fails partway never leaves the profile pointing at a photo its
+owner asked to delete.
+
+---
+
+### J. Confirmation Link Return (`/auth/callback`)
 
 * **Route:** `GET /auth/callback` in `apps/web` — a web route, not an API endpoint.
 

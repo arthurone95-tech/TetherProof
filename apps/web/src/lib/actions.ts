@@ -404,6 +404,68 @@ function parseCoordinatePair(latitude: string, longitude: string): string | null
   return `${lat},${lng}`;
 }
 
+/** Everything the profile-image endpoint accepts, and nothing else. */
+const AVATAR_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic'];
+
+/** Matches the API's own cap (`STORAGE_MAX_AVATAR_BYTES`, default 5 MB). */
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Sets or replaces the caller's profile image.
+ *
+ * The file travels as multipart for the same reason a proof does: it is the file
+ * itself, not a description of one. `POST /auth/avatar` is the only writer of the
+ * photo, so a picture can never arrive as a URL the client invented — the profile
+ * update schema deliberately accepts no avatar URL at all.
+ *
+ * The type and size are checked here as well as in the API because the endpoint
+ * is rate limited; spending one of the few upload attempts on a file the API was
+ * always going to refuse is a worse answer than saying so before the request.
+ */
+export async function uploadAvatar(_previous: FormState, formData: FormData): Promise<FormState> {
+  const media = formData.get('avatar_file');
+  if (!(media instanceof File) || media.size === 0) {
+    return { error: 'Choose a photo to upload.', field: 'avatar_file' };
+  }
+  if (!AVATAR_MEDIA_TYPES.includes(media.type.toLowerCase())) {
+    return {
+      error: 'That file type is not supported. Use a JPG, PNG, WebP or HEIC image.',
+      field: 'avatar_file',
+    };
+  }
+  if (media.size > MAX_AVATAR_BYTES) {
+    return { error: 'Profile images must be smaller than 5 MB.', field: 'avatar_file' };
+  }
+
+  try {
+    await apiServerForm('/auth/avatar', formData);
+    revalidatePath('/profile');
+    return { done: true };
+  } catch (error) {
+    return {
+      error: messageFor(error, 'We could not update your photo. Please try again.'),
+      field: 'avatar_file',
+    };
+  }
+}
+
+/**
+ * Removes the caller's profile image, if there is one.
+ *
+ * The API answers successfully whether or not a photo existed, so this cannot
+ * fail on a photo that is already gone. The page is revalidated so the read-only
+ * view stops showing the removed picture.
+ */
+export async function removeAvatar(_previous: FormState, _formData: FormData): Promise<FormState> {
+  try {
+    await apiServer('/auth/avatar', { method: 'DELETE' });
+    revalidatePath('/profile');
+    return { done: true };
+  } catch (error) {
+    return { error: messageFor(error, 'We could not remove your photo. Please try again.') };
+  }
+}
+
 function asPositiveInt(value: FormDataEntryValue | null, fallback: number): number {
   const parsed = Number(String(value ?? ''));
   if (!Number.isFinite(parsed) || parsed < 1) return fallback;

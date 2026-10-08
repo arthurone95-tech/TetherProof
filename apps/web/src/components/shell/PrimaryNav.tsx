@@ -152,5 +152,13 @@ function NavIcon({ name, className }: { name: NavItem['icon']; className: string
           <circle cx="10" cy="16.5" r="2.2" />
         </svg>
       );
+    case 'more':
+      return (
+        <svg {...shared}>
+          <circle cx="5.5" cy="12" r="1.5" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+          <circle cx="18.5" cy="12" r="1.5" fill="currentColor" stroke="none" />
+        </svg>
+      );
   }
 }

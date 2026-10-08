@@ -126,7 +126,7 @@ export function VerificationView({ token }: { token: string }) {
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10">
       <Card>
-        <p className="text-sm font-semibold tracking-wide text-brand-600 uppercase">TetherProof</p>
+        <p className="text-sm font-semibold tracking-wide text-brand-600">TetherProof</p>
         <h1 className="mt-2 text-xl font-semibold text-ink-900">Was this work completed?</h1>
 
         {summary.skillTag ? (
