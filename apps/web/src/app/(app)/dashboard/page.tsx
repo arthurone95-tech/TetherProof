@@ -45,20 +45,19 @@ export default async function WorkerDashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">Your dashboard</h1>
-          <p className="mt-2 max-w-2xl text-ink-600">
-            See what is on your record, what is waiting on somebody else, and where to go next.
-          </p>
-        </div>
+      {/*
+        No heading on the page: Home's header already says "TetherProof" — the
+        metrics below open the page, and the one action worth keeping above them
+        is the way to log the next job.
+      */}
+      <div className="flex">
         <Link
           href="/workspace"
           className="inline-flex min-h-12 items-center rounded-xl bg-brand-600 px-6 text-sm font-semibold text-white transition-colors hover:bg-brand-700"
         >
           Log a job
         </Link>
-      </header>
+      </div>
 
       {metrics ? (
         <ul className="grid grid-cols-2 gap-3 lg:grid-cols-4">

@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from 'react';
 import type { UserRole } from '@tetherproof/shared';
+import { Pencil } from 'lucide-react';
 import { saveProfile } from '@/lib/actions';
 import { EMPTY_FORM, type FormState } from '@/lib/form-state';
 import { locateMessage, useGeolocation } from '@/lib/use-geolocation';
@@ -9,6 +10,7 @@ import { ProfileAvatar } from '@/components/shell/ProfileAvatar';
 import { Button } from '@/components/ui/Button';
 import { Field } from '@/components/ui/Field';
 import { FormSuccess } from '@/components/ui/FormSuccess';
+import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 import { AvatarEditor } from './AvatarEditor';
 
@@ -252,17 +254,7 @@ function EditBadge() {
       aria-hidden="true"
       className="absolute -bottom-0.5 -right-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-brand-600 text-white ring-2 ring-white"
     >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.8}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="h-3.5 w-3.5"
-      >
-        <path d="M17 3l4 4L9 19l-5 1 1-5L17 3z" />
-      </svg>
+      <Pencil className="h-3.5 w-3.5" strokeWidth={ICON_STROKE_WIDTH} />
     </span>
   );
 }

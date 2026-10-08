@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { InfoPage } from '../InfoPage';
 
 export const metadata: Metadata = {
   title: 'Help — TetherProof',
@@ -23,11 +24,11 @@ const sections = [
   },
   {
     title: 'Invitations',
-    body: 'An employer who sees your verified record can invite you with a note and a skill requirement. Pending invitations sit under More, in Invitations, and you can accept or decline them there. Accepting confirms your interest; declining is final for that invitation.',
+    body: 'An employer who sees your verified record can invite you with a note and a skill requirement. Pending invitations wait behind the invitation icon at the top-right of Home, with a count of how many still need your answer. Open it to accept or decline each one. Accepting confirms your interest; declining is final for that invitation.',
   },
   {
     title: 'Account and privacy',
-    body: 'Your profile holds your name and contact details, and only you can see your own logs with their coordinates. Sign out and delete your account live on your Profile page. Deleting removes everything that identifies you; the work you logged stays on the platform without your name, because proof counts are shared and one person leaving should not quietly change everyone else’s totals.',
+    body: 'Your profile holds your name and contact details, and only you can see your own logs with their coordinates. Sign out lives on your Profile page, and deleting your account lives under More, in Settings. Deleting removes everything that identifies you; the work you logged stays on the platform without your name, because proof counts are shared and one person leaving should not quietly change everyone else’s totals.',
   },
   {
     title: 'Something is not working',
@@ -37,20 +38,13 @@ const sections = [
 
 export default function HelpPage() {
   return (
-    <div className="flex flex-col gap-8">
-      <header>
-        <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">Help</h1>
-        <p className="mt-2 text-ink-600">
-          How the app works, in the order you will meet it.
-        </p>
-      </header>
-
+    <InfoPage title="Help">
       {sections.map((section) => (
         <section key={section.title} className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold text-ink-900">{section.title}</h2>
           <p className="leading-7 text-ink-700">{section.body}</p>
         </section>
       ))}
-    </div>
+    </InfoPage>
   );
 }

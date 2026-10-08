@@ -31,17 +31,10 @@ export default async function InvitesPage() {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
       {/*
-        The brand line, the greeting, and the sign-out button belong to the shell
-        now. What is left here is only what this screen is about, so the heading
-        does not change when a member walks from one page to the next.
+        The page carries no heading of its own: opened from More (or Home's
+        invitation icon), the header already says "Invitations". What is left
+        here is only the inbox itself.
       */}
-      <header>
-        <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">Invitations</h1>
-        {inbox.pendingCount > 0 ? (
-          <p className="mt-1 text-ink-600">{inbox.pendingCount} waiting for your answer.</p>
-        ) : null}
-      </header>
-
       <Card title="Waiting for your answer">
         {waiting.length === 0 ? (
           <p className="rounded-xl bg-brand-50 p-4 text-sm text-ink-600">
@@ -87,10 +80,6 @@ export default async function InvitesPage() {
           </ul>
         )}
       </Card>
-
-      <p className="text-sm text-ink-600">
-        Signed in as {user.fullName ?? 'this account'}.
-      </p>
     </div>
   );
 }

@@ -2471,3 +2471,128 @@ reads `usePathname` and returns nothing on `/profile` (or a future nested `/prof
 `AppShell` stays a server component and the header keeps the identical layout on every other
 page. Verified in the browser: avatar present on `/dashboard` and `/more`, absent on `/profile`
 where the header is brand + tabs and the page's own large avatar stands in for the corner.
+
+
+## E-050: Follow-up batch 3 - context-aware header, More sub-pages, invitation icon, no-reload navigation
+
+Batch scope (15 items): avatar save must never land on the error screen; no full-page reloads on
+navigation or saves; header title tells you where you are; More and its sub-pages restructured
+with back headers instead of body headings; invitation access moves from More to a Home-only
+header icon with a pending-count badge; intro copy stripped app-wide. Verified end to end in the
+browser as a worker, as an employer, and signed-out.
+
+What changed and why:
+
+- The header is a single client component (`AppHeader`) that branches on where you are: a
+  sub-page (profile, invites, settings, help, about, terms, privacy) renders only a back icon
+  and the page name; a primary section reads its own name (Workspace, Logs) or the app name on
+  Home and More. The section title lives in the header as the page's single h1; every duplicate
+  body heading and intro paragraph was removed from dashboard, workspace, logs, profile, invites,
+  settings, and more. `HeaderAvatar` is deleted - Profile is reachable only from More.
+- The bottom tab row (`AppTabs`) renders on the four primary sections and returns null on every
+  sub-page, so a sub-page is a focused screen with a single way forward (back).
+- The Home header carries the invitation icon for workers only, with a badge counting
+  invitations not yet answered (caps at 99+; no badge at zero). The count is fetched in the app
+  shell from `/invites/offers` for workers only, and any failure degrades to no badge rather
+  than erroring the shell.
+- One automatic retry (400 ms) was added in `apiServer` for GET requests whose response is
+  5xx/503 (a page render that hits a briefly-unreachable API no longer dies on the first miss).
+  Writes are never retried; the avatar save flow keeps its existing full error handling inside
+  the form and always stays on /profile.
+
+The original error screen, reproduced and explained: while verifying, the API dev process died
+mid-run; the very next worker page render threw `serviceUnreachable` from `dashboard/page.tsx`
+and every subsequent navigation showed the error screen (and the dev overlay). That is the same
+failure the batch started from: the API being unreachable at request time. Nothing in the save
+flow redirects anywhere. The retry softens transient 503s; a genuinely dead API still surfaces
+the error screen honestly.
+
+Tooling trap worth recording: the Next dev error dialog (inside `nextjs-portal` shadow DOM)
+covers the whole viewport and silently swallowed every `browser.click` aimed at the page, which
+looked exactly like slow/non-navigating links. The fix is to dismiss the overlay and retry the
+click, not to touch application code.
+
+Verified live: section titles in header only (Home/More read "TetherProof", Work "Workspace",
+Logs "Logs", sub-pages their names; no body h1 on any signed-in screen); bottom tabs on Home,
+Work, Logs, More and on no sub-page; back icon returns to More everywhere; More lists exactly
+Profile, Settings, Help, About, Terms & Conditions, Privacy Policy with no heading, no
+"Everything else", no "Signed in as"; invitation icon only on Home (absent on Work, Logs, More,
+and every sub-page; absent for the employer session); badge lifecycle 2 -> 1 -> none after
+accepting then declining the two test invitations, with the plain "Invitations" label at zero;
+avatar save stays on /profile with a persisted photo across reload and sign-out/sign-in; no
+document reloads across tab and sub-page navigation (a `window` marker survives every soft nav);
+signed-out info pages keep the marketing header and footer with a body h1; employer Home reads
+"TetherProof" with Workspace/More tabs and the same More sub-page behavior. Production `next
+build` passes (dev stopped, `.next` removed first - the E-037 discipline), as does `typecheck`
+across all workspaces. Test scaffolding was throwaway code and accounts under
+`tetherproof.invalid`, separately deleted or left inert.
+
+Addendum during final verification: a session whose account has been deleted (the settings
+"Delete my account" flow, then the account's own browser navigating on) made `GET /auth/me`
+answer 404 "Profile not found", and `currentProfile` treated that as a real error, so every
+signed-in render hit the error screen instead of the login page. `currentProfile` now maps both
+401 (no session) and 404 (session for a deleted account) to `null`, so the layouts redirect to
+sign-in. Reproduced live with a deleted test account and verified to redirect cleanly.
+
+## E-051: A network failure was reported to the person signing in as a wrong password
+
+* **Status:** Fixed
+* **Found:** 2026-10-08, reported from the sign-in screen: typing an email and password with no working connection produced `Incorrect sign-in details.`
+* **Related:** `apps/api/src/modules/auth/service.ts` (`login`), `apps/web/src/lib/actions.ts` (`signIn`, `uploadAvatar`), `apps/web/src/lib/api-error.ts`, `apps/web/src/components/ui/Field.tsx`, `apps/web/src/app/login/LoginView.tsx`
+
+### Description
+
+Three separate faults stacked up behind one symptom.
+
+**The API turned every provider failure into a credential refusal.** `login()` collapsed
+`signInWithPassword` into one branch: `if (error || !data.user || !data.session) throw
+AppError.unauthorized('Incorrect sign-in details.')`. Supabase reports a rejected password and
+a provider it could not reach through the same field, so a person offline, behind a captive
+portal, or during a provider restart was told their password was wrong. The response to that
+message is to change the password, which converts a temporary fault into a real one.
+
+**The web pinned the message to the password box.** `signIn` returned
+`field: 'password'` for every failure, so even the honest network wording
+(`We could not reach TetherProof just now.`) appeared directly under the password input,
+where it reads as a claim about the password. `uploadAvatar` had the same shape, reporting a
+failed upload beside the file picker.
+
+**A refused sign-in wiped what had been typed.** React resets an uncontrolled form once its
+action finishes, whether it succeeded or failed, so the two boxes came back empty. `Field`
+documented the opposite — that an uncontrolled input keeps what the person typed — which is
+why this was not caught by reading the component.
+
+The same field-pinning defect was audited across every action. The others were already
+correct: `registerAccount`, `saveProfile`, `submitProof` and `editProof` use `formErrorFor`,
+which attaches a field only when the API named one, and `requestCode`/`confirmWithCode` report
+at form level. `uploadAvatar` was the one remaining case.
+
+### Resolution
+
+* **The API answers only for the code that means it.** `invalid_credentials` still becomes
+  `401 Incorrect sign-in details.`; every other provider error, and a provider answer that
+  carries neither a session nor an error, becomes `503` with a message that says what
+  happened and points at the sign-in code as an alternative. The provider's code, status and
+  message are logged rather than forwarded, and no other provider code is branched on: a
+  refusal that distinguished an unconfirmed account from an unknown one would turn sign-in
+  into an account-enumeration oracle, which is what this endpoint exists to prevent.
+* **The web blames the password only for a credential refusal.** `isCredentialRefusal` in
+  `lib/api-error.ts` is true only for `401`; every other failure is reported at form level.
+  Narrower than `isAuthFailure`, which also covers an expired session on a signed-in page.
+* **The fields survive.** `Field` and `PasswordField` accept `value`, so the sign-in panel
+  holds its own email and password in state and React's form reset cannot clear them. The
+  register and confirm panels use the same state, so a refused attempt there keeps the name,
+  address and code too.
+* **The address is remembered on the device; the password never is.**
+  `lib/remembered-email.ts` stores the last address in `localStorage`, guarded for SSR,
+  private mode and a corrupt value, and unticking `Remember my email on this device` erases
+  it. No password is written to storage by this application: `autoComplete="email"` and
+  `autoComplete="current-password"` already let the browser and a password manager offer the
+  matching password for the remembered address, which is the safe version of the feature.
+
+### Verification
+
+* `npm run typecheck` passes across shared, api and web.
+* Production build of a clean copy of the tree: exit 0, every route generated.
+* Rendered `/login` from that build and confirmed the server-rendered markup carries the
+  Lucide icons.

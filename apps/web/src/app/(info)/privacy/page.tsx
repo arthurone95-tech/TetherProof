@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { InfoPage } from '../InfoPage';
 
 export const metadata: Metadata = {
   title: 'Privacy Policy — TetherProof',
@@ -29,20 +30,13 @@ const sections = [
 
 export default function PrivacyPage() {
   return (
-    <div className="flex flex-col gap-8">
-      <header>
-        <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">Privacy Policy</h1>
-        <p className="mt-2 text-ink-600">
-          What we keep, what we scrub, and what we let go of.
-        </p>
-      </header>
-
+    <InfoPage title="Privacy Policy">
       {sections.map((section) => (
         <section key={section.title} className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold text-ink-900">{section.title}</h2>
           <p className="leading-7 text-ink-700">{section.body}</p>
         </section>
       ))}
-    </div>
+    </InfoPage>
   );
 }

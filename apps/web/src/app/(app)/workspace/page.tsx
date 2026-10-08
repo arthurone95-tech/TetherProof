@@ -24,14 +24,7 @@ export default async function WorkspacePage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <header>
-        <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">Log work</h1>
-        <p className="mt-2 max-w-2xl text-ink-600">
-          Turn a finished job into proof with a photo or a recording. What you add becomes a log
-          an employer can check, so describe what happened rather than what was planned.
-        </p>
-      </header>
-
+      {/* The header carries the section's name; the form's own card titles it. */}
       <Card title="Log completed work">
         <LogWorkForm />
       </Card>

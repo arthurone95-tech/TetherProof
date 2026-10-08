@@ -25,9 +25,27 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
  *
  * One retry after an expired access token. The refresh happens in
  * `readAccessToken`, so the retry picks up a freshly written token.
+ *
+ * A read also gets one retry when the answer was transient — the API mid-restart,
+ * a dropped connection, a 500 that succeeds on the second ask. This is the call
+ * every signed-in page renders from, so without it a single hiccup takes down
+ * every screen at once: the error page replaces the page, and Next falls back
+ * to a full document navigation when a render fails mid-transition, which reads
+ * as the whole app reloading itself into a broken state. Reads only — a write
+ * is never repeated automatically, because a second attempt is how one save
+ * becomes two records.
  */
 export async function apiServer<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  return send<T>(path, options, true);
+  try {
+    return await send<T>(path, options, true);
+  } catch (error) {
+    const isRead = (options.method ?? 'GET').toUpperCase() === 'GET';
+    const isTransient = error instanceof ApiRequestError && error.status >= 500;
+    if (!isRead || !isTransient) throw error;
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return send<T>(path, options, true);
+  }
 }
 
 /**
@@ -145,9 +163,12 @@ export const currentProfile = cache(async (): Promise<ProfileResponse | null> =>
     return await apiServer<ProfileResponse>('/auth/me');
   } catch (error) {
     // A missing session is the ordinary case for a signed-out visitor and is not a
-    // failure worth reporting. Anything else is a genuine problem, so it is not
-    // swallowed here.
-    if (error instanceof ApiRequestError && error.status === 401) return null;
+    // failure worth reporting. So is a session whose account no longer exists: the
+    // API answers 404 "Profile not found" when the token still loads but the user
+    // behind it was deleted (the account's own browser after "Delete my account"),
+    // and there is no Profile page to render for either. Anything else is a genuine
+    // problem, so it is not swallowed here.
+    if (error instanceof ApiRequestError && (error.status === 401 || error.status === 404)) return null;
     throw error;
   }
 });

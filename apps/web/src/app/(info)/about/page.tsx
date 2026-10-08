@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { InfoPage } from '../InfoPage';
 
 export const metadata: Metadata = {
   title: 'About — TetherProof',
@@ -25,20 +26,13 @@ const sections = [
 
 export default function AboutPage() {
   return (
-    <div className="flex flex-col gap-8">
-      <header>
-        <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">About TetherProof</h1>
-        <p className="mt-2 text-ink-600">
-          Proof of the work you have done, tethered to the people who saw you do it.
-        </p>
-      </header>
-
+    <InfoPage title="About">
       {sections.map((section) => (
         <section key={section.title} className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold text-ink-900">{section.title}</h2>
           <p className="leading-7 text-ink-700">{section.body}</p>
         </section>
       ))}
-    </div>
+    </InfoPage>
   );
 }

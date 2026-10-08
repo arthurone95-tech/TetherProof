@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
+import type { ReceivedOffersResponse } from '@tetherproof/shared';
 import { AppShell } from '@/components/shell/AppShell';
 import { homeFor, navFor } from '@/lib/navigation';
-import { currentProfile } from '@/lib/server/api';
+import { apiServer, currentProfile } from '@/lib/server/api';
 
 /**
  * The frame around every signed-in screen.
@@ -22,8 +23,34 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   if (!profile) redirect('/login');
 
   return (
-    <AppShell home={homeFor(profile.role)} avatarUrl={profile.avatarUrl} items={navFor(profile.role)}>
+    <AppShell
+      home={homeFor(profile.role)}
+      items={navFor(profile.role)}
+      showInvitations={profile.role === 'worker'}
+      pendingInvitations={await pendingInvitationsFor(profile.role)}
+    >
       {children}
     </AppShell>
   );
+}
+
+/**
+ * How many invitations are waiting for this member's answer — the badge on
+ * Home's invitation icon.
+ *
+ * Worker-only: invitations are sent to workers, so another role has no inbox to
+ * count and asking the worker-only endpoint on their behalf would be a request
+ * they are not allowed to make. A failure anywhere in the read degrades to zero
+ * rather than taking the whole shell down with it — a missing badge is a quiet
+ * icon, while a thrown error would be every signed-in page refusing to render
+ * over a number.
+ */
+async function pendingInvitationsFor(role: string): Promise<number> {
+  if (role !== 'worker') return 0;
+  try {
+    const inbox = await apiServer<ReceivedOffersResponse>('/invites/offers');
+    return inbox.pendingCount;
+  } catch {
+    return 0;
+  }
 }

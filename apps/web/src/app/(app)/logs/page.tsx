@@ -27,14 +27,7 @@ export default async function LogsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <header>
-        <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">Your logs</h1>
-        <p className="mt-2 max-w-2xl text-ink-600">
-          Every job you have logged, newest first. Tap one to see the detail and, while it is
-          still unconfirmed, to correct it.
-        </p>
-      </header>
-
+      {/* The header carries the section's name; the list speaks for itself. */}
       {proofs.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-brand-200 bg-white p-8 text-center">
           <p className="text-lg font-semibold text-ink-900">Nothing logged yet</p>

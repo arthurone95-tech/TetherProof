@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { ChevronRight } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
+import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 import { moreFor } from '@/lib/navigation';
 import { currentProfile } from '@/lib/server/api';
 
@@ -10,28 +12,23 @@ export const metadata: Metadata = {
 };
 
 /**
- * Everything less than daily, in one place.
+ * The list of everything less than daily.
  *
- * The header carries the account (the avatar) and the tabs carry what a role
- * does day to day; this page is the flat list of what a member needs sometimes —
- * invitations, settings, and the four static pages. It is a page rather than a
- * dropdown so each destination gets a real link with the app frame around it,
- * and the phone's bottom-right corner has a stable, thumb-sized entry point.
+ * The page is the list and nothing else: no heading, no subtitle, no line
+ * explaining what "More" means. The header already says where you are, the six
+ * options say what is here, and any sentence on top of that would be the page
+ * talking over its own contents. Profile sits first because it is the account
+ * itself; the rest follow in the order a member is most likely to need them.
  */
 export default async function MorePage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
 
-  const items = moreFor(user.role);
+  const items = moreFor();
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-      <header>
-        <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">More</h1>
-        <p className="mt-1 text-ink-600">The rest of your account, when you need it.</p>
-      </header>
-
-      <Card title="Everything else">
+    <div className="mx-auto w-full max-w-3xl">
+      <Card>
         <ul className="divide-y divide-brand-100">
           {items.map((item) => (
             <li key={item.href}>
@@ -40,27 +37,16 @@ export default async function MorePage() {
                 className="group flex items-center justify-between gap-4 px-1 py-4 text-ink-900 transition hover:text-brand-700"
               >
                 <span className="font-medium">{item.label}</span>
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+                <ChevronRight
                   aria-hidden="true"
                   className="h-4 w-4 text-ink-400 transition group-hover:text-brand-600"
-                >
-                  <path d="M9 6l6 6-6 6" />
-                </svg>
+                  strokeWidth={ICON_STROKE_WIDTH}
+                />
               </Link>
             </li>
           ))}
         </ul>
       </Card>
-
-      <p className="text-sm text-ink-600">
-        Signed in as {user.fullName ?? 'this account'}.
-      </p>
     </div>
   );
 }

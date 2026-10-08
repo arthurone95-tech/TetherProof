@@ -1,9 +1,11 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { Pencil, Trash2 } from 'lucide-react';
 import { removeAvatar, uploadAvatar } from '@/lib/actions';
 import { EMPTY_FORM, type FormState } from '@/lib/form-state';
 import { ProfileAvatar } from '@/components/shell/ProfileAvatar';
+import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 
 /** What the picker may offer; every type the API and its scrubber accept. */
 const AVATAR_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic'];
@@ -140,18 +142,11 @@ export function AvatarEditor({
               className="flex flex-col items-center gap-1.5 text-ink-600 transition hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-50 text-brand-600">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.8}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+                <Pencil
                   aria-hidden="true"
                   className="h-5 w-5"
-                >
-                  <path d="M17 3l4 4L9 19l-5 1 1-5L17 3z" />
-                </svg>
+                  strokeWidth={ICON_STROKE_WIDTH}
+                />
               </span>
               <span className="text-xs font-medium">Choose</span>
             </button>
@@ -167,21 +162,11 @@ export function AvatarEditor({
               className="flex flex-col items-center gap-1.5 text-ink-600 transition hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <span className="flex h-12 w-12 items-center justify-center rounded-full bg-red-50 text-red-600">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.8}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
+                <Trash2
                   aria-hidden="true"
                   className="h-5 w-5"
-                >
-                  <path d="M3 6h18" />
-                  <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                  <path d="M10 11v6M14 11v6" />
-                </svg>
+                  strokeWidth={ICON_STROKE_WIDTH}
+                />
               </span>
               <span className="text-xs font-medium">Remove</span>
             </button>
