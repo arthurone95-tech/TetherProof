@@ -1,7 +1,7 @@
 import type { UserRole } from '@tetherproof/shared';
 
 /** One destination in the signed-in primary navigation. */
-export type NavIcon = 'home' | 'workspace' | 'logs' | 'profile';
+export type NavIcon = 'home' | 'workspace' | 'logs' | 'profile' | 'invitations';
 
 export interface NavItem {
   href: string;
@@ -15,15 +15,20 @@ export interface NavItem {
   icon: NavIcon;
 }
 
-/**
- * One destination in the top-right menu (the hamburger on a phone, the icon
- * group beside the header nav on a wide screen).
- */
+/** The icon a row in the account menu carries; the menu component maps each to a glyph. */
+export type MenuIcon = 'profile' | 'settings' | 'help' | 'about' | 'terms' | 'privacy';
+
+/** One destination in the account menu (the avatar at the header's right edge). */
 export interface MenuItem {
   href: string;
   label: string;
-  /** The single sentence a screen reader or a skim can hang on. */
-  description: string;
+  icon: MenuIcon;
+}
+
+/** A run of related destinations, separated from its neighbours by a divider. */
+export interface MenuGroup {
+  id: string;
+  items: MenuItem[];
 }
 
 /**
@@ -49,18 +54,26 @@ export function homeFor(role: UserRole): string {
  * The primary tabs.
  *
  * Workers live in four places: see the overview, log the next job, read the
- * record, and manage their own account and capabilities. The invitation inbox
- * and the static pages sit in the header's menu instead: they are screens a
- * worker visits occasionally, and keeping them out of the bottom row leaves the
- * everyday tabs readable on a phone. The log form is deliberately its own
- * tab — it is the one task a worker came to do, and mixing it into a scrolling
- * dashboard would bury it under content.
+ * record, and answer the invitations waiting for them. Invitations sit in the tab
+ * row rather than in the header because a count of unanswered invitations is one
+ * of the few things worth interrupting a glance for, and a badge in the bar a
+ * thumb already rests on is seen more often than one across the screen.
+ * Everything occasional — settings, help, the documents, and the account itself
+ * — sits in the header's menu instead, so the everyday tabs stay readable on a
+ * phone. The log form is deliberately its own tab: it is the one task a worker
+ * came to do, and mixing it into a scrolling dashboard would bury it under
+ * content.
+ *
+ * Profile is therefore absent here, and was in the tab row until the account menu
+ * took it: with the menu in the header, a Profile tab repeated a destination the
+ * member can already reach from anywhere on any screen, including the ones with
+ * no tab row at all.
  */
 const WORKER_NAV: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', mobileLabel: 'Home', icon: 'home' },
   { href: '/workspace', label: 'Workspace', mobileLabel: 'Work', icon: 'workspace' },
   { href: '/logs', label: 'Logs', icon: 'logs' },
-  { href: '/profile', label: 'Profile', icon: 'profile' },
+  { href: '/invites', label: 'Invitations', mobileLabel: 'Invites', icon: 'invitations' },
 ];
 
 /** Employers keep two tabs; settings and the docs live in the header menu. */
@@ -81,28 +94,50 @@ export function navFor(role: UserRole): NavItem[] {
 }
 
 /**
- * What lives in the header menu.
+ * What lives in the account menu.
  *
- * Invitations and notifications exist only for workers — they hold a worker's
- * inbox. Profile is a primary tab now, so it is deliberately not listed here;
- * the rest — settings and the four static pages — are open to every role.
- * Static pages are public, but a signed-in person reaching them from the app
- * gets the app's back header rather than marketing chrome.
+ * Three groups, in the order a member reaches for them: the account itself,
+ * help about the product, and the documents. Invitations and notifications are
+ * deliberately absent: they are the member's inbox, so they sit in the header
+ * as their own icons (with their badges) and never need a menu to be found.
+ * Every row is open to every role. Static pages are public, but a signed-in
+ * person reaching them from the app gets the app's back header rather than
+ * marketing chrome.
+ *
+ * Sign-out is not here on purpose; it lives on the Profile page, next to the
+ * account it ends.
  */
-export function menuFor(isWorker: boolean): MenuItem[] {
-  return [
-    ...(isWorker
-      ? [
-          { href: '/notifications', label: 'Notifications', description: 'Verification and invitation updates' },
-          { href: '/invites', label: 'Invitations', description: 'Invitations waiting for your answer' },
-        ]
-      : []),
-    { href: '/settings', label: 'Settings', description: 'Your account and privacy choices' },
-    { href: '/help', label: 'Help', description: 'How the app works' },
-    { href: '/about', label: 'About', description: 'What TetherProof is for' },
-    { href: '/terms', label: 'Terms & Conditions', description: 'The rules of using the service' },
-    { href: '/privacy', label: 'Privacy Policy', description: 'What we do with your data' },
-  ];
+export const ACCOUNT_MENU: ReadonlyArray<MenuGroup> = [
+  {
+    id: 'account',
+    items: [
+      { href: '/profile', label: 'Profile', icon: 'profile' },
+      { href: '/settings', label: 'Settings', icon: 'settings' },
+    ],
+  },
+  {
+    id: 'support',
+    items: [
+      { href: '/help', label: 'Help', icon: 'help' },
+      { href: '/about', label: 'About', icon: 'about' },
+    ],
+  },
+  {
+    id: 'legal',
+    items: [
+      { href: '/terms', label: 'Terms & Conditions', icon: 'terms' },
+      { href: '/privacy', label: 'Privacy Policy', icon: 'privacy' },
+    ],
+  },
+];
+
+/**
+ * The words under a member's name in the account menu when they have no
+ * organisation: the role, in sentence case ("Worker", "Employer").
+ */
+export function roleLabel(role: UserRole): string {
+  const spaced = String(role).replace(/_/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 /**
@@ -114,7 +149,6 @@ export function menuFor(isWorker: boolean): MenuItem[] {
  * pages when a signed-in member opens them.
  */
 const SUBPAGE_TITLES: ReadonlyArray<readonly [prefix: string, title: string]> = [
-  ['/invites', 'Invitations'],
   ['/notifications', 'Notifications'],
   ['/settings', 'Settings'],
   ['/help', 'Help'],
@@ -126,7 +160,7 @@ const SUBPAGE_TITLES: ReadonlyArray<readonly [prefix: string, title: string]> = 
 /**
  * The sub-page title for a path, or `null` when the path is a primary section.
  *
- * Primary sections (Home, Work, Logs, Profile) are deliberately absent: they
+ * Primary sections (Home, Work, Logs, Invitations) are deliberately absent: they
  * keep the bottom navigation and their own header treatment. Anything in the
  * map is a page opened from the header menu — no tab row, a back icon, and the
  * name in the header.

@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
-import type { ReceivedOffersResponse } from '@tetherproof/shared';
+import type { NotificationsResponse, ReceivedOffersResponse } from '@tetherproof/shared';
 import { AppShell } from '@/components/shell/AppShell';
-import { homeFor, navFor } from '@/lib/navigation';
+import { homeFor, navFor, roleLabel } from '@/lib/navigation';
 import { apiServer, currentProfile } from '@/lib/server/api';
 
 /**
@@ -22,12 +22,25 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   const profile = await currentProfile();
   if (!profile) redirect('/login');
 
+  const [pendingInvitations, unreadNotifications] = await Promise.all([
+    pendingInvitationsFor(profile.role),
+    unreadNotificationsFor(profile.role),
+  ]);
+
   return (
     <AppShell
       home={homeFor(profile.role)}
       items={navFor(profile.role)}
+      account={{
+        name: profile.fullName,
+        // No email on `ProfileResponse` by design: the organisation if there is
+        // one, otherwise the role.
+        subtitle: profile.organizationName?.trim() || roleLabel(profile.role),
+        avatarUrl: profile.avatarUrl,
+      }}
       showInvitations={profile.role === 'worker'}
-      pendingInvitations={await pendingInvitationsFor(profile.role)}
+      pendingInvitations={pendingInvitations}
+      unreadNotifications={unreadNotifications}
     >
       {children}
     </AppShell>
@@ -36,8 +49,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
 
 /**
  * How many invitations are waiting for this member's answer — the badge on the
- * header's invitation entry (the hamburger on a phone, the mail icon beside the
- * nav bar on a wide screen).
+ * Invitations tab.
  *
  * Worker-only: invitations are sent to workers, so another role has no inbox to
  * count and asking the worker-only endpoint on their behalf would be a request
@@ -51,6 +63,26 @@ async function pendingInvitationsFor(role: string): Promise<number> {
   try {
     const inbox = await apiServer<ReceivedOffersResponse>('/invites/offers');
     return inbox.pendingCount;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * How many notifications this member has not seen — the badge on the header's
+ * bell.
+ *
+ * Worker-only, like the feed itself. This reads the whole feed to take one
+ * number from it, on every signed-in render; a dedicated
+ * `GET /notifications/unread-count` returning `{ unreadCount }` would make this
+ * a one-field read, and is a drop-in replacement for the call below. As with
+ * invitations, any failure degrades to zero rather than taking the shell down.
+ */
+async function unreadNotificationsFor(role: string): Promise<number> {
+  if (role !== 'worker') return 0;
+  try {
+    const feed = await apiServer<NotificationsResponse>('/notifications');
+    return feed.unreadCount;
   } catch {
     return 0;
   }
