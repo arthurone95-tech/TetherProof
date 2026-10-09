@@ -16,8 +16,8 @@ interface AppHeaderProps {
   items: NavItem[];
   /** Who is signed in: drives the avatar and the top of the account menu. */
   account: AccountSummary;
-  /** Whether this account has an inbox (workers); others see no notification icon. */
-  showInvitations: boolean;
+  /** Whether this account has an inbox (workers and employers); others see no bell. */
+  showNotifications: boolean;
   /** How many notifications the member has not seen; drives the badge. */
   unreadNotifications: number;
 }
@@ -50,7 +50,7 @@ export function AppHeader({
   home,
   items,
   account,
-  showInvitations,
+  showNotifications,
   unreadNotifications,
 }: AppHeaderProps) {
   const pathname = usePathname();
@@ -58,16 +58,12 @@ export function AppHeader({
   const subpageTitle = subpageTitleFor(pathname);
   if (subpageTitle) return <BackHeader home={home} />;
 
-  const onHome = pathname === home || pathname.startsWith(`${home}/`);
-  const sectionTitle = onHome
-    ? null
-    : pathname === '/workspace' || pathname.startsWith('/workspace/')
-      ? 'Workspace'
-      : pathname === '/logs' || pathname.startsWith('/logs/')
-        ? 'Logs'
-        : pathname === '/profile' || pathname.startsWith('/profile/')
-          ? 'Profile'
-          : null;
+  // Home is the brand; anywhere else a primary section names itself. `home` is
+  // matched exactly, so a sibling tab under an employer's `/employer` home — say
+  // `/employer/candidates` — reads its own name rather than being swallowed by
+  // the home prefix.
+  const onHome = pathname === home;
+  const sectionTitle = onHome ? null : sectionTitleFor(pathname);
 
   return (
     <header className="sticky top-0 z-40 border-b border-brand-100 bg-white">
@@ -93,7 +89,7 @@ export function AppHeader({
         </div>
 
         <div className="ml-auto flex items-center gap-0.5 md:gap-1">
-          {showInvitations ? (
+          {showNotifications ? (
             <HeaderIconLink
               href="/notifications"
               icon={Bell}
@@ -110,6 +106,34 @@ export function AppHeader({
       </div>
     </header>
   );
+}
+
+/**
+ * Which primary section a path belongs to, by prefix.
+ *
+ * Explicit rather than derived from the navigation items because the two do not
+ * agree everywhere: `/profile` is a section by name but no longer a tab, and
+ * `/invites` keeps the brand in the header. Longest match wins, so
+ * `/employer/search` reads "Candidate search" rather than being caught by the
+ * shorter `/employer` entry.
+ */
+const SECTION_TITLES: ReadonlyArray<readonly [string, string]> = [
+  ['/workspace', 'Workspace'],
+  ['/logs', 'Logs'],
+  ['/profile', 'Profile'],
+  ['/employer/search', 'Candidate search'],
+  ['/employer/candidates', 'Candidates'],
+  ['/employer/organization', 'Organization'],
+  ['/admin', 'Approvals'],
+];
+
+function sectionTitleFor(pathname: string): string | null {
+  let match: { prefix: string; title: string } | null = null;
+  for (const [prefix, title] of SECTION_TITLES) {
+    if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) continue;
+    if (!match || prefix.length > match.prefix.length) match = { prefix, title };
+  }
+  return match?.title ?? null;
 }
 
 interface HeaderIconLinkProps {

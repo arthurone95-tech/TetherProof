@@ -50,6 +50,13 @@
       "when": 1791264700000,
       "tag": "0006_worker_completion_phase",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791300000000,
+      "tag": "0007_employer_console",
+      "breakpoints": true
     }
   ]
 }

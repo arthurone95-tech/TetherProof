@@ -1,21 +1,26 @@
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import type { NotificationItem, NotificationsResponse } from '@tetherproof/shared';
+import type { NotificationItem, NotificationsResponse, UserRole } from '@tetherproof/shared';
 import { db } from '../../db/client.js';
 import { notifications } from '../../db/schema.js';
 import { workerExpiringLinks } from '../proofs/service.js';
 
 /**
- * The worker's notification feed.
+ * A member's notification feed.
  *
  * The feed is two parts with different lifetimes. The written rows are the
- * moments that actually happened — an invitation arrived, a verification came
- * back, a link ran out — and stay until the account goes. The `expiring` part
- * is the worker's own outstanding confirmation links that run out within a few
- * days, synthesized at read time and never stored, so a link that crosses the
- * boundary while the page is open is never missed and never stale (see
- * `workerExpiringLinks` in the proofs module).
+ * moments that actually happened — an invitation arrived or was answered, a
+ * verification came back, a link ran out — and stay until the account goes. The
+ * `expiring` part is a worker's own outstanding confirmation links that run out
+ * within a few days, synthesized at read time and never stored, so a link that
+ * crosses the boundary while the page is open is never missed and never stale
+ * (see `workerExpiringLinks` in the proofs module). It is worker-only: an
+ * employer has no confirmation links, and synthesizing an empty list for them
+ * keeps the response shape the same for every reader.
  */
-export async function listNotifications(userId: string): Promise<NotificationsResponse> {
+export async function listNotifications(
+  userId: string,
+  role: UserRole,
+): Promise<NotificationsResponse> {
   const [rows, [unread]] = await Promise.all([
     db
       .select()
@@ -42,7 +47,7 @@ export async function listNotifications(userId: string): Promise<NotificationsRe
   return {
     notifications: items,
     unreadCount: unread?.count ?? 0,
-    expiring: await workerExpiringLinks(userId),
+    expiring: role === 'worker' ? await workerExpiringLinks(userId) : [],
   };
 }
 

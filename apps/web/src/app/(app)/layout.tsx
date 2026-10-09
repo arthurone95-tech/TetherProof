@@ -38,7 +38,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
         subtitle: profile.organizationName?.trim() || roleLabel(profile.role),
         avatarUrl: profile.avatarUrl,
       }}
-      showInvitations={profile.role === 'worker'}
+      showNotifications={profile.role === 'worker' || profile.role === 'employer'}
       pendingInvitations={pendingInvitations}
       unreadNotifications={unreadNotifications}
     >
@@ -72,14 +72,14 @@ async function pendingInvitationsFor(role: string): Promise<number> {
  * How many notifications this member has not seen — the badge on the header's
  * bell.
  *
- * Worker-only, like the feed itself. This reads the whole feed to take one
- * number from it, on every signed-in render; a dedicated
+ * Workers and employers both have a feed now. This reads the whole feed to take
+ * one number from it, on every signed-in render; a dedicated
  * `GET /notifications/unread-count` returning `{ unreadCount }` would make this
  * a one-field read, and is a drop-in replacement for the call below. As with
  * invitations, any failure degrades to zero rather than taking the shell down.
  */
 async function unreadNotificationsFor(role: string): Promise<number> {
-  if (role !== 'worker') return 0;
+  if (role !== 'worker' && role !== 'employer') return 0;
   try {
     const feed = await apiServer<NotificationsResponse>('/notifications');
     return feed.unreadCount;

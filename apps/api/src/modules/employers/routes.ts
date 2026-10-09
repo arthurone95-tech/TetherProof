@@ -7,8 +7,11 @@ import {
   validateQuery,
 } from '../../middleware/validate.js';
 import type {
+  AcceptedCandidate,
+  AdminEmployerListItem,
   CapabilitySpec,
   CandidateCard,
+  EmployerOverviewResponse,
   EmployerVerificationStatus,
   OfferSendingStatus,
   ReceivedOffer,
@@ -30,8 +33,11 @@ import {
   createOffer,
   createSpec,
   deleteSpec,
+  getEmployerOverview,
   getOfferSendingStatus,
   getOwnApproval,
+  listAcceptedCandidates,
+  listEmployersForAdmin,
   listReceivedOffers,
   listSentOffers,
   listSpecs,
@@ -199,6 +205,38 @@ employerRouter.get(
   }),
 );
 
+/**
+ * The dashboard's headline numbers and per-search match counts.
+ *
+ * One read rather than the page stitching together specs, offers, approval, and
+ * the match aggregation for itself. The counts are the employer's own, so this
+ * exposes nothing a search could not already.
+ */
+employerRouter.get(
+  '/overview',
+  asyncHandler(async (req, res) => {
+    const auth = account(req);
+    const overview: EmployerOverviewResponse = await getEmployerOverview(auth.userId);
+    res.json(overview);
+  }),
+);
+
+/**
+ * Candidates this employer's invitations reached and who accepted.
+ *
+ * The reveal is the point of acceptance: the worker agreed to be contacted, so
+ * their name and contact details are returned to the employer who invited them
+ * and to nobody else. Pending and declined invitations are not here at all.
+ */
+employerRouter.get(
+  '/candidates',
+  asyncHandler(async (req, res) => {
+    const auth = account(req);
+    const candidates: AcceptedCandidate[] = await listAcceptedCandidates(auth.userId);
+    res.json({ candidates });
+  }),
+);
+
 // ---------------------------------------------------------------------------
 // Worker-side invitation handling
 // ---------------------------------------------------------------------------
@@ -269,5 +307,20 @@ employerAdminRouter.post(
     const admin = account(req);
     const status = await setApprovalStatus(readParam(req, 'employerId'), req.body, admin.userId);
     res.json({ employerId: readParam(req, 'employerId'), status });
+  }),
+);
+
+/**
+ * The approval queue.
+ *
+ * Every employer account with its current status, pending first, so an
+ * administrator opens on the work rather than on a wall of decisions already
+ * made. Read-only; deciding is the POST above.
+ */
+employerAdminRouter.get(
+  '/employers',
+  asyncHandler(async (_req, res) => {
+    const employers: AdminEmployerListItem[] = await listEmployersForAdmin();
+    res.json({ employers });
   }),
 );

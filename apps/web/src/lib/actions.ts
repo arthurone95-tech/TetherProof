@@ -502,6 +502,7 @@ export async function createSpec(_previous: FormState, formData: FormData): Prom
         maxDistanceKm: asPositiveInt(formData.get('maxDistanceKm'), 25),
       },
     });
+    revalidatePath('/employer/search');
     revalidatePath('/employer');
     return { done: true };
   } catch (error) {
@@ -524,10 +525,42 @@ export async function changeSpec(formData: FormData): Promise<void> {
   } catch (error) {
     // These controls have no field to attach a message to, so the reason is
     // re-thrown as a redirect the page can render.
-    redirect(`/employer?error=${encodeURIComponent(messageFor(error, 'That change did not apply.'))}`);
+    redirect(`/employer/search?error=${encodeURIComponent(messageFor(error, 'That change did not apply.'))}`);
   }
 
+  revalidatePath('/employer/search');
   revalidatePath('/employer');
+}
+
+/**
+ * Records an administrator's decision on an employer account.
+ *
+ * The note is capped by the API's own schema, so this forwards a trimmed value
+ * and lets the service store it. `pending` is accepted so a mistaken decision can
+ * be put back in the queue rather than being final by accident.
+ */
+export async function decideEmployerApproval(
+  _previous: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const employerId = String(formData.get('employerId') ?? '');
+  const status = String(formData.get('status') ?? '');
+  const note = String(formData.get('note') ?? '').trim();
+
+  if (status !== 'approved' && status !== 'rejected' && status !== 'pending') {
+    return { error: 'Choose approve or reject.' };
+  }
+
+  try {
+    await apiServer(`/admin/employers/${encodeURIComponent(employerId)}/approval`, {
+      method: 'POST',
+      body: note ? { status, note } : { status },
+    });
+    revalidatePath('/admin');
+    return { done: true };
+  } catch (error) {
+    return formErrorFor(error, 'We could not record that decision. Please try again.');
+  }
 }
 
 export async function sendOffer(_previous: FormState, formData: FormData): Promise<FormState> {
@@ -539,6 +572,7 @@ export async function sendOffer(_previous: FormState, formData: FormData): Promi
       method: 'POST',
       body: note ? { candidateHandle, note } : { candidateHandle },
     });
+    revalidatePath('/employer/candidates');
     revalidatePath('/employer');
     return { done: true };
   } catch (error) {

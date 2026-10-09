@@ -1,7 +1,15 @@
 import type { UserRole } from '@tetherproof/shared';
 
 /** One destination in the signed-in primary navigation. */
-export type NavIcon = 'home' | 'workspace' | 'logs' | 'profile' | 'invitations';
+export type NavIcon =
+  | 'home'
+  | 'workspace'
+  | 'logs'
+  | 'profile'
+  | 'invitations'
+  | 'search'
+  | 'candidates'
+  | 'organization';
 
 export interface NavItem {
   href: string;
@@ -34,15 +42,17 @@ export interface MenuGroup {
 /**
  * The page each role treats as home.
  *
- * Workers open on the overview (their dashboard), employers on search, and the
- * roles whose modules are not built on a page that says so. The training
- * provider and admin roles have no interface yet, and sending them to a page
- * that pretends otherwise would be worse than saying so.
+ * Workers open on the overview (their dashboard), employers on their dashboard,
+ * and administrators on the approval console. The training provider role has no
+ * interface yet, and sending it to a page that pretends otherwise would be worse
+ * than saying so.
  */
 export function homeFor(role: UserRole): string {
   switch (role) {
     case 'employer':
       return '/employer';
+    case 'admin':
+      return '/admin';
     case 'worker':
       return '/dashboard';
     default:
@@ -76,9 +86,25 @@ const WORKER_NAV: NavItem[] = [
   { href: '/invites', label: 'Invitations', mobileLabel: 'Invites', icon: 'invitations' },
 ];
 
-/** Employers keep two tabs; settings and the docs live in the header menu. */
+/**
+ * Employers live in four places: the dashboard that shows what needs attention,
+ * the search that finds people, the invitations they have sent and the answers
+ * that came back, and the organization details an approval is based on. Profile
+ * and settings stay in the account menu, which is reachable from every screen.
+ *
+ * The dashboard is the home tab, so the brand stands in the header there; the
+ * three sibling tabs each carry their own section name.
+ */
 const EMPLOYER_NAV: NavItem[] = [
-  { href: '/employer', label: 'Workspace', icon: 'workspace' },
+  { href: '/employer', label: 'Dashboard', mobileLabel: 'Home', icon: 'home' },
+  { href: '/employer/search', label: 'Candidate search', mobileLabel: 'Search', icon: 'search' },
+  { href: '/employer/candidates', label: 'Candidates', mobileLabel: 'People', icon: 'candidates' },
+  { href: '/employer/organization', label: 'Organization', mobileLabel: 'Org', icon: 'organization' },
+];
+
+/** Administrators have the approval console and the shared profile. */
+const ADMIN_NAV: NavItem[] = [
+  { href: '/admin', label: 'Approvals', icon: 'workspace' },
   { href: '/profile', label: 'Profile', icon: 'profile' },
 ];
 
@@ -90,6 +116,7 @@ const PLACEHOLDER_NAV: NavItem[] = [
 export function navFor(role: UserRole): NavItem[] {
   if (role === 'worker') return WORKER_NAV;
   if (role === 'employer') return EMPLOYER_NAV;
+  if (role === 'admin') return ADMIN_NAV;
   return PLACEHOLDER_NAV;
 }
 

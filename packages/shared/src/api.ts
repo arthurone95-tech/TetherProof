@@ -200,6 +200,83 @@ export interface ReceivedOffersResponse {
 }
 
 /**
+ * One accepted candidate, with the contact their acceptance earned the employer
+ * the right to see.
+ *
+ * Before acceptance the employer knows only a masked card. After it, the worker
+ * has chosen to be contacted, so the name, email, and phone are exactly what the
+ * reply was for. The contact fields come from Supabase Auth rather than
+ * `profiles`, and are null when the provider does not hold one — an absence, not
+ * a hidden value.
+ */
+export interface AcceptedCandidate {
+  offerId: string;
+  workerId: string;
+  fullName: string | null;
+  avatarUrl: string | null;
+  /** From Supabase Auth; null when the account has no email or it could not be read. */
+  email: string | null;
+  /** From Supabase Auth; null when the worker never registered a number. */
+  phone: string | null;
+  /** The employer's own message on the invitation, kept for context. */
+  note: string | null;
+  acceptedAt: string | null;
+}
+
+export interface AcceptedCandidatesResponse {
+  candidates: AcceptedCandidate[];
+}
+
+/** One saved search and how many candidates currently match it. */
+export interface SpecMatchCount {
+  specId: string;
+  requiredSkill: string;
+  isActive: boolean;
+  /** Candidates passing the spec's proof threshold and distance, maskable only. */
+  matchCount: number;
+}
+
+/**
+ * The employer dashboard's headline numbers, from `GET /employers/overview`.
+ *
+ * Every count is derived from the caller's own rows. `matches` carries one entry
+ * per saved search so the dashboard can point at the searches producing matches
+ * rather than only reporting a total, and `totalMatches` is the sum across them.
+ */
+export interface EmployerOverviewResponse {
+  /** The employer's own approval status, for the dashboard's status tile. */
+  status: EmployerVerificationStatus;
+  note: string | null;
+  reviewedAt: string | null;
+  sending: OfferSendingStatus;
+  activeSearches: number;
+  pausedSearches: number;
+  /** Invitations sent, still unanswered. */
+  pendingInvites: number;
+  acceptedCandidates: number;
+  declinedInvites: number;
+  /** Candidates currently matching at least one active saved search. */
+  totalMatches: number;
+  matches: SpecMatchCount[];
+}
+
+/** One employer account in the admin approval console, from `GET /admin/employers`. */
+export interface AdminEmployerListItem {
+  employerId: string;
+  organizationName: string | null;
+  /** The name on the account holder's own profile, for recognising the applicant. */
+  contactName: string | null;
+  status: EmployerVerificationStatus;
+  note: string | null;
+  reviewedAt: string | null;
+  registeredAt: string;
+}
+
+export interface AdminEmployersResponse {
+  employers: AdminEmployerListItem[];
+}
+
+/**
  * Result of registering, confirming, or signing in.
  *
  * `session` is null only while the account is unconfirmed; E-007 removed the

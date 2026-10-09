@@ -9,18 +9,18 @@ export const metadata: Metadata = {
 };
 
 /**
- * Where the training provider and admin roles land.
+ * Where the training provider role lands.
  *
- * Those modules are not built, so this says so rather than showing an empty screen
- * that looks broken. The Training Provider module is still on the plan; the admin
- * console is not, because approvals are currently recorded through the API.
+ * Its module is not built, so this says so rather than showing an empty screen
+ * that looks broken. The admin console now exists, and a worker and employer both
+ * have a real home.
  *
  * Guarded on role, because this page is also the fallback `/employer` uses for a
  * non-employer. Without the guard a worker who mistyped the address, or who was
  * bounced here from the employer workspace, was told they were signed in as an
  * administrator — a claim about their own account that is both wrong and, if it
  * had been believed, alarming. Nobody reaches a page describing a role they do
- * not hold: the two roles with a real home are sent back to it.
+ * not hold: the three roles with a real home are sent back to it.
  */
 export default async function PendingPage() {
   const user = await currentProfile();
@@ -28,6 +28,7 @@ export default async function PendingPage() {
 
   if (user.role === 'worker') redirect('/dashboard');
   if (user.role === 'employer') redirect('/employer');
+  if (user.role === 'admin') redirect('/admin');
 
   const isTrainingProvider = user.role === 'training_provider';
 
@@ -35,7 +36,7 @@ export default async function PendingPage() {
     <div className="mx-auto flex w-full max-w-md flex-col gap-6">
       <Card>
         <h1 className="text-2xl font-bold text-ink-900">
-          {isTrainingProvider ? 'Training provider tools are not ready yet' : 'Administration is not in this app'}
+          {isTrainingProvider ? 'Training provider tools are not ready yet' : 'This workspace is not ready yet'}
         </h1>
         <div className="mt-4 space-y-3 text-ink-600">
           {isTrainingProvider ? (
@@ -45,10 +46,7 @@ export default async function PendingPage() {
               the honest answer rather than an empty dashboard.
             </p>
           ) : (
-            <p>
-              You are signed in as an administrator. Employer approvals are recorded through the API for
-              now. There is no admin console in this app yet.
-            </p>
+            <p>This account does not have a workspace in this app yet.</p>
           )}
         </div>
 
@@ -56,7 +54,7 @@ export default async function PendingPage() {
           <Banner tone="info" title="What you can do now">
             {isTrainingProvider
               ? 'Workers can log completed work and build verified proof. That proof is what employers search on.'
-              : 'Your account can use the same features as any other member: log work, and answer invitations.'}
+              : 'Your account can use the same features as any other member.'}
           </Banner>
         </div>
       </Card>

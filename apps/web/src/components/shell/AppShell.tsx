@@ -9,8 +9,8 @@ interface AppShellProps {
   items: NavItem[];
   /** Who is signed in: the avatar and the top of the account menu. */
   account: AccountSummary;
-  /** Whether this account has an inbox (workers only): notifications in the header. */
-  showInvitations: boolean;
+  /** Whether this account has an inbox (workers and employers): the header bell. */
+  showNotifications: boolean;
   /** Invitations waiting for an answer; the badge on the tab row's Invitations tab. */
   pendingInvitations: number;
   /** Notifications not yet seen; the badge on the header's notification icon. */
@@ -51,7 +51,7 @@ export function AppShell({
   home,
   items,
   account,
-  showInvitations,
+  showNotifications,
   pendingInvitations,
   unreadNotifications,
   children,
@@ -62,7 +62,7 @@ export function AppShell({
         home={home}
         items={items}
         account={account}
-        showInvitations={showInvitations}
+        showNotifications={showNotifications}
         unreadNotifications={unreadNotifications}
       />
 

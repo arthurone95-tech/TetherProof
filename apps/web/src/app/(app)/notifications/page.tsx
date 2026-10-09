@@ -7,6 +7,8 @@ import {
   CircleX,
   Clock3,
   Hourglass,
+  UserCheck,
+  UserX,
   type LucideIcon,
 } from 'lucide-react';
 import type {
@@ -26,12 +28,12 @@ export const metadata: Metadata = {
 const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
 /**
- * The worker's feed: verification verdicts, offer arrivals, and the expiry
- * notices that keep an outstanding confirmation link from quietly dying.
+ * The member's feed: verification verdicts, offer arrivals and answers, and the
+ * expiry notices that keep an outstanding confirmation link from quietly dying.
  *
- * The feed is worker-only — employers receive nothing here yet, and asking the
- * worker-only endpoint on their behalf would be a request they are not allowed
- * to make. The page stays up when the feed cannot be fetched, exactly like the
+ * Workers and employers both have a feed now. The `expiring` list is worker-only
+ * and simply comes back empty for an employer, so the page renders the same shape
+ * for both. The page stays up when the feed cannot be fetched, exactly like the
  * dashboard: a missing list beats a screen that will not render.
  *
  * The expiring list is drawn apart from the write-ahead feed because it is not
@@ -42,7 +44,7 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { day: 'numeric', mont
 export default async function NotificationsPage() {
   const profile = await currentProfile();
   if (!profile) redirect('/login');
-  if (profile.role !== 'worker') redirect(profile.role === 'employer' ? '/employer' : '/pending');
+  if (profile.role !== 'worker' && profile.role !== 'employer') redirect('/pending');
 
   let feed: NotificationsResponse | null = null;
   try {
@@ -100,7 +102,7 @@ export default async function NotificationsPage() {
             <div className="rounded-2xl border border-dashed border-brand-200 bg-white p-8 text-center">
               <p className="text-lg font-semibold text-ink-900">Nothing here yet</p>
               <p className="mx-auto mt-1 max-w-md text-sm text-ink-600">
-                Verification results and new offers appear here as they happen.
+                Verification results, invitations, and their answers appear here as they happen.
               </p>
             </div>
           )}
@@ -194,6 +196,8 @@ const PRESENTATION_FOR_KIND: Record<
   { icon: LucideIcon; chip: string }
 > = {
   offer_received: { icon: Briefcase, chip: 'bg-blue-50 text-blue-700' },
+  offer_accepted: { icon: UserCheck, chip: 'bg-emerald-50 text-emerald-700' },
+  offer_declined: { icon: UserX, chip: 'bg-neutral-100 text-neutral-700' },
   verification_confirmed: { icon: BadgeCheck, chip: 'bg-emerald-50 text-emerald-700' },
   verification_rejected: { icon: CircleX, chip: 'bg-red-50 text-red-800' },
   link_expired: { icon: Clock3, chip: 'bg-amber-50 text-amber-700' },

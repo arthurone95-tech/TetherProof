@@ -1,11 +1,15 @@
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type {
+  AcceptedCandidate,
+  AdminEmployerListItem,
   CapabilitySpec,
   CandidateCard,
+  EmployerOverviewResponse,
   EmployerVerificationStatus,
   OfferSendingStatus,
   ReceivedOffer,
   SentOffer,
+  SpecMatchCount,
 } from '@tetherproof/shared';
 import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
@@ -26,7 +30,7 @@ import {
   purgeExpiredHandles,
   resolveCandidateHandle,
 } from '../../lib/handles.js';
-import { gpsSchema, parseCoordinate } from '../../lib/geo.js';
+import { gpsSchema, parseCoordinate, type Coordinate } from '../../lib/geo.js';
 import {
   aggregateCandidateMetrics,
   measureDistances,
@@ -34,6 +38,7 @@ import {
   type CandidateMetric,
 } from '../../lib/matching.js';
 import { createNotification } from '../../lib/notifications.js';
+import { supabaseAdmin } from '../../lib/supabase.js';
 import type {
   ApprovalDecisionInput,
   CreateOfferInput,
@@ -503,6 +508,53 @@ async function notifyOfferReceived(workerId: string, organizationName: string | 
   );
 }
 
+/**
+ * The employer-facing "your invitation was answered" moment.
+ *
+ * Only an acceptance names the worker: identity flows one way and only after
+ * agreement, so a decline stays "a candidate" and repeats nothing the employer
+ * was not already entitled to. The write is fail-soft on purpose — the worker's
+ * decision is already recorded, and a notification (or a database that has not
+ * yet gained the newer kind labels) must not turn a successful answer into a
+ * failure.
+ */
+async function notifyOfferResponse(
+  employerId: string,
+  workerId: string,
+  accepted: boolean,
+): Promise<void> {
+  try {
+    const name = accepted ? await loadWorkerName(workerId) : null;
+    const who = name?.trim() || 'A candidate';
+
+    await createNotification(
+      employerId,
+      accepted ? 'offer_accepted' : 'offer_declined',
+      accepted ? 'Invitation accepted' : 'Invitation declined',
+      accepted
+        ? `${who} accepted your invitation. Their contact details are now available.`
+        : 'A candidate declined your invitation.',
+      '/employer/candidates',
+    );
+  } catch (error) {
+    logger.warn('Offer response notification failed', {
+      product: env.PRODUCT_NAME,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** The worker's stored name, for an acceptance notification. Null when unset. */
+async function loadWorkerName(workerId: string): Promise<string | null> {
+  const rows = await db
+    .select({ fullName: profiles.fullName })
+    .from(profiles)
+    .where(eq(profiles.userId, workerId))
+    .limit(1);
+
+  return rows[0]?.fullName ?? null;
+}
+
 function toSentOffer(row: DirectOfferRow): SentOffer {
   return {
     id: row.id,
@@ -600,7 +652,11 @@ export async function respondToOffer(
   response: 'accepted' | 'declined',
 ): Promise<ReceivedOffer> {
   const rows = await db
-    .select({ id: directOffers.id, status: directOffers.status })
+    .select({
+      id: directOffers.id,
+      status: directOffers.status,
+      employerId: directOffers.employerId,
+    })
     .from(directOffers)
     .where(and(eq(directOffers.id, offerId), eq(directOffers.workerId, workerId)))
     .limit(1);
@@ -622,6 +678,8 @@ export async function respondToOffer(
     .set({ status: response, respondedAt: new Date(), updatedAt: new Date() })
     .where(and(eq(directOffers.id, offerId), eq(directOffers.workerId, workerId)));
 
+  await notifyOfferResponse(offer.employerId, workerId, response === 'accepted');
+
   const received = await listReceivedOffers(workerId);
   const updated = received.find((offerRow) => offerRow.id === offerId);
   if (!updated) {
@@ -638,6 +696,216 @@ export async function countPendingOffers(workerId: string): Promise<number> {
     .where(and(eq(directOffers.workerId, workerId), eq(directOffers.status, 'pending')));
 
   return rows.length;
+}
+
+// ---------------------------------------------------------------------------
+// Employer dashboard, accepted candidates, admin console
+// ---------------------------------------------------------------------------
+
+/**
+ * The employer dashboard's headline numbers.
+ *
+ * Every count comes from the employer's own rows. The match counts recompute the
+ * same aggregation a search runs — verified proofs per worker for a skill, then
+ * the distance filter — so a number on the dashboard cannot describe a candidate
+ * the search would not return. A saved search with no location on the employer's
+ * profile simply skips the distance filter, exactly as an ad-hoc search does.
+ */
+export async function getEmployerOverview(employerId: string): Promise<EmployerOverviewResponse> {
+  const [approval, sending, specs, offerCounts, employerProfile] = await Promise.all([
+    getOwnApproval(employerId),
+    getOfferSendingStatus(employerId),
+    listSpecs(employerId),
+    db
+      .select({ status: directOffers.status, count: sql<number>`count(*)::int` })
+      .from(directOffers)
+      .where(eq(directOffers.employerId, employerId))
+      .groupBy(directOffers.status),
+    db
+      .select({ locationGps: profiles.locationGps })
+      .from(profiles)
+      .where(eq(profiles.userId, employerId))
+      .limit(1),
+  ]);
+
+  const counts = new Map(offerCounts.map((row) => [row.status, Number(row.count)]));
+  const reference = parseCoordinate(employerProfile[0]?.locationGps ?? null);
+  const matches = await matchCountsForSpecs(specs, reference);
+
+  return {
+    status: approval.status,
+    note: approval.note,
+    reviewedAt: approval.reviewedAt,
+    sending,
+    activeSearches: specs.filter((spec) => spec.isActive).length,
+    pausedSearches: specs.filter((spec) => !spec.isActive).length,
+    pendingInvites: counts.get('pending') ?? 0,
+    acceptedCandidates: counts.get('accepted') ?? 0,
+    declinedInvites: counts.get('declined') ?? 0,
+    totalMatches: matches.reduce((sum, match) => sum + match.matchCount, 0),
+    matches,
+  };
+}
+
+/**
+ * How many candidates each saved search currently matches.
+ *
+ * Runs per spec rather than once for the union of skills, because a spec carries
+ * its own proof threshold and radius and the count on screen has to be the count
+ * that spec would return.
+ */
+async function matchCountsForSpecs(
+  specs: CapabilitySpec[],
+  reference: Coordinate | null,
+): Promise<SpecMatchCount[]> {
+  return Promise.all(
+    specs.map(async (spec) => {
+      const metrics = await aggregateCandidateMetrics(spec.requiredSkill, spec.minProofThreshold);
+      if (!reference || metrics.length === 0) {
+        return {
+          specId: spec.id,
+          requiredSkill: spec.requiredSkill,
+          isActive: spec.isActive,
+          matchCount: metrics.length,
+        };
+      }
+
+      const locations = await readWorkerLocations(metrics.map((metric) => metric.workerId));
+      const distances = measureDistances(metrics, locations, reference);
+      const matchCount = metrics.filter((metric) => {
+        const distanceKm = distances.get(metric.workerId);
+        // As in search: only a measured distance can fail the radius. A worker who
+        // shared no location is unknown, not far, and is counted rather than hidden.
+        return distanceKm === undefined || distanceKm <= spec.maxDistanceKm;
+      }).length;
+
+      return {
+        specId: spec.id,
+        requiredSkill: spec.requiredSkill,
+        isActive: spec.isActive,
+        matchCount,
+      };
+    }),
+  );
+}
+
+/**
+ * Candidates whose invitation this employer accepted.
+ *
+ * Only accepted rows are read, and only for the employer on the offer. Contact
+ * details are the thing acceptance buys, so they are read for exactly the workers
+ * who said yes and for nobody else.
+ */
+export async function listAcceptedCandidates(employerId: string): Promise<AcceptedCandidate[]> {
+  const rows = await db
+    .select({
+      offerId: directOffers.id,
+      workerId: directOffers.workerId,
+      note: directOffers.note,
+      respondedAt: directOffers.respondedAt,
+      fullName: profiles.fullName,
+      avatarUrl: profiles.avatarUrl,
+    })
+    .from(directOffers)
+    .leftJoin(profiles, eq(profiles.userId, directOffers.workerId))
+    .where(and(eq(directOffers.employerId, employerId), eq(directOffers.status, 'accepted')))
+    .orderBy(desc(directOffers.respondedAt), desc(directOffers.createdAt));
+
+  const contacts = await readAcceptedContacts(rows.map((row) => row.workerId));
+
+  return rows.map((row) => {
+    const contact = contacts.get(row.workerId);
+    return {
+      offerId: row.offerId,
+      workerId: row.workerId,
+      fullName: row.fullName,
+      avatarUrl: row.avatarUrl,
+      email: contact?.email ?? null,
+      phone: contact?.phone ?? null,
+      note: row.note,
+      acceptedAt: row.respondedAt ? row.respondedAt.toISOString() : null,
+    };
+  });
+}
+
+/**
+ * The accepted workers' email and phone, from Supabase Auth.
+ *
+ * Email and phone live in Auth, not `profiles`, and only an accepted candidate
+ * has agreed to be contacted. Each lookup is for a worker id the employer was
+ * already granted by an accepted invitation, so this is correspondence, not a
+ * directory read. A provider failure degrades that one candidate's contact to
+ * null rather than failing the whole page, and nothing identifying is logged.
+ */
+async function readAcceptedContacts(
+  workerIds: string[],
+): Promise<Map<string, { email: string | null; phone: string | null }>> {
+  const contacts = new Map<string, { email: string | null; phone: string | null }>();
+  const unique = [...new Set(workerIds)];
+
+  await Promise.all(
+    unique.map(async (workerId) => {
+      try {
+        const { data, error } = await supabaseAdmin.auth.admin.getUserById(workerId);
+        if (error || !data.user) return;
+        contacts.set(workerId, {
+          email: data.user.email ?? null,
+          phone: data.user.phone ?? null,
+        });
+      } catch (error) {
+        logger.warn('Could not read an accepted candidate contact', {
+          product: env.PRODUCT_NAME,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }),
+  );
+
+  return contacts;
+}
+
+/**
+ * Every employer account, for the admin approval console.
+ *
+ * Ordered so the queue is the first thing an administrator sees: pending first,
+ * then oldest first within a status. Reviewers are deliberately not joined in —
+ * the console shows the account under review and nothing about who else has
+ * touched it.
+ */
+export async function listEmployersForAdmin(): Promise<AdminEmployerListItem[]> {
+  const rows = await db
+    .select({
+      employerId: users.id,
+      organizationName: profiles.organizationName,
+      contactName: profiles.fullName,
+      status: employerApprovals.status,
+      note: employerApprovals.note,
+      reviewedAt: employerApprovals.reviewedAt,
+      registeredAt: users.createdAt,
+    })
+    .from(users)
+    .leftJoin(profiles, eq(profiles.userId, users.id))
+    .leftJoin(employerApprovals, eq(employerApprovals.employerId, users.id))
+    .where(eq(users.role, 'employer'))
+    .orderBy(asc(users.createdAt));
+
+  const priority: Record<EmployerVerificationStatus, number> = {
+    pending: 0,
+    approved: 1,
+    rejected: 2,
+  };
+
+  return rows
+    .map((row) => ({
+      employerId: row.employerId,
+      organizationName: row.organizationName,
+      contactName: row.contactName,
+      status: row.status ?? 'pending',
+      note: row.note,
+      reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
+      registeredAt: row.registeredAt.toISOString(),
+    }))
+    .sort((a, b) => priority[a.status] - priority[b.status]);
 }
 
 export type { CandidateMetric };

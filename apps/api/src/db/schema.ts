@@ -33,6 +33,8 @@ export const proximityStatus = pgEnum('proximity_status', ['within', 'outside', 
 export const invitationPreference = pgEnum('invitation_preference', ['all', 'approved_only']);
 export const notificationKind = pgEnum('notification_kind', [
   'offer_received',
+  'offer_accepted',
+  'offer_declined',
   'verification_confirmed',
   'verification_rejected',
   'link_expired',
@@ -403,15 +405,15 @@ export const candidateHandles = pgTable(
 );
 
 /**
- * One event in a worker's notification feed.
+ * One event in a member's notification feed.
  *
- * Kinds are the worker-facing moments of the loop: an invitation arrived,
- * a verification came back confirmed or rejected, or a confirmation link ran
- * out. `link_expiring` is deliberately never written; it is synthesized at read
- * time from the worker's own outstanding links (see the notifications module),
- * so a page can never hold a stale expiry row. `link_expired` is written when a
- * resend retires an already-expired link, which is a real event with a real
- * consequence.
+ * Kinds cover both sides of the loop: a worker sees an invitation arrive
+ * (`offer_received`) and a verification come back, and an employer sees their
+ * invitation answered (`offer_accepted`, `offer_declined`). `link_expiring` is
+ * deliberately never written; it is synthesized at read time from the worker's own
+ * outstanding links (see the notifications module), so a page can never hold a
+ * stale expiry row. `link_expired` is written when a resend retires an already-
+ * expired link, which is a real event with a real consequence.
  *
  * The body is plain text rendered as text only. It is the only other party's
  * content on this row is the offer note, which is already bounded and

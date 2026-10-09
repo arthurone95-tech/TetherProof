@@ -82,14 +82,18 @@ export const INVITATION_PREFERENCES = ['all', 'approved_only'] as const;
 export type InvitationPreference = (typeof INVITATION_PREFERENCES)[number];
 
 /**
- * The kinds of events a worker's notification feed can hold.
+ * The kinds of events a member's notification feed can hold.
  *
- * `link_expiring` is synthesized at read time from the worker's own outstanding
- * verification links rather than written as rows, because expiry is a moving
- * target; the rest are written when the event actually happens.
+ * `offer_received` belongs to the worker whose invitation arrived;
+ * `offer_accepted` and `offer_declined` belong to the employer whose invitation
+ * was answered. `link_expiring` is synthesized at read time from the worker's own
+ * outstanding verification links rather than written as rows, because expiry is a
+ * moving target; the rest are written when the event actually happens.
  */
 export const NOTIFICATION_KINDS = [
   'offer_received',
+  'offer_accepted',
+  'offer_declined',
   'verification_confirmed',
   'verification_rejected',
   'link_expired',
