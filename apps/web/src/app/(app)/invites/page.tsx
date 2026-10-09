@@ -31,9 +31,9 @@ export default async function InvitesPage() {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
       {/*
-        The page carries no heading of its own: opened from More (or Home's
-        invitation icon), the header already says "Invitations". What is left
-        here is only the inbox itself.
+        The page carries no heading of its own: opened from the header menu
+        (or the invitation icon beside the desktop nav), the header already
+        says "Invitations". What is left here is only the inbox itself.
       */}
       <Card title="Waiting for your answer">
         {waiting.length === 0 ? (

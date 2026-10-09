@@ -11,7 +11,7 @@
  * `work_proof_logs` at read time costs an indexed scan over a few thousand rows at
  * pre-launch volume and cannot drift out of step with the proofs it summarises.
  */
-import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { capabilityBlocks, profiles, verifications, workProofLogs } from '../db/schema.js';
 import type { Coordinate } from './geo.js';
@@ -88,18 +88,26 @@ export async function aggregateCandidateMetrics(
       verifications,
       and(eq(verifications.workProofId, workProofLogs.id), eq(verifications.response, 'confirmed')),
     )
+    .leftJoin(profiles, eq(profiles.userId, workProofLogs.workerId))
     .where(
-      // Anonymised records, whose worker deleted their account, are still counted
-      // for the network but cannot be offered to anyone: there is no account to
-      // address, and issuing a handle for one would violate the candidate_handles
-      // foreign key. Without this they would group together under a null worker
-      // and surface as a single candidate row with no identity behind it.
-      //
-      // Excluding them changes no live worker's numbers. Each row is grouped by
-      // its own worker, so dropping one worker's anonymised rows removes only
-      // their own contribution — which is precisely the retention promise: the
-      // row stays, and it stops being anybody's turn to be hired.
-      isNotNull(workProofLogs.workerId),
+      and(
+        // Anonymised records, whose worker deleted their account, are still counted
+        // for the network but cannot be offered to anyone: there is no account to
+        // address, and issuing a handle for one would violate the candidate_handles
+        // foreign key. Without this they would group together under a null worker
+        // and surface as a single candidate row with no identity behind it.
+        //
+        // Excluding them changes no live worker's numbers. Each row is grouped by
+        // its own worker, so dropping one worker's anonymised rows removes only
+        // their own contribution — which is precisely the retention promise: the
+        // row stays, and it stops being anybody's turn to be hired.
+        isNotNull(workProofLogs.workerId),
+        // A worker who opted out of discoverability is excluded at this layer,
+        // so a search token cannot be crafted to probe for them. A missing
+        // profile row (an admin-provisioned account) counts as the default,
+        // which is discoverable.
+        or(isNull(profiles.userId), eq(profiles.discoverable, true)),
+      ),
     )
     .groupBy(workProofLogs.workerId)
     .having(sql`count(distinct ${workProofLogs.id}) filter (where ${workProofLogs.verificationStatus} = 'verified') >= ${minVerifiedProofs}`)

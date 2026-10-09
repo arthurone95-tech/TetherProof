@@ -2,7 +2,8 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import type { ProofDetailResponse } from '@tetherproof/shared';
-import { VerificationStatusPill } from '@/components/proofs/ProofListItemView';
+import { ResendLinkButton } from '@/components/proofs/ResendLinkButton';
+import { SkillLevelBadge, VerificationStatusPill } from '@/components/proofs/ProofListItemView';
 import { ApiRequestError } from '@/lib/api-error';
 import { prettyCoords } from '@/lib/gps';
 import { apiServer, currentProfile } from '@/lib/server/api';
@@ -13,12 +14,15 @@ export const metadata: Metadata = {
 };
 
 /**
- * One log entry: the media, the words, where it happened, and — while nothing
- * has been sent out for confirmation yet — the form to correct it.
+ * One log entry: the media, the words, where it happened, the transcript of any
+ * voice recording, and — while nothing has been sent out for confirmation yet —
+ * the form to correct it.
  *
  * The freeze rule is the API's decision and is re-checked at the write, so the
  * edit form is shown only when the detail says it is allowed, and a save that
- * races a sent link is still refused.
+ * races a sent link is still refused. Once a link is out, the confirmation box
+ * takes the edit form's place: a live link says when it stops working, and an
+ * expired one offers a fresh link on the spot.
  */
 export default async function LogDetailPage({
   params,
@@ -64,10 +68,16 @@ export default async function LogDetailPage({
     year: 'numeric',
   });
 
-  const frozeReason =
-    proof.verificationStatus !== 'pending'
-      ? 'This log has already been confirmed and can no longer be edited.'
-      : 'A confirmation link was already sent for this log, so it can no longer be edited.';
+  // A link has gone out for this log and has not been answered. The link is
+  // either still live — the verifier can still answer — or it has expired,
+  // which is the one state where a fresh link resolves the log.
+  const confirmationOutstanding = proof.verificationStatus === 'pending' && proof.verificationLinkSent;
+  const confirmationExpired =
+    confirmationOutstanding && proof.verificationExpiresAt === null;
+
+  // A concluded log — confirmed, refused, or blocked — is frozen for good and
+  // carries no action to take.
+  const concluded = proof.verificationStatus !== 'pending';
 
   return (
     <div className="flex flex-col gap-6">
@@ -91,6 +101,7 @@ export default async function LogDetailPage({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-bold text-ink-900 sm:text-3xl">{proof.skillTag}</h1>
+            <SkillLevelBadge level={proof.skillLevel} />
             <VerificationStatusPill status={proof.verificationStatus} />
           </div>
           <p className="mt-1 text-sm text-ink-600">Logged {loggedOn}</p>
@@ -118,6 +129,19 @@ export default async function LogDetailPage({
         <p className="mt-2 whitespace-pre-wrap text-ink-700">{proof.description}</p>
       </div>
 
+      {proof.transcript ? (
+        <div className="rounded-2xl border border-brand-100 bg-white p-5">
+          <h2 className="text-sm font-semibold tracking-wide text-ink-900 uppercase">
+            Voice recording transcript
+          </h2>
+          <p className="mt-2 text-sm text-ink-600">
+            Read straight from the recording. Transcriptions are best-effort — the recording
+            itself is what is kept and verified.
+          </p>
+          <p className="mt-3 whitespace-pre-wrap text-ink-700">{proof.transcript}</p>
+        </div>
+      ) : null}
+
       {proof.submissionGps ? (
         <div className="rounded-2xl border border-brand-100 bg-white p-5">
           <h2 className="text-sm font-semibold tracking-wide text-ink-900 uppercase">
@@ -127,9 +151,42 @@ export default async function LogDetailPage({
         </div>
       ) : null}
 
-      {!proof.editable ? (
-        <p className="rounded-xl bg-brand-50 px-4 py-3 text-sm text-ink-700">{frozeReason}</p>
-      ) : (
+      {confirmationOutstanding ? (
+        <div className="rounded-2xl border border-amber-200/70 bg-amber-50 p-5">
+          <h2 className="text-sm font-semibold tracking-wide text-amber-900 uppercase">
+            Confirmation
+          </h2>
+          {confirmationExpired ? (
+            <>
+              <p className="mt-2 text-sm font-medium text-amber-900">
+                The confirmation link for this log expired without an answer.
+              </p>
+              <p className="mt-1 text-sm text-amber-800">
+                Raise a fresh link and share it again — the new link lasts just as long as the
+                first one.
+              </p>
+              <div className="mt-3">
+                <ResendLinkButton proofId={proof.id} subtle />
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="mt-2 text-sm text-amber-900">
+                A confirmation link was sent for this log. It is live until{' '}
+                <strong>
+                  {expiryDate(proof.verificationExpiresAt ?? '')}
+                </strong>
+                , and the person confirming your work can still answer while it is.
+              </p>
+              <p className="mt-1 text-sm text-amber-800">
+                The record is fixed once the answer comes back.
+              </p>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {!confirmationOutstanding && !concluded ? (
         <div className="rounded-2xl border border-brand-100 bg-white p-6">
           <h2 className="text-lg font-semibold text-ink-900">Edit this log</h2>
           <p className="mt-1 text-sm text-ink-600">
@@ -140,7 +197,28 @@ export default async function LogDetailPage({
             <EditLogForm proof={proof} />
           </div>
         </div>
-      )}
+      ) : null}
+
+      {concluded ? (
+        <p className="rounded-xl bg-brand-50 px-4 py-3 text-sm text-ink-700">
+          This log has already been confirmed and can no longer be edited.
+          {proof.verificationStatus === 'rejected'
+            ? ' It was not confirmed by the person it was sent to.'
+            : proof.verificationStatus === 'fraud_blocked'
+              ? ' It was blocked by the anti-fraud engine.'
+              : ' The verification is on your record.'}
+        </p>
+      ) : null}
     </div>
   );
+}
+
+function expiryDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }

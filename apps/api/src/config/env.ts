@@ -141,6 +141,27 @@ const envSchema = z.object({
   TWILIO_AUTH_TOKEN: z.string().default(''),
   TWILIO_FROM_NUMBER: z.string().default(''),
 
+  // Telemetry connectors
+  /**
+   * A GitHub OAuth application pair. The connector is a scaffold: with these set
+   * (and `WEB_BASE_URL`), the API can run the OAuth exchange and record a
+   * connection; without them, the start endpoint says so plainly. No token is
+   * stored — see the connections module — so nothing here is a credential the
+   * API ever persists.
+   */
+  GITHUB_CLIENT_ID: z.string().default(''),
+  GITHUB_CLIENT_SECRET: z.string().default(''),
+
+  // Voice transcription (optional)
+  /**
+   * API key for speech-to-text of voice proofs.
+   *
+   * Optional, and the whole point is that it is: a deployment without it still
+   * records and stores voice notes, and simply has no transcript. It is never
+   * exposed to the browser and never written into the database.
+   */
+  OPENAI_API_KEY: z.string().default(''),
+
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 });
 

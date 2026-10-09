@@ -30,6 +30,16 @@ export const employerVerificationStatus = pgEnum('employer_verification_status',
   'rejected',
 ]);
 export const proximityStatus = pgEnum('proximity_status', ['within', 'outside', 'unavailable']);
+export const invitationPreference = pgEnum('invitation_preference', ['all', 'approved_only']);
+export const notificationKind = pgEnum('notification_kind', [
+  'offer_received',
+  'verification_confirmed',
+  'verification_rejected',
+  'link_expired',
+  'link_expiring',
+]);
+export const connectionProvider = pgEnum('connection_provider', ['github']);
+export const connectionStatus = pgEnum('connection_status', ['connected', 'revoked']);
 
 const createdAt = timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 const updatedAt = timestamp('updated_at', { withTimezone: true }).notNull().defaultNow();
@@ -67,8 +77,44 @@ export const profiles = pgTable(
     locationGps: varchar('location_gps', { length: 64 }),
     organizationName: varchar('organization_name', { length: 200 }),
     avatarUrl: varchar('avatar_url', { length: 512 }),
+    /**
+     * Whether the worker may appear in employer search results.
+     *
+     * Defaults to true so a freshly registered worker is reachable the moment
+     * they have verified proof, which is the network's reason for existing.
+     * Set to false, the worker is excluded at the aggregation layer, so a token
+     * cannot be used to probe for them.
+     */
+    discoverable: boolean('discoverable').notNull().default(true),
+    /**
+     * Whether the shareable capability profile page answers.
+     *
+     * The page is public and exists only because the worker turned it on, so the
+     * default is false and the slug below stays null until then.
+     */
+    publicProfile: boolean('public_profile').notNull().default(false),
+    /**
+     * The unguessable address of the public capability profile.
+     *
+     * Generated once when the page is first enabled and never changed unless the
+     * worker asks for a new one. Non-empty only while `publicProfile` is true:
+     * turning the page off clears it, so a disabled page has no lingering URL
+     * that 404s.
+     */
+    publicSlug: varchar('public_slug', { length: 32 }),
+    /**
+     * Which employers may send this worker an invitation.
+     *
+     * `approved_only` is the strong privacy position: contacts only ever come
+     * from accounts a person has looked at. It is enforced at invitation
+     * creation, not merely displayed.
+     */
+    invitationPreference: invitationPreference('invitation_preference').notNull().default('all'),
   },
-  (table) => [uniqueIndex('profiles_user_id_unique').on(table.userId)],
+  (table) => [
+    uniqueIndex('profiles_user_id_unique').on(table.userId),
+    uniqueIndex('profiles_public_slug_unique').on(table.publicSlug).where(sql`${table.publicSlug} is not null`),
+  ],
 );
 
 export const capabilityBlocks = pgTable(
@@ -140,6 +186,15 @@ export const workProofLogs = pgTable(
     mediaEncoderKnown: boolean('media_encoder_known'),
     submissionGps: varchar('submission_gps', { length: 64 }),
     verificationStatus: verificationStatus('verification_status').notNull().default('pending'),
+    /**
+     * Speech-to-text of a voice recording, when a transcription provider is
+     * configured and the recording could be transcribed.
+     *
+     * Null means no provider ran or it failed — the recording itself remains the
+     * record. The transcript is worker-authored content rendered as text only,
+     * never as markup.
+     */
+    transcript: text('transcript'),
     /** Set when the owning worker deleted their account. See migration 0005. */
     anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
     createdAt,
@@ -347,6 +402,75 @@ export const candidateHandles = pgTable(
   ],
 );
 
+/**
+ * One event in a worker's notification feed.
+ *
+ * Kinds are the worker-facing moments of the loop: an invitation arrived,
+ * a verification came back confirmed or rejected, or a confirmation link ran
+ * out. `link_expiring` is deliberately never written; it is synthesized at read
+ * time from the worker's own outstanding links (see the notifications module),
+ * so a page can never hold a stale expiry row. `link_expired` is written when a
+ * resend retires an already-expired link, which is a real event with a real
+ * consequence.
+ *
+ * The body is plain text rendered as text only. It is the only other party's
+ * content on this row is the offer note, which is already bounded and
+ * text-rendered on the invitations page.
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: notificationKind('kind').notNull(),
+    title: varchar('title', { length: 160 }).notNull(),
+    body: varchar('body', { length: 280 }).notNull(),
+    /** Destination in the app the notification points at; null when it goes nowhere. */
+    link: varchar('link', { length: 512 }),
+    /** When the member saw the feed. Null while unread. */
+    readAt: timestamp('read_at', { withTimezone: true }),
+    createdAt,
+  },
+  (table) => [
+    index('notifications_user_id_idx').on(table.userId),
+    index('notifications_user_unread_idx')
+      .on(table.userId, table.readAt)
+      .where(sql`${table.readAt} is null`),
+  ],
+);
+
+/**
+ * A telemetry source a worker connected so their work can be captured from it.
+ *
+ * The scaffold keeps the connection row and the fact of the connection. A later
+ * phase will add the event ingestion that turns commits or merges into proofs;
+ * the row already carries the provider's username and a last-synced stamp so the
+ * sync state has somewhere to live when that lands. Tokens are deliberately not
+ * stored here yet: holding an OAuth token is a storage decision with its own
+ * security review, and the scaffold records the connection, not the credential.
+ */
+export const telemetryConnections = pgTable(
+  'telemetry_connections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    provider: connectionProvider('provider').notNull(),
+    /** The provider-side username, shown to the worker to recognise the account. */
+    externalUsername: varchar('external_username', { length: 120 }),
+    status: connectionStatus('status').notNull().default('connected'),
+    connectedAt: timestamp('connected_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('telemetry_connections_user_provider_unique').on(table.userId, table.provider),
+    index('telemetry_connections_provider_idx').on(table.provider),
+  ],
+);
+
 export const usersRelations = relations(users, ({ one, many }) => ({
   profile: one(profiles, { fields: [users.id], references: [profiles.userId] }),
   capabilityBlocks: many(capabilityBlocks),
@@ -394,6 +518,14 @@ export const candidateHandlesRelations = relations(candidateHandles, ({ one }) =
   worker: one(users, { fields: [candidateHandles.workerId], references: [users.id] }),
 }));
 
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(users, { fields: [notifications.userId], references: [users.id] }),
+}));
+
+export const telemetryConnectionsRelations = relations(telemetryConnections, ({ one }) => ({
+  user: one(users, { fields: [telemetryConnections.userId], references: [users.id] }),
+}));
+
 export type UserRow = typeof users.$inferSelect;
 export type ProfileRow = typeof profiles.$inferSelect;
 export type CapabilityBlockRow = typeof capabilityBlocks.$inferSelect;
@@ -403,3 +535,5 @@ export type EmployerSpecRow = typeof employerSpecs.$inferSelect;
 export type DirectOfferRow = typeof directOffers.$inferSelect;
 export type EmployerApprovalRow = typeof employerApprovals.$inferSelect;
 export type CandidateHandleRow = typeof candidateHandles.$inferSelect;
+export type NotificationRow = typeof notifications.$inferSelect;
+export type TelemetryConnectionRow = typeof telemetryConnections.$inferSelect;

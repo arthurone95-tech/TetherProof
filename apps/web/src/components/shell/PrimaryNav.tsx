@@ -2,16 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  House,
-  LayoutGrid,
-  List,
-  Mail,
-  MoreHorizontal,
-  SlidersHorizontal,
-  User,
-  type LucideIcon,
-} from 'lucide-react';
+import { House, LayoutGrid, List, User, type LucideIcon } from 'lucide-react';
 import type { NavItem } from '@/lib/navigation';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 
@@ -113,10 +104,7 @@ const NAV_ICONS: Record<NavItem['icon'], LucideIcon> = {
   home: House,
   workspace: LayoutGrid,
   logs: List,
-  invitations: Mail,
   profile: User,
-  settings: SlidersHorizontal,
-  more: MoreHorizontal,
 };
 
 function NavIcon({ name, className }: { name: NavItem['icon']; className: string }) {

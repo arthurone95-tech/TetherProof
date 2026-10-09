@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authRouter } from './modules/auth/routes.js';
+import { connectionsRouter } from './modules/connections/routes.js';
 import {
   employerAdminRouter,
   employerRouter,
@@ -7,7 +8,9 @@ import {
 } from './modules/employers/routes.js';
 import { healthRouter } from './modules/health/routes.js';
 import { locationRouter } from './modules/locations/routes.js';
+import { notificationsRouter } from './modules/notifications/routes.js';
 import { proofRouter } from './modules/proofs/routes.js';
+import { publicRouter } from './modules/public/routes.js';
 import { verificationRouter } from './modules/verifications/routes.js';
 
 export const apiRouter = Router();
@@ -34,6 +37,17 @@ apiRouter.use('/employers', employerRouter);
 // `/employers`, because the authenticated party is a worker and the path should
 // not imply otherwise.
 apiRouter.use('/invites', inviteRouter);
+
+// The worker's notification feed.
+apiRouter.use('/notifications', notificationsRouter);
+
+// Telemetry connections (GitHub scaffold). Mounted under `/workers` so the
+// module owns its whole surface: list, start, callback, revoke.
+apiRouter.use('/workers/connections', connectionsRouter);
+
+// Public capability profiles behind shareable links. Json, read-only, and
+// gated by the worker's own flag plus an unguessable slug.
+apiRouter.use('/public', publicRouter);
 
 // Admin-only employer approvals. Mounted at the API root under `/admin` to keep
 // the elevated surface on one identifiable prefix.

@@ -14,6 +14,7 @@ import { db } from '../../db/client.js';
 import { orphanedProofMedia, profiles, users } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
 import { confirmationCallbackUrl } from '../../lib/redirect.js';
+import { generatePublicSlug } from '../../lib/slug.js';
 import {
   createSignedAvatarUrl,
   deleteProfileAvatar,
@@ -319,15 +320,19 @@ const SIGN_IN_UNAVAILABLE =
  * false in the case that mattered most: Supabase reports a rejected password and
  * a network it could not reach through the same field, so a person offline, or
  * behind a captive portal, was told their password was wrong and changed it —
- * the one action that turns a temporary problem into a real one. Only the code
- * that genuinely means "these credentials did not match" is answered with a
- * credential refusal now; every other failure is answered as what it is, a
- * service that could not decide.
+ * the one action that turns a temporary problem into a real one. So only a
+ * definitive verdict is answered with a credential refusal; a provider that
+ * simply could not decide is answered as a service that could not decide.
  *
- * Provider codes are logged rather than branched on beyond that one case: a
+ * There are three definitive verdicts, and they all read identically: the
+ * credentials did not match, the address is not registered, and the account
+ * exists but is not confirmed yet. `email_not_confirmed` and
+ * `phone_not_confirmed` sit in the same bucket as `invalid_credentials`
+ * because they are the one case an attacker would otherwise exploit — a
  * refusal that distinguished an unconfirmed account from an unknown one would
- * turn the sign-in answer into an account-enumeration oracle, which is the very
- * thing this endpoint is written to prevent.
+ * turn the sign-in answer into an account-enumeration oracle, which is the
+ * very thing this endpoint is written to prevent. Every other provider code is
+ * logged rather than branched on.
  */
 export async function login(input: LoginInput): Promise<AuthResponse> {
   const credentials = input.email
@@ -342,7 +347,15 @@ export async function login(input: LoginInput): Promise<AuthResponse> {
   const { data, error } = await supabaseAuth.auth.signInWithPassword(credentials);
 
   if (error) {
-    if (error.code === 'invalid_credentials') {
+    if (
+      error.code === 'invalid_credentials' ||
+      // A definitive verdict that the account exists but has not been confirmed
+      // cannot be answered differently from "no such account" — the two must
+      // stay indistinguishable or the endpoint betrays which addresses are
+      // registered and waiting to be confirmed.
+      error.code === 'email_not_confirmed' ||
+      error.code === 'phone_not_confirmed'
+    ) {
       throw AppError.unauthorized('Incorrect sign-in details.');
     }
     logger.warn('[auth] sign-in was not answered by the identity provider', {
@@ -531,6 +544,10 @@ export async function getProfile(userId: string): Promise<ProfileResponse> {
       locationGps: profiles.locationGps,
       organizationName: profiles.organizationName,
       avatarUrl: profiles.avatarUrl,
+      discoverable: profiles.discoverable,
+      publicProfile: profiles.publicProfile,
+      publicSlug: profiles.publicSlug,
+      invitationPreference: profiles.invitationPreference,
     })
     .from(users)
     .leftJoin(profiles, eq(profiles.userId, users.id))
@@ -541,7 +558,16 @@ export async function getProfile(userId: string): Promise<ProfileResponse> {
   if (!row) {
     throw AppError.notFound('Profile not found.');
   }
-  return { ...row, avatarUrl: await signedAvatarUrl(row.avatarUrl) };
+  // A profile row may not exist for an account provisioned outside registration;
+  // the privacy defaults it would carry are shown, not an error.
+  return {
+    ...row,
+    discoverable: row.discoverable ?? true,
+    publicProfile: row.publicProfile ?? false,
+    publicSlug: row.publicSlug ?? null,
+    invitationPreference: row.invitationPreference ?? 'all',
+    avatarUrl: await signedAvatarUrl(row.avatarUrl),
+  };
 }
 
 /**
@@ -573,6 +599,30 @@ export async function updateProfile(userId: string, input: UpdateProfileInput) {
   // treats as unknown rather than disqualifying.
   if (input.locationGps !== undefined) patch.locationGps = input.locationGps;
   if (input.organizationName !== undefined) patch.organizationName = input.organizationName;
+  if (input.discoverable !== undefined) patch.discoverable = input.discoverable;
+  if (input.invitationPreference !== undefined) {
+    patch.invitationPreference = input.invitationPreference;
+  }
+
+  // Turning the shareable page on is a two-part change: the flag and the slug.
+  // The slug is generated once, in this write, so a worker cannot pick one (a
+  // guessable address would make pages enumerable) and every page has an
+  // address the moment it is enabled. Turning the page off clears both, so no
+  // disabled page litters an address that 404s.
+  if (input.publicProfile !== undefined) {
+    if (input.publicProfile) {
+      const [current] = await db
+        .select({ publicSlug: profiles.publicSlug })
+        .from(profiles)
+        .where(eq(profiles.userId, userId))
+        .limit(1);
+      patch.publicProfile = true;
+      patch.publicSlug = current?.publicSlug ?? generatePublicSlug();
+    } else {
+      patch.publicProfile = false;
+      patch.publicSlug = null;
+    }
+  }
 
   const written = await db
     .insert(profiles)
@@ -583,6 +633,10 @@ export async function updateProfile(userId: string, input: UpdateProfileInput) {
       locationCity: profiles.locationCity,
       organizationName: profiles.organizationName,
       avatarUrl: profiles.avatarUrl,
+      discoverable: profiles.discoverable,
+      publicProfile: profiles.publicProfile,
+      publicSlug: profiles.publicSlug,
+      invitationPreference: profiles.invitationPreference,
     });
 
   const row = written[0];
@@ -592,7 +646,14 @@ export async function updateProfile(userId: string, input: UpdateProfileInput) {
     // nothing would be worse than refusing.
     throw AppError.notFound('That account was not found.');
   }
-  return { ...row, avatarUrl: await signedAvatarUrl(row.avatarUrl) };
+  return {
+    ...row,
+    discoverable: row.discoverable ?? true,
+    publicProfile: row.publicProfile ?? false,
+    publicSlug: row.publicSlug ?? null,
+    invitationPreference: row.invitationPreference ?? 'all',
+    avatarUrl: await signedAvatarUrl(row.avatarUrl),
+  };
 }
 
 /**

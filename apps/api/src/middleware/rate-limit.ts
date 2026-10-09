@@ -99,6 +99,19 @@ export const locationRateLimiter = build(
   'Too many location requests. Please wait a few minutes and try again.',
 );
 
+/**
+ * Applies to the public capability profile pages behind shareable links.
+ *
+ * The pages are anonymous by design, so without a limiter a crawler could spend
+ * the API's whole request budget on another worker's read-only page. The window
+ * is tight because legitimate traffic is a handful of taps per visitor.
+ */
+export const publicReadRateLimiter = build(
+  120,
+  60 * 1000,
+  'Too many requests. Please slow down.',
+);
+
 export const globalRateLimiter = build(300, 60 * 1000, 'Too many requests. Please slow down.');
 
 export const rateLimitConfig = {

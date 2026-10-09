@@ -1,4 +1,13 @@
-import type { EmployerVerificationStatus, UserRole, VerificationStatus } from './enums.js';
+import type {
+  ConnectionProvider,
+  ConnectionStatus,
+  EmployerVerificationStatus,
+  InvitationPreference,
+  NotificationKind,
+  SkillLevel,
+  UserRole,
+  VerificationStatus,
+} from './enums.js';
 
 /**
  * Error codes returned by the TetherProof API.
@@ -223,6 +232,21 @@ export interface ProfileResponse {
   locationGps: string | null;
   organizationName: string | null;
   avatarUrl: string | null;
+  /**
+   * Privacy and sharing state for the caller's own account.
+   *
+   * `discoverable` controls whether the worker appears in employer search.
+   * `publicProfile` controls whether `/public/profiles/:slug` answers;
+   * `publicSlug` is the unguessable address of that page, generated once and
+   * non-empty only while the page is enabled. `invitationPreference` says which
+   * employers may send invitations. Non-workers hold the role defaults: an
+   * employer is not searchable or shareable through these fields, so they read
+   * as the worker defaults and are ignored.
+   */
+  discoverable: boolean;
+  publicProfile: boolean;
+  publicSlug: string | null;
+  invitationPreference: InvitationPreference;
 }
 
 /**
@@ -273,6 +297,8 @@ export type ProofMediaKind = 'image' | 'audio';
 export interface ProofListItem {
   id: string;
   skillTag: string;
+  /** The worker's own proficiency tier for this skill, 1 (entry) to 3 (advanced). */
+  skillLevel: SkillLevel;
   description: string;
   createdAt: string;
   verificationStatus: VerificationStatus;
@@ -301,6 +327,13 @@ export interface ProofDetail extends ProofListItem {
   verificationLinkSent: boolean;
   /** When the outstanding single-use link stops working. Null once used/expired/concluded. */
   verificationExpiresAt: string | null;
+  /**
+   * The words the API transcribed from a voice recording, when one was captured
+   * and a transcription provider was configured. Null for photo proofs, for
+   * recordings captured before transcription existed, and when no provider is
+   * configured — the recording itself is always the record.
+   */
+  transcript: string | null;
 }
 
 export interface ProofDetailResponse {
@@ -311,8 +344,117 @@ export interface ProofDetailResponse {
 export interface UpdateProofInput {
   description?: string;
   skillTag?: string;
+  /** The proficiency tier to attach to the skill the log belongs under. */
+  skillLevel?: SkillLevel;
   /** Null explicitly clears the stored location; omitting it leaves it as is. */
   submissionGps?: string | null;
+}
+
+/**
+ * The worker's standing in one skill of their own profile.
+ *
+ * The same aggregation the public capability profile shows, without the
+ * `displayName` a public page needs. Everything is derived from the worker's own
+ * verified records; nothing here is editable by choice.
+ */
+export interface SkillSummary {
+  skillTag: string;
+  skillLevel: SkillLevel;
+  /** All logged work under this skill, whatever its verdict. */
+  totalLogs: number;
+  /** Proofs confirmed by a client and not blocked by the anti-fraud engine. */
+  verifiedProofs: number;
+  /** When any proof under this skill was last verified. Null if none have been. */
+  lastVerifiedAt: string | null;
+}
+
+/** The caller's own capability profile, from `GET /workers/capabilities`. */
+export interface WorkerCapabilityProfileResponse {
+  skills: SkillSummary[];
+  verifiedTotal: number;
+}
+
+/**
+ * One skill on a worker's public capability profile page.
+ *
+ * A deliberately reduced `SkillSummary`: no descriptions, no media, no location,
+ * no contact. Only the aggregate counts a stranger is entitled to see.
+ */
+export interface PublicSkillSummary {
+  skillTag: string;
+  skillLevel: SkillLevel;
+  verifiedProofs: number;
+  lastVerifiedAt: string | null;
+}
+
+/**
+ * The public, read-only capability profile behind a worker's shareable link.
+ *
+ * `displayName` is the worker's stored name or null when they have not set one.
+ * `skills` are ordered by verified count and carry only aggregates.
+ */
+export interface PublicCapabilityProfileResponse {
+  displayName: string | null;
+  skills: PublicSkillSummary[];
+  verifiedTotal: number;
+}
+
+/** One row of a worker's notification feed. */
+export interface NotificationItem {
+  id: string;
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  /** A destination the notification points at; null when there is nowhere to go. */
+  link: string | null;
+  /** When the member saw it. Null while unread. */
+  readAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * The worker's notification feed from `GET /notifications`.
+ *
+ * `expiring` lists the worker's own outstanding confirmation links that run out
+ * within the next few days, synthesized at read time so a link that crosses the
+ * boundary while the page is open is never missed and never stale.
+ */
+export interface NotificationsResponse {
+  notifications: NotificationItem[];
+  unreadCount: number;
+  expiring: ProofExpiryNotice[];
+}
+
+/** One of the worker's confirmation links that is about to run out. */
+export interface ProofExpiryNotice {
+  proofId: string;
+  skillTag: string;
+  expiresAt: string;
+}
+
+/** One telemetry connection on a worker's account, from `GET /workers/connections`. */
+export interface ConnectionInfo {
+  provider: ConnectionProvider;
+  externalUsername: string | null;
+  status: ConnectionStatus;
+  connectedAt: string;
+  lastSyncedAt: string | null;
+}
+
+export interface ConnectionsResponse {
+  connections: ConnectionInfo[];
+}
+
+/**
+ * The fresh confirmation link produced by `POST /workers/proofs/:id/verification/resend`.
+ *
+ * Same shape as the first submission's link result: the token is returned exactly
+ * once and only its digest is stored, and the caller builds the shareable URL.
+ */
+export interface VerificationResendResponse {
+  verificationToken: string;
+  verificationExpiresAt: string;
+  verificationLinkSent: boolean;
 }
 
 export interface ProofUpdateResponse {

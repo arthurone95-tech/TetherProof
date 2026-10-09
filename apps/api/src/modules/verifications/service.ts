@@ -13,6 +13,7 @@ import {
   type FraudAssessment,
 } from '../../lib/fraud/score.js';
 import type { MediaSignals } from '../../lib/media-scrub.js';
+import { createNotification } from '../../lib/notifications.js';
 import { hashVerificationToken } from '../../lib/token.js';
 import type { ConfirmInput } from './schemas.js';
 
@@ -346,6 +347,19 @@ export async function submitVerification(
     .update(workProofLogs)
     .set({ verificationStatus: proofStatus })
     .where(eq(workProofLogs.id, record.workProofId));
+
+  // The worker is told the moment a client answers. A rejection is reported as
+  // a rejection; a confirmed endorsement still notifies, whatever the engine
+  // decided, because from the worker's side the client did respond.
+  await createNotification(
+    record.workerId,
+    response === 'confirmed' ? 'verification_confirmed' : 'verification_rejected',
+    response === 'confirmed' ? 'Work verified' : 'Work not confirmed',
+    `${record.skillTag ?? 'That skill'} — a client ${
+      response === 'confirmed' ? 'confirmed' : 'did not confirm'
+    } your work.`,
+    `/logs/${record.workProofId}`,
+  );
 
   return {
     status: response,

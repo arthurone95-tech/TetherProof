@@ -5,6 +5,7 @@ import { useActionState } from 'react';
 import type { ProofDetail } from '@tetherproof/shared';
 import { updateProof } from '@/lib/actions';
 import { EMPTY_PROOF_EDIT, type ProofEditState } from '@/lib/form-state';
+import { SKILL_LEVELS } from '@/lib/capabilities';
 import { Field } from '@/components/ui/Field';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 
@@ -45,6 +46,31 @@ export function EditLogForm({ proof }: { proof: ProofDetail }) {
         error={state.field === 'skillTag' ? state.error : undefined}
         hint="One skill per job. Changing it moves this log to that skill's block."
       />
+
+      <fieldset className="min-w-0 rounded-xl border border-brand-100 p-4">
+        <legend className="px-1 text-sm font-medium text-ink-900">Skill level</legend>
+        <p className="mb-3 text-sm text-ink-600">
+          The tier this skill sits at on your record. Levels accompany verified counts; they never
+          replace them.
+        </p>
+        <div className="flex flex-col gap-3">
+          {SKILL_LEVELS.map((entry) => (
+            <label key={entry.level} className="flex cursor-pointer items-start gap-3">
+              <input
+                type="radio"
+                name="skillLevel"
+                value={entry.level}
+                defaultChecked={proof.skillLevel === entry.level}
+                className="mt-1 h-4 w-4 border-brand-300 text-brand-600 focus:ring-brand-500"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-ink-900">{entry.label}</span>
+                <span className="block text-sm text-ink-600">{entry.description}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
 
       <fieldset className="min-w-0 rounded-xl border border-brand-100 p-4">
         <legend className="px-1 text-sm font-medium text-ink-900">Where it happened</legend>

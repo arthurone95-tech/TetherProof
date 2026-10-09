@@ -131,6 +131,15 @@ export const updateProfileSchema = z
     fullName: z.string().trim().min(1, 'Enter your name.').max(160).optional(),
     locationGps: gpsSchema.nullable().optional(),
     organizationName: z.string().trim().min(1).max(200).optional(),
+    /**
+     * Worker privacy choices. They are accepted for any role but only the
+     * surfaces that exist for workers (search, the shareable page, invitations)
+     * consume them; an employer's row holding them changes nothing, because no
+     * consumer reads an employer's `discoverable`.
+     */
+    discoverable: z.boolean().optional(),
+    publicProfile: z.boolean().optional(),
+    invitationPreference: z.enum(['all', 'approved_only']).optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: 'Provide at least one field to update.',

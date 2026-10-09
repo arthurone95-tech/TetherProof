@@ -28,7 +28,7 @@ const sections = [
   },
   {
     title: 'Account and privacy',
-    body: 'Your profile holds your name and contact details, and only you can see your own logs with their coordinates. Sign out lives on your Profile page, and deleting your account lives under More, in Settings. Deleting removes everything that identifies you; the work you logged stays on the platform without your name, because proof counts are shared and one person leaving should not quietly change everyone else’s totals.',
+    body: 'Your profile holds your name and contact details, and only you can see your own logs with their coordinates. Sign out lives on your Profile page, and deleting your account lives under the menu, in Settings. Deleting removes everything that identifies you; the work you logged stays on the platform without your name, because proof counts are shared and one person leaving should not quietly change everyone else’s totals.',
   },
   {
     title: 'Something is not working',

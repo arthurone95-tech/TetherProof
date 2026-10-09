@@ -7,6 +7,7 @@ import { submitProof } from '@/lib/actions';
 import { EMPTY_PROOF, type ProofFormState, type ProofSubmissionView } from '@/lib/form-state';
 import { locateMessage, useGeolocation } from '@/lib/use-geolocation';
 import { prettyCoords } from '@/lib/gps';
+import { SKILL_LEVELS } from '@/lib/capabilities';
 import { Field } from '@/components/ui/Field';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 
@@ -326,6 +327,31 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
       />
 
       <fieldset className="min-w-0 rounded-xl border border-brand-100 p-4">
+        <legend className="px-1 text-sm font-medium text-ink-900">Skill level</legend>
+        <p className="mb-3 text-sm text-ink-600">
+          The tier this skill sits at on your record. Entry is the starting point — you can raise
+          or lower the level on any log later.
+        </p>
+        <div className="flex flex-col gap-3">
+          {SKILL_LEVELS.map((entry) => (
+            <label key={entry.level} className="flex cursor-pointer items-start gap-3">
+              <input
+                type="radio"
+                name="skillLevel"
+                value={entry.level}
+                defaultChecked={entry.level === 1}
+                className="mt-1 h-4 w-4 border-brand-300 text-brand-600 focus:ring-brand-500"
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-ink-900">{entry.label}</span>
+                <span className="block text-sm text-ink-600">{entry.description}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      <fieldset className="min-w-0 rounded-xl border border-brand-100 p-4">
         <legend className="px-1 text-sm font-medium text-ink-900">The evidence</legend>
 
         <div role="group" aria-label="Kind of evidence" className="flex gap-2">
@@ -395,6 +421,14 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
               {evidenceError}
             </p>
           ) : null}
+
+        {kind === 'voice' ? (
+          <p className="mt-3 text-sm text-ink-600">
+            A text version of the recording is added to the log when transcription is available,
+            so the words can be read at a glance. The recording itself is always what is kept and
+            verified.
+          </p>
+        ) : null}
         </div>
 
         {notice ? (

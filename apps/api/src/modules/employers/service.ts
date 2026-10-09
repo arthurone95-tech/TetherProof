@@ -33,6 +33,7 @@ import {
   readWorkerLocations,
   type CandidateMetric,
 } from '../../lib/matching.js';
+import { createNotification } from '../../lib/notifications.js';
 import type {
   ApprovalDecisionInput,
   CreateOfferInput,
@@ -420,6 +421,30 @@ export async function createOffer(
     });
   }
 
+  // Enforced here, at the write, not merely displayed on a settings page: a
+  // worker whose preference is `approved_only` is reachable only by accounts a
+  // person has reviewed and approved. The refusal is generic so it does not
+  // confirm a worker's privacy setting to an unapproved employer.
+  const [workerProfile, employerProfile] = await Promise.all([
+    db
+      .select({ invitationPreference: profiles.invitationPreference })
+      .from(profiles)
+      .where(eq(profiles.userId, workerId))
+      .limit(1),
+    db
+      .select({ organizationName: profiles.organizationName })
+      .from(profiles)
+      .where(eq(profiles.userId, employerId))
+      .limit(1),
+  ]);
+
+  if (workerProfile[0]?.invitationPreference === 'approved_only') {
+    const { status } = await getOwnApproval(employerId);
+    if (status !== 'approved') {
+      throw AppError.forbidden('This candidate is not accepting invitations from unapproved employers.');
+    }
+  }
+
   const existing = await db
     .select({ id: directOffers.id, status: directOffers.status })
     .from(directOffers)
@@ -445,6 +470,7 @@ export async function createOffer(
       .returning();
 
     const row = one(reopened);
+    await notifyOfferReceived(workerId, employerProfile[0]?.organizationName ?? null);
     return toSentOffer(row);
   }
 
@@ -453,7 +479,28 @@ export async function createOffer(
     .values({ employerId, workerId, note: input.note ?? null, specId })
     .returning();
 
+  await notifyOfferReceived(workerId, employerProfile[0]?.organizationName ?? null);
+
   return toSentOffer(one(inserted));
+}
+
+/**
+ * The worker-facing "an invitation arrived" moment.
+ *
+ * The name disclosed is the organization name, the same single fact the worker
+ * is shown on the invitations page; nothing else about the account is carried
+ * into the notification.
+ */
+async function notifyOfferReceived(workerId: string, organizationName: string | null): Promise<void> {
+  await createNotification(
+    workerId,
+    'offer_received',
+    'New invitation',
+    organizationName
+      ? `${organizationName} invited you to connect.`
+      : 'An employer invited you to connect.',
+    '/invites',
+  );
 }
 
 function toSentOffer(row: DirectOfferRow): SentOffer {

@@ -1,18 +1,20 @@
 import Link from 'next/link';
 import { BackHeader } from '@/components/shell/BackHeader';
+import { homeFor } from '@/lib/navigation';
 import { currentProfile } from '@/lib/server/api';
 
 /**
  * The frame for the secondary pages: About, Help, Terms, Privacy.
  *
- * These are public — a worker or employer can reach them from the More page or
- * from the marketing footer — so the frame branches on who is reading.
+ * These are public — a worker or employer can reach them from the header menu
+ * or from the marketing footer — so the frame branches on who is reading.
  *
- * A signed-in member gets the same header as every other page opened from More:
- * a back icon into More and the page's name, with no footer and no tab row.
- * That is the point of these pages when opened from inside the app — a focused
- * screen reachable from one list, with one obvious way back — and a signed-in
- * visitor has no use for a "Sign in" link or a marketing footer beside it.
+ * A signed-in member gets the same header as every other page opened from the
+ * menu: a back icon to the previous page and the page's name, with no footer
+ * and no tab row. That is the point of these pages when opened from inside the
+ * app — a focused screen reachable from one list, with one obvious way back —
+ * and a signed-in visitor has no use for a "Sign in" link or a marketing footer
+ * beside it.
  *
  * A signed-out visitor gets the marketing frame: the brand mark, a sign-in
  * path, and a slim footer that keeps the four sibling pages linked as one small
@@ -24,7 +26,7 @@ export default async function InfoLayout({ children }: { children: React.ReactNo
   if (profile) {
     return (
       <div className="flex min-h-screen flex-col">
-        <BackHeader />
+        <BackHeader home={homeFor(profile.role)} />
         <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-6">
           <article className="flex flex-col gap-8">{children}</article>
         </main>

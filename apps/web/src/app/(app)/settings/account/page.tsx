@@ -11,8 +11,9 @@ export const metadata: Metadata = {
 /**
  * Where a member deletes their own account.
  *
- * Opened from More, so the header shows a back icon and "Settings" and the page
- * carries no heading of its own. The page itself stays thin on purpose: it
+ * Opened from the header menu, so the header shows a back icon and "Settings"
+ * and the page carries no heading of its own. The page itself stays thin on
+ * purpose: it
  * checks who is signing in, surfaces a failed deletion if one was just
  * attempted, and hands the rest to `DeleteAccountView`. The explanation of what
  * deletion means is a confirmation step, not a pre-read section — see that

@@ -24,10 +24,11 @@ interface AppShellProps {
  * The shell itself stays a server component: the session-derived values (home
  * address, tabs, invitation counts) are fetched once per render here and handed
  * to two small client components. `AppHeader` draws the header — section title
- * on the primary tabs, back icon and page name on a page opened from More — and
- * `AppTabs` draws the phone's bottom row, which steps aside on those same
- * sub-pages. Both decide from the current address, so neither the layout nor
- * the pages need to know which of the two they are.
+ * on the primary tabs, back icon and page name on a page opened from the menu,
+ * and the secondary destinations on both shapes — and `AppTabs` draws the
+ * phone's bottom row, which steps aside on those same sub-pages. Both decide
+ * from the current address, so neither the layout nor the pages need to know
+ * which of the two they are.
  *
  * Sign-out deliberately does not live here. It is the one action a member never
  * needs in a hurry, and keeping it out of a bar every page shares means it
@@ -48,9 +49,8 @@ export function AppShell({ home, items, showInvitations, pendingInvitations, chi
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-7 pb-32 md:pb-14">{children}</main>
 
       {/*
-        A phone gets the tabs along the bottom, where a thumb reaches. More is
-        the last tab, so it sits in the bottom-right corner. The padding under
-        the content keeps the last card clear of the row.
+        A phone gets the tabs along the bottom, where a thumb reaches. The
+        padding under the content keeps the last card clear of the row.
       */}
       <AppTabs items={items} />
     </div>

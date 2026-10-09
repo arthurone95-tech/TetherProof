@@ -59,3 +59,46 @@ export type OfferSendingEligibility = (typeof OFFER_SENDING_ELIGIBILITY)[number]
 /** The worker's decision on an invitation. */
 export const OFFER_RESPONSES = ['accepted', 'declined'] as const;
 export type OfferResponse = (typeof OFFER_RESPONSES)[number];
+
+/**
+ * The proficiency tiers a worker attaches to a skill.
+ *
+ * A level is the worker's own statement of experience on the record, shown to
+ * employers through the same lens as everything else: it accompanies verified
+ * counts and never substitutes for them. Level 1 is entry, 2 experienced, and 3
+ * advanced; the choice is stored on the capability block, not on each proof.
+ */
+export const SKILL_LEVELS = [1, 2, 3] as const;
+export type SkillLevel = (typeof SKILL_LEVELS)[number];
+
+/**
+ * Which employers may send a worker an invitation.
+ *
+ * `all` lets any employer whose account is approved to send invitations reach
+ * the worker; `approved_only` narrows that to employers whose account has been
+ * reviewed and approved, which is the setting the worker opt-in offers.
+ */
+export const INVITATION_PREFERENCES = ['all', 'approved_only'] as const;
+export type InvitationPreference = (typeof INVITATION_PREFERENCES)[number];
+
+/**
+ * The kinds of events a worker's notification feed can hold.
+ *
+ * `link_expiring` is synthesized at read time from the worker's own outstanding
+ * verification links rather than written as rows, because expiry is a moving
+ * target; the rest are written when the event actually happens.
+ */
+export const NOTIFICATION_KINDS = [
+  'offer_received',
+  'verification_confirmed',
+  'verification_rejected',
+  'link_expired',
+  'link_expiring',
+] as const;
+export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
+
+/** Telemetry sources a worker may connect, and the statuses a connection can be in. */
+export const CONNECTION_PROVIDERS = ['github'] as const;
+export type ConnectionProvider = (typeof CONNECTION_PROVIDERS)[number];
+export const CONNECTION_STATUSES = ['connected', 'revoked'] as const;
+export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];

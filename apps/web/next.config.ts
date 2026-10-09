@@ -134,6 +134,22 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  /**
+   * Same-origin mirror of the API's public surface.
+   *
+   * The GitHub OAuth callback has to be a URL the provider can send the
+   * browser back to through the *public* web origin (`WEB_BASE_URL`), and the
+   * API has no public origin of its own in a typical deployment. Rewriting the
+   * `/api/v1` prefix onto the API keeps that callback real without the browser
+   * needing to know a second host. Nothing signed-in changes: the app's
+   * authenticated calls travel server-side with the session cookie, and this
+   * rewrite merely adds a path the public endpoints can also be reached at.
+   */
+  async rewrites() {
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL;
+    if (!apiBase) return [];
+    return [{ source: '/api/v1/:path*', destination: `${apiBase}/api/v1/:path*` }];
+  },
 };
 
 export default nextConfig;

@@ -8,8 +8,10 @@ import { proofSubmissionSchema, proofUpdateSchema } from './schemas.js';
 import {
   getWorkerProof,
   listWorkerProofs,
+  resendVerificationLink,
   submitProof,
   updateWorkerProof,
+  workerCapabilities,
   workerOverview,
 } from './service.js';
 
@@ -106,6 +108,44 @@ proofRouter.get(
   async (req, res, next) => {
     try {
       res.json(await workerOverview(req.auth!.userId));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/**
+ * The caller's per-skill capability profile: tiers and verified counts.
+ *
+ * Rendered on the worker's own profile page and reduced further on the public
+ * shareable page; both aggregate from the records, never from editable fields
+ * on the worker.
+ */
+proofRouter.get(
+  '/capabilities',
+  authenticate,
+  authorize('worker'),
+  async (req, res, next) => {
+    try {
+      res.json(await workerCapabilities(req.auth!.userId));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/**
+ * Issues a fresh confirmation link for a log whose earlier link expired or was
+ * never handed over. See `resendVerificationLink` for the freeze and privacy
+ * rules that bound it.
+ */
+proofRouter.post(
+  '/proofs/:id/verification/resend',
+  authenticate,
+  authorize('worker'),
+  async (req, res, next) => {
+    try {
+      res.json(await resendVerificationLink(req.auth!.userId, requireProofId(req.params.id)));
     } catch (error) {
       next(error);
     }

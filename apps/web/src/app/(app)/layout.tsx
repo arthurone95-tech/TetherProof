@@ -35,8 +35,9 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
 }
 
 /**
- * How many invitations are waiting for this member's answer — the badge on
- * Home's invitation icon.
+ * How many invitations are waiting for this member's answer — the badge on the
+ * header's invitation entry (the hamburger on a phone, the mail icon beside the
+ * nav bar on a wide screen).
  *
  * Worker-only: invitations are sent to workers, so another role has no inbox to
  * count and asking the worker-only endpoint on their behalf would be a request

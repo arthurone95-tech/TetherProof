@@ -1,10 +1,15 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, sql } from 'drizzle-orm';
 import type {
   ProofDetailResponse,
+  ProofExpiryNotice,
   ProofListItem,
   ProofMediaKind,
   ProofsResponse,
+  PublicCapabilityProfileResponse,
+  SkillLevel,
   UpdateProofInput,
+  VerificationResendResponse,
+  WorkerCapabilityProfileResponse,
   WorkerOverviewResponse,
 } from '@tetherproof/shared';
 import { env } from '../../config/env.js';
@@ -19,12 +24,14 @@ import {
 } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
 import { sendVerificationLink } from '../../lib/messaging/index.js';
+import { createNotification } from '../../lib/notifications.js';
 import {
   createSignedMediaUrl,
   deleteWorkProofMedia,
   uploadWorkProofMedia,
 } from '../../lib/storage.js';
 import { generateVerificationToken, hashVerificationToken, hashVerifierPhone } from '../../lib/token.js';
+import { transcribeAudio } from '../../lib/transcription.js';
 import type { UploadedMedia } from '../../middleware/upload.js';
 import type { ProofSubmissionInput } from './schemas.js';
 
@@ -74,7 +81,7 @@ export interface ProofSubmissionResult {
  */
 async function resolveCapabilityBlock(
   workerId: string,
-  input: { skillTag: string; capabilityBlockId?: string },
+  input: { skillTag: string; capabilityBlockId?: string; skillLevel: SkillLevel },
 ): Promise<{ id: string; skillTag: string }> {
   if (input.capabilityBlockId) {
     const owned = await db
@@ -93,15 +100,22 @@ async function resolveCapabilityBlock(
       throw AppError.notFound('That capability could not be found on your account.');
     }
 
+    // A level chosen on a log under an existing block is the worker restating
+    // their tier for that skill, so the block follows the latest statement.
+    await db
+      .update(capabilityBlocks)
+      .set({ skillLevel: input.skillLevel })
+      .where(eq(capabilityBlocks.id, block.id));
+
     return block;
   }
 
   const inserted = await db
     .insert(capabilityBlocks)
-    .values({ workerId, skillTag: input.skillTag })
+    .values({ workerId, skillTag: input.skillTag, skillLevel: input.skillLevel })
     .onConflictDoUpdate({
       target: [capabilityBlocks.workerId, capabilityBlocks.skillTag],
-      set: { skillTag: input.skillTag },
+      set: { skillTag: input.skillTag, skillLevel: input.skillLevel },
     })
     .returning({ id: capabilityBlocks.id, skillTag: capabilityBlocks.skillTag });
 
@@ -157,6 +171,13 @@ export async function submitProof(
     submittedAt,
   });
 
+  // Speech-to-text for a voice recording, when a provider is configured. The
+  // recording is always the record; a null transcript is an ordinary outcome
+  // and never fails the submission (see `lib/transcription.ts`).
+  const transcript = media.contentType.startsWith('audio/')
+    ? await transcribeAudio(media.buffer, media.contentType)
+    : null;
+
   const rawToken = generateVerificationToken();
   const expiresAt = new Date(Date.now() + VERIFICATION_TTL_SECONDS * 1000);
 
@@ -167,6 +188,7 @@ export async function submitProof(
         workerId,
         capabilityBlockId: block.id,
         description: input.description,
+        transcript,
         // Only the bucket-relative path is stored. Signed URLs are minted per
         // request at read time and never persisted, so a leaked database row
         // cannot be turned into a media link.
@@ -307,7 +329,7 @@ function mediaKindFor(path: string | null): ProofMediaKind {
   return ['mp3', 'm4a', 'aac'].includes(extension) ? 'audio' : 'image';
 }
 
-/** A proof row joined with the skill tag of the block it hangs on. */
+/** A proof row joined with the skill of the block it hangs on. */
 interface ProofRow {
   id: string;
   description: string;
@@ -315,7 +337,10 @@ interface ProofRow {
   verificationStatus: ProofListItem['verificationStatus'];
   submissionGps: string | null;
   createdAt: Date;
+  capabilityBlockId: string | null;
   skillTag: string | null;
+  skillLevel: number | null;
+  transcript: string | null;
 }
 
 async function proofRows(workerId: string, proofId?: string): Promise<ProofRow[]> {
@@ -327,7 +352,10 @@ async function proofRows(workerId: string, proofId?: string): Promise<ProofRow[]
       verificationStatus: workProofLogs.verificationStatus,
       submissionGps: workProofLogs.submissionGps,
       createdAt: workProofLogs.createdAt,
+      capabilityBlockId: workProofLogs.capabilityBlockId,
       skillTag: capabilityBlocks.skillTag,
+      skillLevel: capabilityBlocks.skillLevel,
+      transcript: workProofLogs.transcript,
     })
     .from(workProofLogs)
     .leftJoin(capabilityBlocks, eq(capabilityBlocks.id, workProofLogs.capabilityBlockId))
@@ -351,6 +379,7 @@ async function toListItem(row: ProofRow): Promise<ProofListItem> {
   return {
     id: row.id,
     skillTag: row.skillTag ?? 'Unlabelled work',
+    skillLevel: (row.skillLevel ?? 1) as SkillLevel,
     description: row.description,
     createdAt: row.createdAt.toISOString(),
     verificationStatus: row.verificationStatus,
@@ -416,6 +445,7 @@ export async function getWorkerProof(
       editable: row.verificationStatus === 'pending' && !linkSent,
       verificationLinkSent: linkSent,
       verificationExpiresAt: expiresAt,
+      transcript: row.transcript,
     },
   };
 }
@@ -449,8 +479,18 @@ export async function updateWorkerProof(
   // Null clears the stored location; the field is otherwise left untouched.
   if (input.submissionGps !== undefined) changes.submissionGps = input.submissionGps;
   if (input.skillTag !== undefined) {
-    const block = await resolveCapabilityBlock(workerId, { skillTag: input.skillTag });
+    const block = await resolveCapabilityBlock(workerId, {
+      skillTag: input.skillTag,
+      skillLevel: (input.skillLevel ?? row.skillLevel ?? 1) as SkillLevel,
+    });
     changes.capabilityBlockId = block.id;
+  } else if (input.skillLevel !== undefined && row.capabilityBlockId) {
+    // A level restated without a new skill renames nothing; the tier is updated
+    // on the block the log already hangs under.
+    await db
+      .update(capabilityBlocks)
+      .set({ skillLevel: input.skillLevel })
+      .where(eq(capabilityBlocks.id, row.capabilityBlockId));
   }
 
   const [updated] = await db
@@ -491,4 +531,244 @@ export async function workerOverview(workerId: string): Promise<WorkerOverviewRe
     pendingInvitations: invitations.length,
     recent: proofs.proofs.slice(0, 3),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Capability profile
+// ---------------------------------------------------------------------------
+
+/**
+ * The worker's standing in each of their skills.
+ *
+ * Everything here is derived from the worker's own records rather than read off
+ * the worker: the skill tags and levels come from the capability blocks their
+ * proofs created, and every count is aggregated from the proofs themselves, so
+ * the profile cannot drift from the logbook it summarises (the same reasoning
+ * that governs search in `lib/matching.ts`).
+ *
+ * `verifiedProofs` counts proofs whose verdict is `verified`; `rejected` and
+ * `fraud_blocked` proofs are deliberately kept out of the number a stranger or
+ * an employer sees.
+ */
+export async function workerCapabilities(
+  workerId: string,
+): Promise<WorkerCapabilityProfileResponse> {
+  const verified = sql<number>`count(distinct ${workProofLogs.id}) filter (where ${workProofLogs.verificationStatus} = 'verified')::int`;
+
+  const rows = await db
+    .select({
+      skillTag: capabilityBlocks.skillTag,
+      skillLevel: capabilityBlocks.skillLevel,
+      totalLogs: sql<number>`count(distinct ${workProofLogs.id})::int`.as('total_logs'),
+      verifiedProofs: verified.as('verified_proofs'),
+      lastVerifiedAt: sql<string | null>`max(${verifications.completedAt})`.as('last_verified_at'),
+    })
+    .from(workProofLogs)
+    .innerJoin(capabilityBlocks, eq(capabilityBlocks.id, workProofLogs.capabilityBlockId))
+    .leftJoin(
+      verifications,
+      and(
+        eq(verifications.workProofId, workProofLogs.id),
+        eq(verifications.response, 'confirmed'),
+      ),
+    )
+    .where(eq(workProofLogs.workerId, workerId))
+    .groupBy(capabilityBlocks.id, capabilityBlocks.skillTag, capabilityBlocks.skillLevel)
+    .orderBy(sql`verified_proofs desc, skill_tag asc`);
+
+  const skills = rows.map((row) => ({
+    skillTag: row.skillTag,
+    skillLevel: (row.skillLevel ?? 1) as SkillLevel,
+    totalLogs: Number(row.totalLogs),
+    verifiedProofs: Number(row.verifiedProofs),
+    lastVerifiedAt: toIsoOrNull(row.lastVerifiedAt),
+  }));
+
+  return {
+    skills,
+    verifiedTotal: skills.reduce((sum, skill) => sum + skill.verifiedProofs, 0),
+  };
+}
+
+/**
+ * The public, read-only capability profile behind a worker's shareable link.
+ *
+ * Answers only for a worker whose account exists, whose page is enabled, and
+ * whose slug matches — any other request is a plain 404 so a probe cannot
+ * distinguish "never enabled" from "wrong slug". The page carries only
+ * aggregates and the worker's own name; no media, no locations, no contact
+ * details, and no descriptions pass through it.
+ */
+export async function getPublicCapabilityProfile(
+  slug: string,
+): Promise<PublicCapabilityProfileResponse> {
+  const [page] = await db
+    .select({ workerId: profiles.userId, displayName: profiles.fullName })
+    .from(profiles)
+    .innerJoin(users, and(eq(users.id, profiles.userId), eq(users.role, 'worker')))
+    .where(and(eq(profiles.publicSlug, slug), eq(profiles.publicProfile, true)))
+    .limit(1);
+
+  if (!page) {
+    throw AppError.notFound('That capability profile was not found.');
+  }
+
+  const { skills } = await workerCapabilities(page.workerId);
+
+  return {
+    displayName: page.displayName,
+    skills: skills.map((skill) => ({
+      skillTag: skill.skillTag,
+      skillLevel: skill.skillLevel,
+      verifiedProofs: skill.verifiedProofs,
+      lastVerifiedAt: skill.lastVerifiedAt,
+    })),
+    verifiedTotal: skills.reduce((sum, skill) => sum + skill.verifiedProofs, 0),
+  };
+}
+
+/**
+ * The worker's confirmation links that run out within the next few days.
+ *
+ * Used by the notification feed, which synthesizes `link_expiring` entries at
+ * read time rather than storing them, so a link that crosses the boundary while
+ * the page is open is never missed. Only the most recent link per proof is
+ * considered: an older outstanding link is superseded by a resend and carries
+ * no reminder value.
+ */
+const EXPIRY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+
+export async function workerExpiringLinks(
+  workerId: string,
+): Promise<ProofExpiryNotice[]> {
+  const rows = await db
+    .select({
+      proofId: verifications.workProofId,
+      skillTag: capabilityBlocks.skillTag,
+      expiresAt: verifications.expiresAt,
+    })
+    .from(verifications)
+    .innerJoin(workProofLogs, eq(verifications.workProofId, workProofLogs.id))
+    .leftJoin(capabilityBlocks, eq(capabilityBlocks.id, workProofLogs.capabilityBlockId))
+    .where(
+      and(
+        eq(workProofLogs.workerId, workerId),
+        eq(verifications.response, 'none'),
+        eq(workProofLogs.verificationStatus, 'pending'),
+        gt(verifications.expiresAt, new Date()),
+        lt(verifications.expiresAt, new Date(Date.now() + EXPIRY_WINDOW_MS)),
+        sql`${verifications.id} = (
+          select v2.id from ${verifications} v2
+          where v2.work_proof_id = ${verifications.workProofId}
+          order by v2.created_at desc
+          limit 1
+        )`,
+      ),
+    );
+
+  return rows.map((row) => ({
+    proofId: row.proofId,
+    skillTag: row.skillTag ?? 'Unlabelled work',
+    expiresAt: row.expiresAt.toISOString(),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Confirmation-link reminders
+// ---------------------------------------------------------------------------
+
+/**
+ * Issues a fresh confirmation link for a log whose earlier link ran out or was
+ * never handed over.
+ *
+ * The original client phone number is not stored (only a salted hash is), so a
+ * reminder cannot silently re-message the client: like the very first
+ * submission without a number, it hands the worker a new single-use link to
+ * share. That is the honest version of "resend" within the privacy model the
+ * product already keeps.
+ *
+ * Refused when a link is still active — a worker cannot mint a second valid
+ * link for the same log while the first is live — and when the log has already
+ * reached a verdict. The freeze rule is untouched: a reminder issues a link, it
+ * never reopens editing.
+ */
+export async function resendVerificationLink(
+  workerId: string,
+  proofId: string,
+): Promise<VerificationResendResponse> {
+  const row = await findOwnedRow(workerId, proofId);
+
+  if (row.verificationStatus !== 'pending') {
+    throw AppError.conflict(
+      'This log has already been verified and can no longer receive a new link.',
+    );
+  }
+
+  const { linkSent, expiresAt } = await verificationState(proofId);
+  if (linkSent && expiresAt) {
+    throw AppError.conflict(
+      'A confirmation link is still active for this log. The client can use the one that was sent.',
+    );
+  }
+
+  // An expired, unanswered link is the exact case a reminder exists for. The
+  // worker is told it died and that a fresh one is ready, so the action has a
+  // visible consequence rather than silently creating a second link.
+  if (linkSent && !expiresAt) {
+    await createNotification(
+      workerId,
+      'link_expired',
+      'Confirmation link expired',
+      `The confirmation link for ${row.skillTag ?? 'that skill'} expired. A fresh one is ready to share.`,
+      `/logs/${proofId}`,
+    );
+  }
+
+  const worker = await db
+    .select({ id: users.id, fullName: profiles.fullName })
+    .from(users)
+    .leftJoin(profiles, eq(profiles.userId, users.id))
+    .where(eq(users.id, workerId))
+    .limit(1);
+
+  const rawToken = generateVerificationToken();
+  const nextExpiry = new Date(Date.now() + VERIFICATION_TTL_SECONDS * 1000);
+
+  const [verification] = await db
+    .insert(verifications)
+    .values({
+      workProofId: proofId,
+      // No number is known for a resend; the worker shares the fresh link the
+      // same way the first submission without a number was shared.
+      verifierPhoneHash: null,
+      tokenHash: hashVerificationToken(rawToken),
+      expiresAt: nextExpiry,
+    })
+    .returning({ id: verifications.id });
+
+  if (!verification) {
+    throw AppError.internal('The new link could not be prepared.');
+  }
+
+  const dispatch = await dispatchLink({
+    to: null,
+    rawToken,
+    expiresAt: nextExpiry,
+    skillTag: row.skillTag ?? 'Unlabelled work',
+    workerName: worker[0]?.fullName ?? '',
+    verificationId: verification.id,
+  });
+
+  return {
+    verificationToken: rawToken,
+    verificationExpiresAt: nextExpiry.toISOString(),
+    verificationLinkSent: dispatch,
+  };
+}
+
+/** ISO string from an aggregate that may arrive as a string or a Date. */
+function toIsoOrNull(value: Date | string | null): string | null {
+  if (value === null) return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }

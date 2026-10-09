@@ -1,7 +1,8 @@
-import type { ProofListItem, VerificationStatus } from '@tetherproof/shared';
+import type { ProofListItem, SkillLevel, VerificationStatus } from '@tetherproof/shared';
 import Link from 'next/link';
 import { AudioLines } from 'lucide-react';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
+import { skillLevelLabel } from '@/lib/capabilities';
 
 /**
  * One logged job in the logbook and on the dashboard's recent list.
@@ -22,6 +23,7 @@ export function ProofListItemView({ item }: { item: ProofListItem }) {
       <div className="min-w-0 flex-1 self-center">
         <div className="flex flex-wrap items-center gap-2">
           <p className="truncate text-base font-semibold text-ink-900">{item.skillTag}</p>
+          <SkillLevelBadge level={item.skillLevel} />
           <VerificationStatusPill status={item.verificationStatus} />
         </div>
         <p className="mt-0.5 line-clamp-2 text-sm text-ink-600">{item.description}</p>
@@ -77,6 +79,15 @@ export function VerificationStatusPill({ status }: { status: VerificationStatus 
       className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${className}`}
     >
       {label}
+    </span>
+  );
+}
+
+/** The worker's stated proficiency tier for a skill, in the logbook's pill language. */
+export function SkillLevelBadge({ level }: { level: SkillLevel }) {
+  return (
+    <span className="inline-flex shrink-0 items-center rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-semibold text-brand-700">
+      {skillLevelLabel(level)}
     </span>
   );
 }

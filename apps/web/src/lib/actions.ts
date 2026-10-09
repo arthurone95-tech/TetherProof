@@ -9,8 +9,10 @@ import type {
   AuthSession,
   ConfirmationChallenge,
   ProofUpdateResponse,
+  SkillLevel,
   UpdateProofInput,
   UserRole,
+  VerificationResendResponse,
 } from '@tetherproof/shared';
 import { ApiRequestError, isCredentialRefusal } from './api-error';
 import type { AuthCallbackResult, FormState, ProofEditState, ProofFormState } from './form-state';
@@ -634,6 +636,7 @@ export async function submitProof(
 ): Promise<ProofFormState> {
   const description = String(formData.get('description') ?? '').trim();
   const skillTag = String(formData.get('skillTag') ?? '').trim();
+  const skillLevelRaw = String(formData.get('skillLevel') ?? '').trim();
 
   if (description.length < 10) {
     return { error: 'Describe the work in at least 10 characters.', field: 'description' };
@@ -647,6 +650,11 @@ export async function submitProof(
   if (skillTag.length > 160) {
     return { error: 'Keep the skill name under 160 characters.', field: 'skillTag' };
   }
+
+  // The level is optional and its value is validated by the API; an empty box
+  // simply means "entry level" there. A value that is not a level is forwarded
+  // anyway so the API's own refusal, with its own wording, comes back here.
+  if (skillLevelRaw) formData.set('skillLevel', skillLevelRaw);
 
   const media = formData.get('media_file');
   if (!(media instanceof File) || media.size === 0) {
@@ -735,6 +743,7 @@ export async function updateProof(
   const proofId = String(formData.get('proofId') ?? '');
   const description = String(formData.get('description') ?? '').trim();
   const skillTag = String(formData.get('skillTag') ?? '').trim();
+  const skillLevelRaw = String(formData.get('skillLevel') ?? '').trim();
   const draftLat = String(formData.get('lat') ?? '').trim();
   const draftLng = String(formData.get('lng') ?? '').trim();
 
@@ -752,6 +761,13 @@ export async function updateProof(
   }
 
   const changes: UpdateProofInput = { description, skillTag };
+  if (skillLevelRaw) {
+    const level = Number(skillLevelRaw);
+    if (!Number.isInteger(level) || level < 1 || level > 3) {
+      return { error: 'Choose a level for this skill: entry, skilled, or advanced.' };
+    }
+    changes.skillLevel = level as SkillLevel;
+  }
 
   if (!draftLat && !draftLng) {
     changes.submissionGps = null;
@@ -793,6 +809,164 @@ export async function updateProof(
       return { error: error.message };
     }
     return { error: 'We could not save those changes. Please try again.' };
+  }
+}
+
+/**
+ * Where the signed-in member's privacy choices are saved.
+ *
+ * One action for the whole privacy card: discoverability (whether employer
+ * search may surface the worker), the public capability page (whether it exists
+ * at all — enabling it generates the unguessable address), and the invitation
+ * preference (who may invite). Each choice maps onto the one profile PATCH the
+ * API accepts, so the card cannot drift from what the API enforces — and what
+ * it enforces at the layers that matter, not merely displays.
+ *
+ * A checkbox in HTML submits nothing when it is off and the whole string "on"
+ * when it is on, so absence is the false case and presence is true. That makes
+ * the two booleans deliberately asymmetric in the code: they are read with
+ * `!== null`, the only honest way to tell "the member set this" from "the form
+ * does not even carry this page's controls".
+ */
+export async function savePrivacySetting(_previous: FormState, formData: FormData): Promise<FormState> {
+  const discoverable = formData.get('discoverable');
+  const publicProfile = formData.get('publicProfile');
+  const invitationPreference = String(formData.get('invitationPreference') ?? '');
+
+  const body: Record<string, unknown> = {};
+  if (discoverable !== null) body.discoverable = discoverable === 'on';
+  if (publicProfile !== null) body.publicProfile = publicProfile === 'on';
+  if (invitationPreference) {
+    if (invitationPreference !== 'all' && invitationPreference !== 'approved_only') {
+      return { error: 'Choose who may invite you.' };
+    }
+    body.invitationPreference = invitationPreference;
+  }
+
+  if (Object.keys(body).length === 0) {
+    return { error: 'Nothing to change was chosen.' };
+  }
+
+  try {
+    await apiServer('/auth/profile', { method: 'PATCH', body });
+    revalidatePath('/settings/privacy');
+    revalidatePath('/profile');
+    return { done: true };
+  } catch (error) {
+    return formErrorFor(error, 'We could not save your privacy choices. Please try again.');
+  }
+}
+
+/**
+ * What a link resend produced, for the component that shows it.
+ *
+ * The fresh token is returned exactly once, by the same rule as a first
+ * submission — see `ProofSubmissionView` for why it is safe to show. The union
+ * is discriminated on `done`, so a caller asking for the result after a
+ * `done === true` check gets a value and an `error` read is always safe.
+ */
+export type ResendActionState =
+  | { error?: string; done?: false; result?: undefined }
+  | {
+      done: true;
+      result: { verificationUrl: string; verificationExpiresAt: string; verificationLinkSent: boolean };
+      error?: undefined;
+    };
+
+/**
+ * Issues a fresh confirmation link for a log whose earlier link expired or was
+ * never handed over.
+ *
+ * The resend is a write and is never repeated (see `apiServer`), and the API's
+ * refusal — a log already verified, or a link still active — comes back with
+ * its own wording. The token is only ever returned once, so the result carries
+ * it; unlike the main log form there is no redirect-on-success because the link
+ * itself is the point of the action, and it has to be shown in place.
+ */
+export async function resendVerification(
+  _previous: ResendActionState,
+  formData: FormData,
+): Promise<ResendActionState> {
+  const proofId = String(formData.get('proofId') ?? '');
+  if (!proofId) return { error: 'That log could not be found.' };
+
+  try {
+    const resend = await apiServer<VerificationResendResponse>(
+      `/workers/proofs/${encodeURIComponent(proofId)}/verification/resend`,
+      { method: 'POST', body: {} },
+    );
+    // Awaited, not stringified in place: `currentOrigin` reads headers, so it
+    // answers with a promise, and a promise written into a template becomes
+    // `[object Promise]` — a link that looks complete and goes nowhere.
+    const origin = (await currentOrigin()) ?? '';
+    return {
+      done: true,
+      result: {
+        verificationUrl: `${origin}/verify/${resend.verificationToken}`,
+        verificationExpiresAt: resend.verificationExpiresAt,
+        verificationLinkSent: resend.verificationLinkSent,
+      },
+    };
+  } catch (error) {
+    return { error: messageFor(error, 'We could not prepare a fresh link. Please try again.') };
+  }
+}
+
+/**
+ * Marks every unread notification as read.
+ *
+ * Reading the feed is the read action; a failure here is a convenience that
+ * did not happen and is not worth an error screen, so it degrades to a plain
+ * revalidation rather than a reported failure.
+ */
+export async function markNotificationsRead(): Promise<void> {
+  try {
+    await apiServer('/notifications/read', { method: 'POST', body: {} });
+  } catch {
+    // Marking read is a convenience; a failure is not worth an error screen.
+  }
+  revalidatePath('/notifications');
+}
+
+/**
+ * Starts the GitHub OAuth dance for the signed-in worker.
+ *
+ * The start endpoint is authenticated (only members may connect a source to
+ * their own account), so it goes through the server rather than the browser's
+ * fetch. On success the member is sent to GitHub's authorize page; on any
+ * refusal — most commonly "not configured on this deployment" — the message
+ * comes back under the button that was pressed.
+ */
+export async function githubConnect(_previous: FormState, _formData: FormData): Promise<FormState> {
+  try {
+    const { authorizeUrl } = await apiServer<{ authorizeUrl: string }>(
+      '/workers/connections/github/start',
+      { method: 'POST', body: {} },
+    );
+    redirect(authorizeUrl);
+  } catch (error) {
+    if (isRedirect(error)) throw error;
+    return { error: messageFor(error, 'We could not start connecting to GitHub. Please try again.') };
+  }
+}
+
+/**
+ * Disconnects a connected work-capture source.
+ *
+ * A disconnect is a status flip on a connection that holds no credential (the
+ * API never stores the OAuth token), so it is safe and immediate; the card is
+ * revalidated so the connected source disappears without a reload.
+ */
+export async function githubRevoke(_previous: FormState, formData: FormData): Promise<FormState> {
+  const provider = String(formData.get('provider') ?? '');
+  if (!provider) return { error: 'That connection could not be found.' };
+
+  try {
+    await apiServer(`/workers/connections/${encodeURIComponent(provider)}`, { method: 'DELETE' });
+    revalidatePath('/profile');
+    return { done: true };
+  } catch (error) {
+    return { error: messageFor(error, 'We could not disconnect that source. Please try again.') };
   }
 }
 
