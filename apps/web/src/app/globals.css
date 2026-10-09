@@ -3,11 +3,20 @@
 @theme {
   --color-brand-50: #eef7f2;
   --color-brand-100: #d5ecdf;
+  --color-brand-200: #b3ddc6;
+  --color-brand-300: #86c8a6;
+  --color-brand-400: #4ea87b;
   --color-brand-500: #1f7a4d;
   --color-brand-600: #19603d;
   --color-brand-700: #134a2f;
-  --color-ink-900: #10201a;
+  --color-brand-800: #0f3a25;
+  --color-brand-900: #0b2b1b;
+  --color-ink-400: #93a29a;
+  --color-ink-500: #6b7c74;
   --color-ink-600: #4a5c54;
+  --color-ink-700: #33463e;
+  --color-ink-800: #223029;
+  --color-ink-900: #10201a;
   --color-surface: #f7faf8;
 }
 

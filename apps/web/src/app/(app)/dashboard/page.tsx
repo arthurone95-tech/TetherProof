@@ -44,9 +44,32 @@ export default async function WorkerDashboardPage() {
         <div>
           <h1 className="text-sm font-bold text-ink-900 leading-tight">Secure Professional Ledger</h1>
         </div>
-        <div className="rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-800 border border-brand-200">
-          Online
-        </div>
+        {/*
+          The member's own standing, driven by the public-page choice on Privacy.
+          It reads as a switch state, not a live connection: enabling the public
+          capability page is what puts the verified skills within reach of a
+          link, so the pill says "Online" while that is on and "Offline" once it
+          is withdrawn. Nothing is stored — the /auth/me profile carries the
+          boolean, so the pill follows the toggle on the next render.
+        */}
+        <span
+          title={
+            user.publicProfile
+              ? 'Your public capability page is on, so anyone with the link can see your verified skills.'
+              : 'Your public capability page is off. Turn it on in Privacy to share your verified skills.'
+          }
+          className={
+            user.publicProfile
+              ? 'inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800'
+              : 'inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-neutral-100 px-3 py-1 text-xs font-semibold text-ink-600'
+          }
+        >
+          <span
+            aria-hidden="true"
+            className={`h-1.5 w-1.5 rounded-full ${user.publicProfile ? 'bg-emerald-500' : 'bg-neutral-400'}`}
+          />
+          {user.publicProfile ? 'Online' : 'Offline'}
+        </span>
       </div>
 
       {totalLogs > 0 ? (
