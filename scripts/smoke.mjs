@@ -647,19 +647,83 @@ async function main() {
       // deletion test drains its own; anything left at this point is either a real
       // pending sweep or a leak from an interrupted run, and either way it is a
       // file that should not be there.
-      const { rows: quarantineLeft } = await pool.query(
-        'select count(*)::int n from public.orphaned_proof_media',
+      // This table is a queue, not a bucket: a row means "this object existed, the
+      // proof row that pointed at it is gone, remove these bytes". It is drained by
+      // the deletion path, which deletes the object and then the row.
+      //
+      // Counting rows demanded the queue be empty at the end of every run, which is
+      // only true for accounts this suite just deleted. A row left by any earlier
+      // run — including one interrupted mid-cleanup — kept failing every subsequent
+      // run for a reason that had nothing to do with the code under test, and the
+      // natural "fix" is to delete the row, which loses the only record that those
+      // bytes still exist.
+      //
+      // So the assertion is about correctness rather than emptiness: any row whose
+      // object is genuinely gone is a stale row, and any row whose object is still
+      // in the bucket is real outstanding work. This run must leave neither kind.
+      //
+      // `bucketName` is resolved here rather than reused from later in this scope,
+      // because this block runs in the pre-flight cleanup where it is not yet bound.
+      const queueBucket = process.env.STORAGE_PROOFS_BUCKET || 'work-proofs';
+      const { rows: quarantine } = await pool.query(
+        'select id, bucket, path from public.orphaned_proof_media',
       );
+      let staleQueueRows = 0;
+      let stillQueued = 0;
+      for (const row of quarantine) {
+        const key = String(row.path).replace(new RegExp(`^${queueBucket}/`), '');
+        const parts = key.split('/');
+        const name = parts.pop();
+        const { data: found } = await admin.storage.from(row.bucket || queueBucket).list(parts.join('/'), { limit: 1000 });
+        if ((found ?? []).some((o) => o.name === name)) stillQueued += 1;
+        else staleQueueRows += 1;
+      }
       check(
-        'no stored media left awaiting removal in public.orphaned_proof_media',
-        quarantineLeft[0].n === 0,
-        `${quarantineLeft[0].n} rows`,
+        'every removal-queue row still points at an object that exists',
+        stillQueued === 0,
+        `${stillQueued} queued object(s) still in the bucket`,
       );
+      if (staleQueueRows > 0) {
+        // Reported, never repaired here. A stale row is a genuine operational
+        // finding — its bytes are gone but the record that they existed is not —
+        // and clearing it is a database write against someone else's leftover, so
+        // it needs an operator who has looked, not a test suite.
+        console.log(
+          `  NOTE  ${staleQueueRows} removal-queue row(s) refer to objects already deleted.`,
+        );
+        console.log('        These are harmless to scoring but should be drained deliberately.');
+      }
 
-      const { data: bucketLeft } = await admin.storage
-        .from(process.env.STORAGE_PROOFS_BUCKET || 'work-proofs')
-        .list('', { limit: 1000 });
-      check('no proof media left in the bucket', (bucketLeft ?? []).length === 0, `${(bucketLeft ?? []).length} object(s)`);
+      // Only this suite's own media may be gone. A blanket "the bucket is empty"
+      // would fail the moment a single real worker has pending evidence, which is
+      // the normal state of a live product — and worse, it would invite somebody to
+      // "fix" it by deleting a real worker's photographs.
+      //
+      // The suite's uploads live under a `smoke.` account, and it records the exact
+      // paths it created, so the question worth asking is whether any of *those*
+      // remain. Anything else in the bucket belongs to somebody else.
+      const bucketName = process.env.STORAGE_PROOFS_BUCKET || 'work-proofs';
+      const { data: roots } = await admin.storage.from(bucketName).list('', { limit: 1000 });
+      let foreignObjects = 0;
+      for (const root of roots ?? []) {
+        const isTestAccount = TEST_EMAIL_PREFIX.test(
+          (await admin.auth.admin.getUserById(root.name).catch(() => null))?.data?.user?.email ?? '',
+        );
+        if (isTestAccount) {
+          const { data: days } = await admin.storage.from(bucketName).list(root.name, { limit: 100 });
+          for (const day of days ?? []) {
+            const { data: objs } = await admin.storage
+              .from(bucketName)
+              .list(`${root.name}/${day.name}`, { limit: 100 });
+            foreignObjects += (objs ?? []).length;
+          }
+        }
+      }
+      check(
+        'no media of this suite\'s accounts left in the bucket',
+        foreignObjects === 0,
+        `${foreignObjects} object(s) under a smoke test account`,
+      );
     } catch (error) {
       check('cleanup completed', false, error instanceof Error ? error.message : String(error));
     }
@@ -1305,6 +1369,17 @@ async function main() {
     // this drives the whole loop through the public API rather than writing rows
     // directly. Each submission is confirmed at a real distance, which is what
     // gives the engine a history to weigh the next one against.
+
+    // Declared outside the engine block because the concurrency check at the end
+    // of the run needs the same submission helper once that block is out of
+    // scope, and it has to run late to leave the verification rate-limit budget
+    // intact for everything else.
+    let submitProof = null;
+
+    // Declared outside the engine block because the checks below read it after
+    // that block has closed.
+    let offsiteRow = null;
+
     if (userId && token) {
       // A phone number used nowhere else in the run, so its hash is unique to
       // this verifier and the history below belongs to it alone.
@@ -1332,6 +1407,7 @@ async function main() {
         );
         return result.status === 201 ? unwrap(result.json) : null;
       };
+      submitProof = submit;
 
       // Five confirmations by one verifier, all for one worker, all on site. This
       // is what a site supervisor legitimately looks like, and it is also the
@@ -1366,7 +1442,9 @@ async function main() {
         offsiteRow = (
           await pool.query(
             `select v.proximity_status, v.proximity_km, v.fraud_score, v.fraud_score_detail,
-                    (select verification_status from public.work_proof_logs where id=$1) as proof_status
+                    (select verification_status from public.work_proof_logs where id=$1) as proof_status,
+                    (select flag_reason from public.work_proof_logs where id=$1) as flag_reason,
+                    (select flagged_at from public.work_proof_logs where id=$1) as flagged_at
                from public.verifications v where v.work_proof_id=$1`,
             [offsite.proofId],
           )
@@ -1392,17 +1470,52 @@ async function main() {
           typeof offsiteRow?.fraud_score === 'number' && offsiteRow.fraud_score <= 0.25,
           String(offsiteRow?.fraud_score),
         );
+        // Withheld, never accused. The engine has produced `flagged` — the record
+        // does not count and a person will look at it — and `fraud_blocked` is now
+        // reachable only through the admin review path, which no score can enter.
         check(
-          'the proof is blocked from counting as verified',
-          offsiteRow?.proof_status === 'fraud_blocked',
+          'the proof is withheld from counting as verified',
+          offsiteRow?.proof_status === 'flagged',
           String(offsiteRow?.proof_status),
         );
+        check(
+          'no scoring path can write fraud_blocked',
+          offsiteRow?.proof_status !== 'fraud_blocked',
+          String(offsiteRow?.proof_status),
+        );
+        check(
+          'the worker is told the record was held, and that it is not a finding',
+          typeof offsiteRow?.flag_reason === 'string' &&
+            /not a finding of fraud/i.test(offsiteRow.flag_reason),
+          String(offsiteRow?.flag_reason).slice(0, 120),
+        );
+        // `pg` returns a timestamptz as a Date, not a string; the assertion covers
+        // either so it tests the value rather than the driver's representation.
+        check(
+          'the hold is timestamped so the worker can see when it happened',
+          offsiteRow?.flagged_at !== null &&
+            offsiteRow?.flagged_at !== undefined &&
+            !Number.isNaN(new Date(offsiteRow.flagged_at).getTime()),
+          String(offsiteRow?.flagged_at),
+        );
+        check(
+          'the flag reason carries no score or threshold',
+          !/\d\.\d+/.test(String(offsiteRow?.flag_reason ?? '')),
+          String(offsiteRow?.flag_reason).slice(0, 90),
+        );
 
-        // The client is told what actually happened: they did confirm it.
+        // The client is told what actually happened: they did confirm it, AND that
+        // the record is not counting. Reporting only the first would let them
+        // leave believing the work is now trusted proof.
         check(
           'the client is told their response was recorded as a confirmation',
           unwrap(offsiteConfirm.json)?.status === 'confirmed',
           JSON.stringify(offsiteConfirm.json).slice(0, 120),
+        );
+        check(
+          'the client is also told the record is being held back',
+          unwrap(offsiteConfirm.json)?.withheld === true,
+          JSON.stringify(offsiteConfirm.json).slice(0, 160),
         );
       }
 
@@ -1501,6 +1614,164 @@ async function main() {
         dispatchUnexpected ? 'a link was reported sent' : '',
       );
 
+      // ------------------------------------------------------------------------
+      // One decision per request: the supersede-on-replacement rule
+      // ------------------------------------------------------------------------
+      //
+      // The work-logging form no longer collects a number, so every submission
+      // lands with `dispatch_status = 'not_attempted'` and the link is shared by
+      // hand. That makes "resend" a replacement rather than a redelivery, and the
+      // rule that matters is that replacing a link must not leave two answerable
+      // requests behind for one proof.
+      //
+      // The failure this guards against is concrete: an old token still hashes to a
+      // live row with `response = 'none'`, so it would still accept a decision, and
+      // whichever of the two answers landed last would win.
+      const replacement = await submit('Replacement Path Check');
+      check('a proof to replace was created', replacement !== null, replacement ? '' : 'refused');
+
+      if (replacement) {
+        const beforeResend = (
+          await pool.query(
+            `select count(*)::int as live from public.verifications
+              where work_proof_id = $1 and response = 'none' and expires_at > now()`,
+            [replacement.proofId],
+          )
+        ).rows[0]?.live;
+        check('exactly one answerable request exists before the replacement', beforeResend === 1, String(beforeResend));
+
+        // A live link can be replaced, because the worker holds no copy of it to
+        // re-share: the API keeps only a hash of the token. Replacing must not
+        // leave two answerable requests behind, and the superseded link must stop
+        // working at once — a customer already holding it has to be turned away
+        // rather than allowed a second, competing answer.
+        const staleToken = replacement.verificationToken;
+        const liveResend = await api(
+          'POST',
+          `/workers/proofs/${replacement.proofId}/verification/resend`,
+          { token, body: {} },
+        );
+        check(
+          'a live link can be replaced by its owner',
+          liveResend.status === 200,
+          String(liveResend.status),
+        );
+
+        const liveAfterRotation = (
+          await pool.query(
+            `select count(*)::int as live from public.verifications
+              where work_proof_id = $1 and response = 'none' and expires_at > now()`,
+            [replacement.proofId],
+          )
+        ).rows[0]?.live;
+        check(
+          'replacing a live link still leaves exactly one answerable request',
+          liveAfterRotation === 1,
+          `${liveAfterRotation} live after rotation`,
+        );
+
+        // The link that was already handed out must be dead the moment the
+        // replacement exists, not merely deprioritised.
+        const oldLinkAfterRotation = await api(
+          'POST',
+          `/verifications/${staleToken}`,
+          { body: { response: 'confirmed' } },
+        );
+        check(
+          'the link that was replaced no longer accepts an answer',
+          oldLinkAfterRotation.status === 410 || oldLinkAfterRotation.status === 409,
+          String(oldLinkAfterRotation.status),
+        );
+
+        // Age the existing request so the replacement is legitimate, then replace it.
+        await pool.query(
+          `update public.verifications set expires_at = now() - interval '1 minute'
+            where work_proof_id = $1 and response = 'none'`,
+          [replacement.proofId],
+        );
+
+        const resend = await api('POST', `/workers/proofs/${replacement.proofId}/verification/resend`, {
+          token,
+          body: {},
+        });
+        const resendBody = resend.status === 200 ? unwrap(resend.json) : null;
+        check('an expired request can be replaced', resendBody !== null, String(resend.status));
+
+        if (resendBody) {
+          const liveAfter = (
+            await pool.query(
+              `select count(*)::int as live from public.verifications
+                where work_proof_id = $1 and response = 'none' and expires_at > now()`,
+              [replacement.proofId],
+            )
+          ).rows[0]?.live;
+          check(
+            'replacement leaves exactly one answerable request',
+            liveAfter === 1,
+            `${liveAfter} live after replacement`,
+          );
+
+          // The retired token must not still be able to decide anything. This is
+          // the assertion the whole supersede step exists for.
+          const staleAnswer = await api('POST', `/verifications/${replacement.verificationToken}`, {
+            body: { response: 'confirmed' },
+          });
+          check(
+            'the superseded token can no longer record a decision',
+            staleAnswer.status === 410 || staleAnswer.status === 409,
+            String(staleAnswer.status),
+          );
+
+          const freshAnswer = await api('POST', `/verifications/${resendBody.verificationToken}`, {
+            body: { response: 'confirmed' },
+          });
+          check(
+            'the replacement token still records the decision',
+            freshAnswer.status === 200,
+            String(freshAnswer.status),
+          );
+
+          // The recorded decision must survive everything that follows.
+          const replay = await api('POST', `/verifications/${resendBody.verificationToken}`, {
+            body: { response: 'rejected' },
+          });
+          check('a completed request cannot be decided again', replay.status === 409, String(replay.status));
+
+          const finalStatus = (
+            await pool.query('select verification_status from public.work_proof_logs where id = $1', [
+              replacement.proofId,
+            ])
+          ).rows[0]?.verification_status;
+          check(
+            'the replayed rejection did not overwrite the confirmation',
+            finalStatus === 'verified' || finalStatus === 'fraud_blocked',
+            String(finalStatus),
+          );
+
+          const postResend = await api('POST', `/workers/proofs/${replacement.proofId}/verification/resend`, {
+            token,
+            body: {},
+          });
+          check(
+            'a concluded log cannot receive a replacement request',
+            postResend.status === 409,
+            String(postResend.status),
+          );
+        }
+      }
+
+      // The freeze rule follows the link, not a delivery. With no number collected
+      // the dispatch never runs, so a rule keyed on delivery would never fire.
+      const frozen = await api('PATCH', `/workers/proofs/${offsite?.proofId ?? ringProofs[0]}`, {
+        token,
+        body: { description: 'A description edited after the link went out.' },
+      });
+      check(
+        'a log with a live link cannot be edited',
+        frozen.status === 409,
+        String(frozen.status),
+      );
+
       // These submissions stored real objects in the bucket. Cleanup finds them by
       // querying the database for this run's workers, so nothing has to be
       // remembered here. What still needs checking is that each `media_url` points
@@ -1525,6 +1796,157 @@ async function main() {
         dangling === 0,
         `${dangling} of ${engineMedia.length} missing`,
       );
+
+      // A fresh, still-answerable proof, used only to read the summary a recipient
+      // sees. It is left unanswered so the link stays live for the read.
+      const summaryProof = await submit('Summary Disclosure Check');
+      check('a proof to read the summary from was created', summaryProof !== null, summaryProof ? '' : 'refused');
+
+      // The verification page now shows the recipient the evidence, so the summary
+      // must carry a usable signed URL — and must still withhold everything a link
+      // holder is not entitled to. Read with no session at all: the route is public
+      // by design and the token is the only credential, which is exactly the
+      // property the recipient page depends on.
+      const summaryProbe = await api('GET', `/verifications/${summaryProof?.verificationToken ?? ''}`);
+      check(
+        'the verification summary is served to a link holder with no account',
+        summaryProbe.status === 200,
+        String(summaryProbe.status),
+      );
+
+      if (summaryProbe.status === 200) {
+        const body200 = unwrap(summaryProbe.json);
+
+        check(
+          'the summary carries the evidence the recipient needs',
+          typeof body200.mediaUrl === 'string' && body200.mediaUrl.startsWith('http'),
+          typeof body200.mediaUrl,
+        );
+        check(
+          'the evidence is a signed URL, never a bare storage path',
+          typeof body200.mediaUrl === 'string' &&
+            /token=/.test(body200.mediaUrl) &&
+            !body200.mediaUrl.includes('/object/public/'),
+        );
+        check('the summary states when the work was logged', typeof body200.loggedAt === 'string');
+        check(
+          'the summary states the skill level claimed',
+          body200.skillLevel === null || typeof body200.skillLevel === 'number',
+          String(body200.skillLevel),
+        );
+
+        // The privacy boundary, checked on the real response body rather than on
+        // the shape of the code that builds it.
+        // The worker is now named on the page, when they have allowed it, so the
+        // customer can tell who they are answering. What must never appear is the
+        // worker's id — a link is forwardable, and an id would be something a
+        // reader could act on rather than merely read.
+        check(
+          'the summary names the worker when they allow it',
+          typeof body200.workerName === 'string' && body200.workerName.length > 0,
+          String(body200.workerName),
+        );
+        check('the summary still carries no worker id', !('workerId' in body200));
+        check('the summary exposes no GPS telemetry', !('submissionGps' in body200));
+        check('the summary exposes no fraud score', !('fraudScore' in body200));
+        check('the summary exposes no verifier number', !JSON.stringify(body200).includes('verifierPhone'));
+        check('the summary exposes no storage bucket path', !('mediaPath' in body200));
+
+        // The signed URL must actually resolve, or the one person whose judgement
+        // the record depends on is shown a broken image.
+        const fetched = await fetch(body200.mediaUrl);
+        check('the signed evidence URL resolves to the file', fetched.status === 200, String(fetched.status));
+
+        // The opt-out has to actually withhold. A switch that is stored and then
+        // ignored is worse than no switch, because it promises something it does
+        // not do. Toggled here, read back through the same endpoint, and put back.
+        const optedOut = await api('PATCH', '/auth/profile', {
+          token,
+          body: { showNameOnVerificationLink: false },
+        });
+        check(
+          'the worker can turn their name off for verification links',
+          optedOut.status === 200 && optedOut.json?.showNameOnVerificationLink === false,
+          JSON.stringify(optedOut.json).slice(0, 160),
+        );
+
+        const anonymous = await api('GET', `/verifications/${rawToken}`);
+        check(
+          'the verification page names nobody once the worker has opted out',
+          anonymous.json?.workerName === null && anonymous.json?.workerAvatarUrl === null,
+          JSON.stringify({ n: anonymous.json?.workerName, a: anonymous.json?.workerAvatarUrl }),
+        );
+        check(
+          'the work itself is still shown to the customer',
+          typeof anonymous.json?.taskSummary === 'string' && anonymous.json.taskSummary.length > 0,
+          'the work summary disappeared with the name',
+        );
+
+        const optedBackIn = await api('PATCH', '/auth/profile', {
+          token,
+          body: { showNameOnVerificationLink: true },
+        });
+        check(
+          'the worker can turn it back on',
+          optedBackIn.status === 200 && optedBackIn.json?.showNameOnVerificationLink === true,
+          JSON.stringify(optedBackIn.json).slice(0, 160),
+        );
+      }
+
+      // A decision recorded with no session at all, and still final.
+      // Two taps on one token, deliberately simultaneous.
+      //
+      // This both proves an accountless decision works and proves the single-
+      // decision rule is closed against a *race*, not merely against a sequential
+      // replay — which is the part a read-then-write implementation would get
+      // wrong. It replaces a single confirmation rather than adding requests,
+      // because the suite already sits at the edge of the 30-per-minute
+      // verification limiter and the 20-per-15-minutes upload limiter, and
+      // neither control should be tuned for the sake of a test.
+      const [confirmRes, rejectRes] = await Promise.all([
+        api('POST', `/verifications/${summaryProof?.verificationToken ?? ''}`, { body: { response: 'confirmed' } }),
+        api('POST', `/verifications/${summaryProof?.verificationToken ?? ''}`, { body: { response: 'rejected' } }),
+      ]);
+      const raced = [confirmRes.status, rejectRes.status].sort();
+      check(
+        'two simultaneous decisions produce exactly one winner',
+        raced[0] === 200 && raced[1] === 409,
+        raced.join(' and '),
+      );
+
+      const storedDecision = (
+        await pool.query('select response from public.verifications where work_proof_id = $1', [
+          summaryProof?.proofId ?? '00000000-0000-0000-0000-000000000000',
+        ])
+      ).rows[0]?.response;
+      check(
+        'exactly one response is recorded',
+        ['confirmed', 'rejected'].includes(storedDecision),
+        String(storedDecision),
+      );
+
+      const anonStatus = (
+        await pool.query('select verification_status from public.work_proof_logs where id = $1', [
+          summaryProof?.proofId ?? '00000000-0000-0000-0000-000000000000',
+        ])
+      ).rows[0]?.verification_status;
+      check(
+        'the proof status matches the single recorded decision',
+        storedDecision === 'rejected'
+          ? anonStatus === 'rejected'
+          : anonStatus === 'verified' || anonStatus === 'fraud_blocked',
+        `${storedDecision} -> ${anonStatus}`,
+      );
+      check(
+        'the winning decision was recorded by an accountless caller',
+        raced[0] === 200,
+        `winner ${raced[0]}`,
+      );
+
+      const anonReplay = await api('POST', `/verifications/${summaryProof?.verificationToken ?? ''}`, {
+        body: { response: 'rejected' },
+      });
+      check('an accountless confirmation cannot be replayed', anonReplay.status === 409, String(anonReplay.status));
 
       // The privacy promise, checked against the live table rather than the code.
       const phoneColumns = await pool.query(
@@ -1753,10 +2175,74 @@ async function main() {
         const cardJson = JSON.stringify(found.json);
         check('the search result contains no worker id', !cardJson.includes(userId), userId ?? '');
         check('the search result contains no email address', !cardJson.includes('tetherproof.dev'), '');
+
+        // A name and a photo are now carried, because a worker who is `discoverable`
+        // has said they may be found and an employer cannot otherwise tell two
+        // otherwise-identical candidates apart. Contact details are still withheld:
+        // those belong to an accepted invitation, not to a search.
         check(
-          'the search result carries no name, phone, or avatar field',
-          !/fullName|full_name|avatar|phone|email|workerId|worker_id/i.test(cardJson),
+          'the card carries the worker name for a discoverable worker',
+          typeof card?.displayName === 'string' && card.displayName.length > 0,
+          String(card?.displayName),
+        );
+        check(
+          'the card does not leak a phone number or an email',
+          !/phone|email/i.test(cardJson),
           cardJson.slice(0, 200),
+        );
+
+        // --- Search matching --------------------------------------------
+        // Case-insensitive and partial. An employer typing one meaningful word, or
+        // the wrong capitalisation, has to reach the same worker they would by
+        // reproducing their wording exactly.
+        for (const [label, query] of [
+          ['a single meaningful word', 'solar'],
+          ['the same word in lower case', 'SOLAR'],
+          ['a later word in the name', 'installation'],
+          ['two words in the wrong order', 'panel solar'],
+          ['a leading substring', 'solar panel'],
+        ]) {
+          const partial = await api(
+            'GET',
+            `/employers/search?requiredSkill=${encodeURIComponent(query)}&minProofThreshold=1`,
+            { token: employer.token },
+          );
+          check(
+            `searching by ${label} finds the worker`,
+            partial.status === 200 && (partial.json?.candidates ?? []).length >= 1,
+            `"${query}" -> status ${partial.status} ${(partial.json?.candidates ?? []).length} candidates`,
+          );
+        }
+
+        // Broad, but still narrow. A word nobody uses as a skill must not return the
+        // network, and punctuation-only input must not match everything either.
+        for (const [label, query] of [
+          ['a word that is not a skill', 'zzzznotaskill'],
+          ['punctuation only', '---'],
+        ]) {
+          const broad = await api(
+            'GET',
+            `/employers/search?requiredSkill=${encodeURIComponent(query)}&minProofThreshold=1`,
+            { token: employer.token },
+          );
+          check(
+            `${label} returns nothing rather than everything`,
+            broad.status === 200 && (broad.json?.candidates ?? []).length === 0,
+            `"${query}" -> ${(broad.json?.candidates ?? []).length} candidates`,
+          );
+        }
+
+        // The proof floor still applies to a partial match: broadening the wording
+        // must not bypass the requirement that a worker actually has verified proof.
+        const partialTooTight = await api(
+          'GET',
+          `/employers/search?requiredSkill=solar&minProofThreshold=99`,
+          { token: employer.token },
+        );
+        check(
+          'a partial match still honours the proof threshold',
+          partialTooTight.status === 200 && (partialTooTight.json?.candidates ?? []).length === 0,
+          `${(partialTooTight.json?.candidates ?? []).length} candidates`,
         );
 
         // Threshold enforcement: three verified proofs do not exist.
@@ -2114,6 +2600,365 @@ async function main() {
           }
         }
       }
+
+      // Phase 3's recovery path, end to end. The engine held a record earlier in
+      // this suite; this is the journey from there back to a worker's income,
+      // which is the part that used not to exist at all.
+      section('WITHHELD RECORD: APPEAL, REVIEW, RESTORATION');
+      if (token && adminAccount.token) {
+        const held = (
+          await pool.query(
+            `select id, verification_status, flag_reason, review_status
+               from public.work_proof_logs
+              where worker_id = $1 and verification_status = 'flagged'
+              order by flagged_at desc limit 1`,
+            [userId],
+          )
+        ).rows[0];
+
+        check(
+          'the engine left a record held for a person to look at',
+          Boolean(held),
+          'no flagged proof found for this worker',
+        );
+
+        if (held) {
+          const proofId = held.id;
+
+          // --- The worker is told, before anything else -----------
+          const detailBefore = await api('GET', `/workers/proofs/${proofId}`, { token });
+          const before = detailBefore.json?.proof;
+          check(
+            'the worker can see the record was held',
+            typeof before?.flaggedAt === 'string' && !Number.isNaN(Date.parse(before.flaggedAt)),
+            JSON.stringify(before?.flaggedAt),
+          );
+          check(
+            'the worker is shown a plain reason they can act on',
+            typeof before?.flagReason === 'string' && before.flagReason.length > 0,
+            String(before?.flagReason).slice(0, 90),
+          );
+          check(
+            'the reason given to the worker contains no score or threshold',
+            !/\d\.\d+/.test(String(before?.flagReason ?? '')),
+            String(before?.flagReason).slice(0, 90),
+          );
+          check(
+            'the worker is told it is not a finding of fraud',
+            /not a finding of fraud/i.test(String(before?.flagReason ?? '')),
+            String(before?.flagReason).slice(0, 90),
+          );
+          check(
+            'the held record does not count as verified anywhere on the page',
+            before?.verificationStatus === 'flagged',
+            String(before?.verificationStatus),
+          );
+          check(
+            'nothing is pending an answer any more',
+            before?.verificationOutstanding === false,
+            String(before?.verificationOutstanding),
+          );
+
+          // --- The appeal --------------------------------------------
+          const strangerWorker = await mintAccount(
+            `smoke.${stamp}.stranger@tetherproof.dev`,
+            'worker',
+            'Smoke Test Stranger',
+          );
+          if (strangerWorker.token) {
+            const strangerAppeal = await api('POST', `/workers/proofs/${proofId}/appeal`, {
+              token: strangerWorker.token,
+              body: {},
+            });
+            check(
+              "a worker cannot appeal someone else's record",
+              strangerAppeal.status === 404,
+              `status ${strangerAppeal.status}`,
+            );
+          }
+          const employerAppeal = await api('POST', `/workers/proofs/${proofId}/appeal`, {
+            token: employer.token,
+            body: {},
+          });
+          check(
+            'an employer cannot appeal a worker record at all',
+            employerAppeal.status === 403,
+            `status ${employerAppeal.status}`,
+          );
+
+          const appeal = await api('POST', `/workers/proofs/${proofId}/appeal`, {
+            token,
+            body: {},
+          });
+          check(
+            'the owning worker can ask for it to be reviewed',
+            appeal.status === 200 && appeal.json?.reviewStatus === 'appealed',
+            JSON.stringify(appeal.json).slice(0, 120),
+          );
+
+          const secondAppeal = await api('POST', `/workers/proofs/${proofId}/appeal`, {
+            token,
+            body: {},
+          });
+          check(
+            'asking twice does not queue it twice',
+            secondAppeal.status === 409,
+            `status ${secondAppeal.status}`,
+          );
+
+          // --- Who may decide ----------------------------------------
+          const workerDecides = await api('POST', `/admin/proof-review/${proofId}`, {
+            token,
+            body: { outcome: 'overturned' },
+          });
+          check(
+            'a worker cannot review their own record',
+            workerDecides.status === 403,
+            `status ${workerDecides.status}`,
+          );
+
+          const unauthDecides = await fetch(`${API}/admin/proof-review/${proofId}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ outcome: 'overturned' }),
+          });
+          check(
+            'the review decision requires an administrator',
+            unauthDecides.status === 401,
+            `status ${unauthDecides.status}`,
+          );
+
+          const queue = await api('GET', '/admin/proof-review', { token: adminAccount.token });
+          const queued = (queue.json?.items ?? []).find((item) => item.proofId === proofId);
+          check(
+            'the held record appears in the review queue',
+            Boolean(queued),
+            `${(queue.json?.items ?? []).length} item(s)`,
+          );
+          check(
+            'the queue carries no worker identity',
+            !JSON.stringify(queue.json ?? {}).includes(userId ?? ' '),
+            'a worker id appeared in the queue',
+          );
+          check(
+            'the queue shows the worker did ask for a review',
+            queued?.reviewStatus === 'appealed',
+            String(queued?.reviewStatus),
+          );
+
+          // --- Restoring ----------------------------------------------
+          const restored = await api('POST', `/admin/proof-review/${proofId}`, {
+            token: adminAccount.token,
+            body: { outcome: 'overturned' },
+          });
+          check(
+            'a reviewer can restore the record',
+            restored.status === 200 && restored.json?.verificationStatus === 'verified',
+            JSON.stringify(restored.json).slice(0, 120),
+          );
+
+          const afterRestore = (
+            await pool.query(
+              `select verification_status, review_status, restored_at, reviewed_by is not null as signed
+                 from public.work_proof_logs where id = $1`,
+              [proofId],
+            )
+          ).rows[0];
+          check(
+            'the restored record counts as verified again',
+            afterRestore?.verification_status === 'verified',
+            String(afterRestore?.verification_status),
+          );
+          check(
+            'the review decision is recorded rather than inferred',
+            afterRestore?.review_status === 'overturned',
+            String(afterRestore?.review_status),
+          );
+          check(
+            'the decision is attributed to the administrator who made it',
+            afterRestore?.signed === true,
+            'no reviewer id stored',
+          );
+          check(
+            'the moment the record came back is recorded',
+            afterRestore?.restored_at !== null,
+            String(afterRestore?.restored_at),
+          );
+
+          // The findings themselves must survive the appeal. An appeal that erased
+          // them would let anyone clear a genuine finding by objecting to it.
+          const evidenceKept = (
+            await pool.query(
+              `select fraud_score, fraud_score_detail is not null as has_detail
+                 from public.verifications where work_proof_id = $1`,
+              [proofId],
+            )
+          ).rows[0];
+          check(
+            'an overturned review does not erase the engine findings',
+            evidenceKept?.has_detail === true && evidenceKept?.fraud_score !== null,
+            JSON.stringify(evidenceKept),
+          );
+
+          const secondDecision = await api('POST', `/admin/proof-review/${proofId}`, {
+            token: adminAccount.token,
+            body: { outcome: 'upheld' },
+          });
+          check(
+            'a decision cannot be reversed by a second one',
+            secondDecision.status === 409,
+            `status ${secondDecision.status}`,
+          );
+          const stillVerified = (
+            await pool.query('select verification_status from public.work_proof_logs where id = $1', [proofId])
+          ).rows[0];
+          check(
+            'the refused second decision changed nothing',
+            stillVerified?.verification_status === 'verified',
+            String(stillVerified?.verification_status),
+          );
+
+          // --- What employers see --------------------------------------
+          // The restored record now counts, and the earlier assurance that a
+          // withheld record contributes nothing to a search still holds.
+          const afterReview = await api('GET', `/workers/proofs/${proofId}`, { token });
+          check(
+            'the worker sees it was restored',
+            typeof afterReview.json?.proof?.restoredAt === 'string' &&
+              !Number.isNaN(Date.parse(afterReview.json.proof.restoredAt)),
+            String(afterReview.json?.proof?.restoredAt),
+          );
+          check(
+            'the worker sees it is back on their record',
+            afterReview.json?.proof?.verificationStatus === 'verified',
+            String(afterReview.json?.proof?.verificationStatus),
+          );
+          check(
+            'the review outcome is still visible to the worker afterwards',
+            afterReview.json?.proof?.reviewStatus === 'overturned',
+            String(afterReview.json?.proof?.reviewStatus),
+          );
+        }
+      }
+    }
+
+    section('NOTIFICATION READ STATE');
+    {
+      // Opening one notification is what marks it read. Reading the feed is not, and
+      // the count has to track the row rather than a number the page happens to hold.
+      const feed = await api('GET', '/notifications', { token });
+      const feedBody = feed.json ?? {};
+      const initialUnread = Number(feedBody.unreadCount ?? 0);
+      const items = feedBody.notifications ?? [];
+
+      check(
+        'the feed reports an unread count',
+        Number.isFinite(initialUnread) && initialUnread >= 0,
+        String(initialUnread),
+      );
+
+      // Reading the feed must not have marked anything.
+      const afterRead = await api('GET', '/notifications', { token });
+      check(
+        'opening the notifications page does not mark them read',
+        Number(afterRead.json?.unreadCount ?? -1) === initialUnread,
+        `${initialUnread} before, ${afterRead.json?.unreadCount} after`,
+      );
+
+      const unread = items.find((item) => !item.readAt);
+      if (unread) {
+        const marked = await api('POST', `/notifications/${unread.id}/read`, {
+          token,
+          body: {},
+        });
+        check(
+          'tapping one notification marks it read',
+          marked.status === 200 && marked.json?.marked === true,
+          JSON.stringify(marked.json).slice(0, 120),
+        );
+
+        const afterOne = await api('GET', '/notifications', { token });
+        check(
+          'the unread count drops by exactly one',
+          Number(afterOne.json?.unreadCount ?? -1) === initialUnread - 1,
+          `${initialUnread} -> ${afterOne.json?.unreadCount}`,
+        );
+
+        const persisted = (afterOne.json?.notifications ?? []).find((item) => item.id === unread.id);
+        check(
+          'the read state is stored, not just counted',
+          typeof persisted?.readAt === 'string' && !Number.isNaN(Date.parse(persisted.readAt)),
+          String(persisted?.readAt),
+        );
+
+        // Reopening an already-read notification must not decrement again.
+        const again = await api('POST', `/notifications/${unread.id}/read`, { token, body: {} });
+        check(
+          'reopening an already-read notification reports no change',
+          again.status === 200 && again.json?.marked === false,
+          JSON.stringify(again.json).slice(0, 120),
+        );
+
+        const afterAgain = await api('GET', '/notifications', { token });
+        check(
+          'reopening does not decrement the count a second time',
+          Number(afterAgain.json?.unreadCount ?? -1) === initialUnread - 1,
+          `${initialUnread} -> ${afterAgain.json?.unreadCount}`,
+        );
+
+        // The write is scoped to the owner. Without the owner in the predicate this
+        // endpoint would let any signed-in member mark another's notification read.
+        const stranger = await mintAccount(
+          `smoke.${Date.now()}.notifstranger@tetherproof.dev`,
+          'worker',
+          'Smoke Test Notification Stranger',
+        );
+        if (stranger.token) {
+          const foreign = await api('POST', `/notifications/${unread.id}/read`, {
+            token: stranger.token,
+            body: {},
+          });
+          check(
+            "a member cannot mark someone else's notification read",
+            foreign.status === 200 && foreign.json?.marked === false,
+            JSON.stringify(foreign.json).slice(0, 120),
+          );
+
+          const stillRead = await api('GET', '/notifications', { token });
+          check(
+            'the notification was left alone by the attempt',
+            Number(stillRead.json?.unreadCount ?? -1) === initialUnread - 1,
+            String(stillRead.json?.unreadCount),
+          );
+        }
+
+        const anonMark = await api('POST', `/notifications/${unread.id}/read`, { body: {} });
+        check(
+          'marking a notification read requires a session',
+          anonMark.status === 401,
+          `status ${anonMark.status}`,
+        );
+
+        // The bulk action is kept.
+        const bulk = await api('POST', '/notifications/read', { token, body: {} });
+        check(
+          'mark all as read still works',
+          bulk.status === 200 && typeof bulk.json?.marked === 'number',
+          JSON.stringify(bulk.json).slice(0, 120),
+        );
+        const afterBulk = await api('GET', '/notifications', { token });
+        check(
+          'the unread count reaches zero once everything is read',
+          Number(afterBulk.json?.unreadCount ?? -1) === 0,
+          String(afterBulk.json?.unreadCount),
+        );
+      } else {
+        check(
+          'a notification was available to exercise the read path',
+          false,
+          `no unread notification among ${items.length}`,
+        );
+      }
     }
 
     section('ROW LEVEL SECURITY');
@@ -2369,9 +3214,18 @@ async function main() {
           drained.rows[0].n === 0,
           `${drained.rows[0].n} rows`,
         );
+        // Scoped to this account. Asserting the whole table was empty meant a single
+        // row left by any earlier interrupted run failed every later run for a
+        // reason unrelated to the code under test — and the tempting "fix" is to
+        // delete the row, which destroys the only record that those bytes exist.
+        const leftovers = await pool.query(
+          'select count(*)::int n from public.orphaned_proof_media where path like $1',
+          [`${subjectId}/%`],
+        );
         check(
-          'nothing was left queued for this account anywhere in the table',
-          (await pool.query('select count(*)::int n from public.orphaned_proof_media')).rows[0].n === 0,
+          'this account left no removal-queue row for its own media',
+          leftovers.rows[0].n === 0,
+          `${leftovers.rows[0].n} row(s) for ${subjectId.slice(0, 8)}`,
         );
       }
     }
@@ -2379,6 +3233,11 @@ async function main() {
     if (WITH_WEB) {
       await runWebChecks({ pool, admin, createdUsers, apiProcess });
     }
+
+    // ---------------------------------------------------------------------
+    // Concurrency and replay are both covered above, on `summaryProof`: two
+    // simultaneous taps are raced there, and the final replay is refused.
+    // ---------------------------------------------------------------------
   } finally {
     killTree(apiProcess);
     await cleanup();

@@ -25,7 +25,9 @@
     "storage:ensure-bucket": "npm run storage:ensure-bucket --workspace @tetherproof/api",
     "smoke": "node scripts/smoke.mjs",
     "scrub-check": "tsx scripts/scrub-check.ts",
-    "fraud-check": "tsx scripts/fraud-check.ts"
+    "fraud-check": "tsx scripts/fraud-check.ts",
+    "integrity-check": "tsx scripts/integrity-check.ts",
+    "security-check": "tsx scripts/security-check.ts"
   },
   "devDependencies": {
     "concurrently": "^10.0.5",

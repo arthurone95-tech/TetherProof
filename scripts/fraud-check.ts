@@ -15,6 +15,7 @@ import { evaluateProximity } from '../apps/api/src/lib/fraud/proximity.js';
 import {
   DEFAULT_THRESHOLDS,
   assess,
+  flagReasonFor,
   mediaScore,
   proximityScore,
   proofStatusFor,
@@ -288,8 +289,40 @@ const worstCase = assess({
   media: { hasCameraSignature: false, timestampPlausible: false, encoderKnown: false },
   captureTimeConflict: true,
 });
-check('an endorsement failing every signal is blocked', worstCase.verdict === 'blocked', `score ${worstCase.score}`);
-check('a blocked proof is not verified', proofStatusFor(worstCase) === 'fraud_blocked');
+// Even an endorsement failing every signal is only *flagged*, never blocked.
+//
+// This is the outcome policy from Phase 3, and it is the assertion that holds it
+// in place: the engine withholds the record and queues a person, because a
+// heuristic over weak signals cannot establish fraud. `fraud_blocked` is reachable
+// only through the admin review path, which no scoring function can reach.
+check(
+  'an endorsement failing every signal is flagged, not blocked',
+  worstCase.verdict === 'flagged',
+  `score ${worstCase.score}`,
+);
+check('a flagged proof is not counted as verified', proofStatusFor(worstCase) === 'flagged');
+check(
+  'no scoring outcome can reach fraud_blocked',
+  worstCase.verdict !== 'blocked',
+  worstCase.verdict,
+);
+check(
+  'the withhold records how many families were adverse',
+  (worstCase.detail.corroboration as { adverseSignalGroups?: number })?.adverseSignalGroups === 3,
+  JSON.stringify(worstCase.detail.corroboration),
+);
+
+// The sentence a worker is shown names the kinds of signal, never their values.
+const flaggedReason = flagReasonFor(worstCase);
+check(
+  'the flag reason names what was wrong, not a number',
+  flaggedReason.length > 0 && !/\d\.\d|0\.\d+/.test(flaggedReason),
+  flaggedReason.slice(0, 110),
+);
+check(
+  'the flag reason says it is not a finding of fraud',
+  /not a finding of fraud/i.test(flaggedReason),
+);
 
 // The abuse case: a worker farming rejections from colluding clients to attack
 // a real worker. A rejection is not fraud.
