@@ -23,6 +23,17 @@ export const confirmSchema = z.object({
    * the proximity calculation this value feeds.
    */
   verifierGps: gpsSchema.optional(),
+  /**
+   * A random identifier the recipient's browser generated, so the same client
+   * answering several proofs can be recognised without anyone typing a number.
+   *
+   * Read from a header rather than the body, which keeps it out of request logs
+   * and out of any body a caller might persist. Normalised by
+   * `lib/verifier-key.ts`; a malformed value is simply treated as absent rather
+   * than refusing the whole answer, because the decision being recorded matters
+   * more than the pseudonym.
+   */
+  verifierKey: z.string().optional(),
 });
 
 export type ConfirmInput = z.infer<typeof confirmSchema>;

@@ -59,6 +59,24 @@ export function hashVerifierPhone(phone: string): string {
     .digest('hex');
 }
 
+/**
+ * Salted hash of a verifier's self-generated pseudonym.
+ *
+ * The same construction as the phone hash, and deliberately so: the column, the
+ * salt, and the irreversible property are identical, which means a device
+ * pseudonym carries exactly as little personal information as a phone number
+ * already did. See `lib/verifier-key.ts` for what the pseudonym is and why it
+ * exists.
+ *
+ * Prefixed so a device key can never collide with a phone hash in the graph,
+ * even though both are 64 hex characters over the same salt.
+ */
+export function hashVerifierKey(key: string): string {
+  return createHash('sha256')
+    .update(`${env.VERIFIER_PHONE_SALT}:key:${key}`, 'utf8')
+    .digest('hex');
+}
+
 export function expiryFromNow(ttlSeconds: number): Date {
   return new Date(Date.now() + ttlSeconds * 1000);
 }

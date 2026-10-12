@@ -5,6 +5,7 @@ import { env } from './config/env.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 import { globalRateLimiter, rateLimitConfig } from './middleware/rate-limit.js';
 import { isLocalAddress } from './lib/origin.js';
+import { VERIFIER_KEY_HEADER } from './lib/verifier-key.js';
 import { apiRouter } from './routes.js';
 
 /**
@@ -70,6 +71,11 @@ export function createApp(): Express {
       origin: browserOrigin,
       credentials: true,
       methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+      // The verification page sends a self-generated verifier pseudonym in a
+      // header so it never reaches a body log. Named explicitly rather than
+      // wildcarded: an allow-list keeps a cross-origin caller from setting
+      // `Authorization` or a cookie header on this API's behalf.
+      allowedHeaders: ['Content-Type', 'Authorization', VERIFIER_KEY_HEADER],
     }),
   );
   app.use(express.json({ limit: '256kb' }));

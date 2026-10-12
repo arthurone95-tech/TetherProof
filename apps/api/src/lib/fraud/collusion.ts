@@ -59,7 +59,7 @@ export interface CollusionAssessment {
 const CONCENTRATION_SUSPICIOUS_ABOVE = 5;
 
 /** Weight assigned when the graph could not be evaluated at all. */
-const NEUTRAL_WEIGHT = 0.5;
+export const NEUTRAL_WEIGHT = 0.5;
 
 const FINDING_CONCENTRATED_APPROVALS =
   'One verifier has confirmed an unusually large share of this worker’s proofs.';
@@ -119,6 +119,20 @@ export function assessCollusion(target: Endorsement, history: Endorsement[]): Co
   // this looks for a single row carrying both pairings rather than testing
   // either side alone. Testing one side at a time would flag every worker who
   // is also a client elsewhere on the platform, which is most of them.
+  //
+  // This check cannot currently fire, and the reason is structural rather than
+  // accidental. It compares a worker id — a UUID — against a verifier key, which
+  // is a 64-character SHA-256 digest of a salted pseudonym. Those two domains can
+  // never be equal, so `mutualEndorsement` is always false and the 0.15 below is
+  // never applied.
+  //
+  // That was equally true when the key was a salted phone hash. It is recorded
+  // here rather than fixed deliberately: firing it would require mapping a
+  // pseudonym back to an account id, which is exactly the identity linkage
+  // `lib/verifier-key.ts` exists to avoid. Reinstating it would trade a privacy
+  // property for a detection property that is still weighted as weak evidence, so
+  // the honest state is a documented gap — the collusion weight floor is
+  // 0.15 (isolated + concentrated), not 0.
   const mutual = history.some(
     (e) => e.workerId === target.verifierKey && e.verifierKey === target.workerId,
   );

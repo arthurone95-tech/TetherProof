@@ -130,8 +130,13 @@ const envSchema = z.object({
    */
   FRAUD_PROXIMITY_KM: z.coerce.number().positive().default(2),
   /**
-   * Score at or below which a confirmed proof is marked `fraud_blocked`.
-   * Must fall strictly between zero and one; asserted at startup.
+   * Score at or below which a confirmed proof is withheld as `flagged` for human
+   * review. Must fall strictly between zero and one; asserted at startup.
+   *
+   * Note the name is historical: it reads as "below here is a block", but the
+   * engine no longer blocks anything. It is the line below which a record stops
+   * counting as proof and a person is asked to look at it. `fraud_blocked` is set
+   * only through the admin review path.
    */
   FRAUD_BLOCK_BELOW: z.coerce.number().default(0.25),
 
