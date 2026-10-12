@@ -2,19 +2,56 @@ import type { ApiFieldIssue } from './api-error';
 import { ApiRequestError } from './api-error';
 
 /**
+ * Result of asking for a withheld record to be reviewed.
+ *
+ * A union discriminated on `done`, because "we asked" and "we could not ask"
+ * are different outcomes and the button has to say which happened rather than
+ * resetting either way.
+ *
+ * Lives outside `lib/actions.ts` because a `'use server'` module may only
+ * export async functions, and this is a plain object and a type.
+ */
+export type AppealState =
+  | { done?: false; error?: string; reviewStatus?: string }
+  | { done: true; error?: undefined; reviewStatus: string };
+
+export const EMPTY_APPEAL: AppealState = {};
+
+/**
+ * Result of a reviewer's decision on a withheld record.
+ *
+ * Separate from `FormState` rather than reusing it, because the two failures
+ * read very differently and the reviewer has to be able to tell them apart. A
+ * lost race ("someone else decided a moment ago") is not an error — the
+ * system worked.
+ */
+export type ReviewState =
+  | { done?: false; error?: string; outcome?: string }
+  | { done: true; error?: undefined; outcome: string; verificationStatus: string };
+
+export const EMPTY_REVIEW: ReviewState = {};
+
+/**
  * Result of a form submission.
  *
- * Errors are returned rather than thrown because a thrown error in a server action
- * renders Next.js's own error screen and discards what the user typed. `field` lets a
- * form point at the input at fault, so a message lands next to the field instead of at
- * the top of a long form.
- *
- * This lives outside `lib/actions.ts` because a `'use server'` module may only export
- * async functions, and the initial state is a plain object.
+ * Errors are returned rather than thrown because a thrown error in a server
+ * action renders Next.js's own error screen and discards what the user typed.
+ * `field` lets a form point at the input at fault, so a message lands next to
+ * the field instead of at the top of a long form.
  */
 export interface FormState {
   error?: string;
-  field?: 'email' | 'password' | 'confirmPassword' | 'fullName' | 'organizationName' | 'code' | 'requiredSkill' | 'avatar_file';
+  field?:
+    | 'email'
+    | 'password'
+    | 'confirmPassword'
+    | 'fullName'
+    | 'organizationName'
+    | 'code'
+    | 'requiredSkill'
+    | 'avatar_file'
+    /** The location pair on a profile form; the message attaches to the latitude box. */
+    | 'latitude';
   /**
    * True once an action has completed successfully.
    *
@@ -48,7 +85,7 @@ export interface ProofFormState {
    * the message inside the evidence panel instead of at the top where it would be
    * read as a problem with the whole submission.
    */
-  field?: 'skillTag' | 'description' | 'submissionGps' | 'verifierPhone' | 'media_file';
+  field?: 'skillTag' | 'description' | 'submissionGps' | 'media_file';
   done?: boolean;
   /** Present only after a submission was accepted. */
   result?: ProofSubmissionView;
@@ -65,7 +102,11 @@ export interface ProofSubmissionView {
   skillTag: string;
   /** The page the verifier opens, already assembled for sharing. */
   verificationUrl: string;
-  /** False means no number was given or dispatch failed — share the link yourself. */
+  /**
+   * Whether a messaging provider accepted the link. Always false now that the form
+   * does not collect a number; kept so the provider integration stays wired and a
+   * future automatic-dispatch flow has somewhere to report to.
+   */
   verificationLinkSent: boolean;
   verificationExpiresAt: string;
   /** What the scrubber stripped before anything was written to storage. */

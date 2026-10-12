@@ -294,9 +294,12 @@ Every upload is scrubbed of metadata before it is stored:
 `submissionGps` is the only trusted location for a proof, which is precisely why the file's own
 location metadata is removed. Coordinates are range-checked, so `999,999` is rejected.
 
-`verifierPhone` is optional. It is the number the confirmation link is sent to. **Only a salted
-hash is stored** — the number itself is used once, to address the message, and is never written
-to any table or log. See `doc/08` §4.
+`verifierPhone` is optional and **is not collected by the web client any more.** The worker no longer
+enters the client's number when logging work; they receive the link and share it themselves. The
+field and the dispatch path it feeds are retained deliberately, so automatic delivery can be switched
+on later without changing this contract. When supplied, **only a salted hash is stored** — the number
+itself is used once, to address the message, and is never written to any table or log. See
+`doc/08` §4.
 
 Response (201 Created):
 
@@ -326,6 +329,10 @@ supplied, when `WEB_BASE_URL` is unset so no link can be built, or when the prov
 three are indistinguishable from the worker's side, which is the point. The token is in the
 response either way, so share it manually. The outcome is recorded on the verification row
 (`dispatch_status`), so a link that never arrived is visible rather than mysterious.
+
+**From the web client it is now always `false`,** because that client never sends a number. The
+field remains so the provider integration stays wired and a future automatic-dispatch flow has
+somewhere to report to; nothing about the messaging module was removed.
 
 ### B. List Own Proofs
 
@@ -357,7 +364,9 @@ Response (200 OK):
 `mediaKind` is derived from the stored content type or extension (`image` or `audio`), and
 `mediaUrl` is a signed storage URL for the worker's own media — an image for a photo proof, and
 for a recording the URL the player needs. `verificationStatus` is one of `pending`, `verified`,
-`rejected`, `fraud_blocked`.
+`rejected`, `flagged`, `fraud_blocked`. `flagged` means the record is withheld pending human
+review and is explicitly **not** a finding of fraud; `fraud_blocked` means a person upheld it
+after review and is reachable only through `POST /api/v1/admin/proof-review/{proofId}`.
 
 ### C. Get One Proof
 
@@ -383,16 +392,25 @@ Response (200 OK): the list item shape above plus the fields the screen needs:
     "mediaKind": "image",
     "mediaUrl": "https://…/signed…",
     "editable": true,
-    "verificationLinkSent": false,
+    "verificationOutstanding": true,
+    "verificationLinkExpired": false,
     "verificationExpiresAt": "2026-10-14T12:00:00.000Z"
   }
 }
 ```
 
-`editable` is true only while nothing has been sent out for confirmation. `verificationLinkSent`
-reports whether a confirmation link was ever dispatched for this proof, and
-`verificationExpiresAt` when the outstanding single-use link stops working (`null` once used,
-expired, or concluded).
+`editable` is the freeze rule and follows the **link**, not a delivery. Since the work-logging form
+no longer collects a number, dispatch is never attempted, so a rule keyed on delivery would sit
+permanently false and quietly stop freezing anything. The record is therefore held still from the
+moment a link is issued until it is answered or runs out, and `editable` becomes true again once a
+link has lapsed without an answer — so a worker who spots a mistake after the seven days can still
+correct it.
+
+* `verificationOutstanding` — a link is live and can still be answered.
+* `verificationLinkExpired` — a link was issued and ran out unanswered. Distinct from the above,
+  because only this state has something to replace.
+* `verificationExpiresAt` — when the live link stops working (`null` once used, expired, or
+  concluded).
 
 ### D. Update One Proof
 
@@ -442,11 +460,39 @@ signed media URLs minted for this request only.
 
 ### A. Get Verification Details
 * **Endpoint:** `GET /api/v1/verifications/{token}`
-* **Description:** Public endpoint accessed via the SMS web link by clients to view task confirmation details.
+* **Description:** Public endpoint reached from the shared confirmation link by the person who
+  received or supervised the work. **No account and no session are required** — the token is the
+  only credential, which is the property the recipient page depends on.
 
-Response (200 OK): Returns task summary and worker skill category without exposing private PII.
-Deliberately excludes worker identity, the verifier's phone number, GPS telemetry, the fraud
-score, and media URLs, which would leak PII or let a link holder probe the trust engine.
+Response (200 OK):
+
+```json
+{
+  "skillTag": "Refrigeration Repair",
+  "taskSummary": "Replaced commercial compressor and fixed electrical fault.",
+  "status": "awaiting_response",
+  "expiresAt": "2026-10-14T12:00:00.000Z",
+  "respondedAt": null,
+  "skillLevel": 2,
+  "loggedAt": "2026-10-11T09:00:00.000Z",
+  "mediaKind": "image",
+  "mediaUrl": "https://…/signed…",
+  "mediaUnavailable": false
+}
+```
+
+* `skillLevel` is the tier the worker **claims** for this skill (1–3), shown so the recipient can
+  read the claim rather than infer it. It is not a verification of that tier.
+* `mediaUrl` is a **short-lived signed URL minted for this request** (5 minutes), not a stored
+  address. The bucket stays private and no storage credential leaves the API. A signing failure
+  yields `mediaUrl: null` with `mediaUnavailable: true` rather than failing the read, because the
+  decision is still answerable without the picture.
+* `mediaUnavailable` distinguishes "the file could not be loaded" from "no file was attached", so an
+  absent photograph is never mistaken for withheld evidence.
+
+Deliberately excluded: worker identity, the verifier's phone number, GPS telemetry, the fraud
+score, and the bucket-relative storage path. None of them are needed to judge whether a job was
+done, and a name on the page would tell anyone holding a forwarded link who works with them.
 
 ### B. Submit Client Confirmation
 * **Endpoint:** `POST /api/v1/verifications/{token}`
@@ -474,22 +520,61 @@ Response (200 OK):
 }
 ```
 
-The trust engine runs synchronously **before** the proof status is written, so a `fraud_blocked`
-verdict is never briefly overwritten with `verified`. The score combines proximity (strongest,
-being the only signal grounded in an independent physical fact), endorsement diversity, and
-media provenance (weakest, since both rest on data a motivated party controls). Missing signals
-contribute nothing in either direction, so withholding data is not a way to defeat the engine.
+The trust engine runs synchronously **before** the proof status is written, so a held record is
+never briefly overwritten with `verified`. The score combines proximity (strongest, being the
+only signal grounded in an independent physical fact), endorsement diversity, and media
+provenance (weakest, since all three ultimately rest on data a motivated party controls).
+Missing signals contribute nothing in either direction, so withholding data is not a way to
+defeat the engine.
 
-`verificationStatus` is `verified`, `rejected`, or `fraud_blocked`. Note that `status` reports what
-the **client** did, which is not always what happened to the **proof**: a client confirming from
-another continent gets `status: "confirmed"` — they did confirm it — alongside
-`verificationStatus: "fraud_blocked"`, because the endorsement does not count.
+`verificationStatus` is `verified`, `rejected`, or `flagged` — **never `fraud_blocked`**.
+Blocking is not a scoring outcome. `fraud_blocked` is set only by an administrator reviewing
+the record (see *Proof review* below), because an automated heuristic over a self-declared
+location and a metadata-stripped photo cannot establish fraud.
+
+Note that `status` reports what the **client** did, which is not always what happened to the
+**proof**: a client confirming from another continent gets `status: "confirmed"` — they did
+confirm it — alongside `verificationStatus: "flagged"` and `withheld: true`, because the
+endorsement does not count.
+
+`withheld` and `withheldReason` tell the client the platform's own assessment as well as their
+answer, so the confirmation page can never imply that tapping Confirm made the record trusted
+proof. `withheldReason` is written for a human to read and never contains a score or a
+threshold: a worker can act on "the file you uploaded carried no capture details", and on
+nothing else.
 
 A `rejected` response is never scored and never blocked, whatever the other signals say.
 Scoring rejections would let colluding clients manufacture free disputes against real workers.
 
 Possible errors: `400` invalid response or malformed coordinates, `404` invalid link, `409` link
 already used, `410` link expired.
+
+---
+
+## 5A. Replacing a Confirmation Link
+
+### A. Request a Fresh Link
+* **Endpoint:** `POST /api/v1/workers/proofs/{id}/verification/resend`
+* **Description:** Issues a replacement confirmation link for a log whose earlier link lapsed
+  unanswered, or which was never handed over. Worker only; the proof must belong to the caller.
+* **Response:** `{ "verificationToken", "verificationExpiresAt", "verificationLinkSent" }` — the
+  token is returned once, as at submission.
+
+Because no client number is stored, a replacement cannot re-message anyone and is **not** a
+redelivery of the old request — it is a new one. Distinguishing the two matters: the old token is
+retired rather than left usable.
+
+* **Refused with `409`** while a link is still live, and once the log has reached a verdict. A
+  worker cannot mint a competing request while the person they already sent it to is still holding
+  it, and cannot re-open a concluded record.
+* **Refused with `404`** for a log that is not the caller's.
+
+**One request, one decision.** The replacement runs in a single transaction that first retires
+every unanswered request for the proof and then issues the new one. Without that step a proof can
+end up with two answerable requests at once: the previous row stops being read as current, but its
+token still resolves to a live `response = 'none'` row and would still accept a decision, so
+whichever answer landed last would win. Only **unanswered** rows are retired — a recorded
+confirmation or rejection is never touched, so replacing a link cannot erase a decision.
 
 ---
 
@@ -633,6 +718,82 @@ inferred, because an approval that cannot be audited is not a control worth havi
 
 > Administrators are provisioned by writing the role claim against the auth record. `admin` is
 > deliberately **not** an accepted value for `POST /auth/register`; see `doc/13` E-024.
+
+---
+
+## 6A. Proof Review Endpoints
+
+A record the engine withheld is recoverable. This section is the route back to a worker's
+income, and the only place `fraud_blocked` can be written anywhere in the system.
+
+### A. Ask for a Withheld Record to Be Reviewed (worker)
+* **Endpoint:** `POST /api/v1/workers/proofs/:proofId/appeal`
+* **Authorization:** worker role, and the record must be theirs.
+* **Request Body:** none. The appeal deliberately takes no free text; the reviewer needs the
+  evidence and the recorded signals, both already on the record.
+
+```json
+{ "proofId": "…", "reviewStatus": "appealed" }
+```
+
+The record stays withheld while it waits. An appeal is a request for a person to look, not a
+reprieve, and presenting it as one would promise an outcome the platform has not reached.
+
+Refusals: `404` if the record is not the caller's — an id belonging to someone else is reported
+exactly as an unknown one, so a proof id cannot be probed. `409` if the record was never
+withheld, or has already been appealed or reviewed.
+
+### B. List Withheld Records (admin)
+* **Endpoint:** `GET /api/v1/admin/proof-review`
+* **Authorization:** admin role.
+* **Response:**
+  ```json
+  {
+    "items": [
+      {
+        "proofId": "…",
+        "skillTag": "Solar Panel Installation",
+        "description": "Fitted and commissioned a rooftop solar array.",
+        "flagReason": "Held for review: the confirmation came from a different place…",
+        "flaggedAt": "2026-10-11T12:09:34.000Z",
+        "reviewStatus": "appealed",
+        "verificationStatus": "flagged",
+        "fraudScore": 0.125,
+        "clientResponse": "confirmed"
+      }
+    ]
+  }
+  ```
+
+No worker identity, name, email, or contact handle appears here. The question a reviewer answers
+— was this automated decision fair — is answerable from the evidence and the signals alone.
+
+### C. Record a Review Decision (admin)
+* **Endpoint:** `POST /api/v1/admin/proof-review/:proofId`
+* **Authorization:** admin role.
+* **Request Body:**
+  ```json
+  { "outcome": "overturned" }
+  ```
+
+`outcome` accepts `upheld` and `overturned`:
+
+* **`overturned`** returns the record to `verified` and sets `restoredAt`. Refused unless the
+  client actually confirmed — overturning a rejection would convert "the client says this did
+  not happen" into a badge, which is an override of the only party who was there, not a review.
+* **`upheld`** sets `fraud_blocked`. This is the only path to that status in the entire system.
+
+Both store the reviewer's own id, taken from the session and never from the request body, so a
+decision cannot be attributed to somebody who did not make it. Both are terminal: a second
+decision returns `409`, and the guard sits in the `WHERE` clause so two reviewers acting at
+once cannot both land.
+
+**The engine's findings are not deleted by an appeal.** They live on the verification row and
+remain readable in the queue. An appeal that erased the reason would let anyone clear a genuine
+finding simply by objecting to it.
+
+Anonymised records — retained after a worker deleted their account — are excluded from the
+queue, since there is no worker to restore anything for.
 
 ---
 

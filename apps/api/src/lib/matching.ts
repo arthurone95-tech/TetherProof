@@ -21,28 +21,81 @@ import { distanceKm, parseCoordinate } from './geo.js';
  * One worker's standing for one skill, with no identity attached.
  *
  * `trustScore` is the mean fraud score of the confirmations behind the counted
- * proofs, where 1 is fully supported. It is null rather than 0 when nothing has
- * been scored: a worker with no scored verifications has an unknown trust
- * profile, and reporting that as zero would rank them below a worker whose proofs
- * were confirmed on weak supporting evidence. Absence is not badness.
+ * verified proofs, where 1 is fully supported. It is null rather than 0 when
+ * nothing has been scored: a worker with no scored verifications has an unknown
+ * trust profile, and reporting that as zero would rank them below a worker whose
+ * proofs were confirmed on weak supporting evidence. Absence is not badness.
+ *
+ * It covers the same records as `verifiedProofs` and no others. A proof the
+ * platform is withholding is an open question, and a question must not be able to
+ * lower a score — otherwise "flagged" would be a quiet penalty after all, and one
+ * that an overturned review could never undo.
  */
 export interface CandidateMetric {
   workerId: string;
   verifiedProofs: number;
   rejectedProofs: number;
+  /** Withheld pending a human decision. Not a finding against the worker. */
+  flaggedProofs: number;
+  /** Withheld after a person upheld it. */
   fraudBlockedProofs: number;
   trustScore: number | null;
   lastVerifiedAt: Date | null;
+  /**
+   * The name shown to an employer, and their photo, when they have one.
+   *
+   * Both are read here rather than joined in later so that they are subject to
+   * exactly the same `discoverable` filter as the counts beside them. A worker who
+   * has opted out of search must not become visible merely because a name was
+   * attached to the row after the counts were chosen.
+   */
+  displayName: string | null;
+  avatarUrl: string | null;
+}
+
+/**
+ * The words a skill search must all appear in, for a skill tag to match.
+ *
+ * An employer typing "solar" means the worker who logged "Solar Panel
+ * Installation", and the previous equality test required them to reproduce the
+ * worker's own wording exactly — capitalisation and all — before anything came
+ * back. That is not a reasonable thing to ask of someone looking for help.
+ *
+ * Every returned term must appear in the tag, so a multi-word query narrows and a
+ * single word broadens, which is what a person expects from the two. Splitting on
+ * non-alphanumerics rather than spaces keeps punctuation out of the terms, which
+ * also means no term can contain a `LIKE` wildcard and the pattern needs no
+ * escaping.
+ *
+ * Terms shorter than three characters are dropped. "a", "of" and "in" appear in a
+ * large share of real skill tags, so matching on them would return most of the
+ * network for a query carrying no intent. A query left with no usable term at all
+ * falls back to the whole trimmed string, so it still narrows rather than matching
+ * everything.
+ */
+const MIN_SEARCH_TERM_LENGTH = 3;
+
+export function skillSearchTerms(skillTag: string): string[] {
+  const terms = skillTag
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter((term) => term.length >= MIN_SEARCH_TERM_LENGTH);
+
+  if (terms.length > 0) return terms;
+
+  const whole = skillTag.trim().toLowerCase();
+  return whole.length > 0 ? [whole] : [];
 }
 
 /**
  * Aggregates per-worker metrics for one skill tag.
  *
- * Only `verified` proofs count toward `verifiedProofs`, and `fraud_blocked` proofs
- * are tallied separately and never added in. The entire purpose of the anti-fraud
- * engine is that a blocked proof carries no weight, so folding it into a total
+ * Only `verified` proofs count toward `verifiedProofs`, `trustScore` and
+ * `lastVerifiedAt`. A `flagged` proof is withheld pending a person and a
+ * `fraud_blocked` one was upheld after review; the entire purpose of the engine
+ * is that a withheld proof carries no weight, so folding either into a total
  * would undo that work at the one place where a number is displayed to a third
- * party.
+ * party. They are tallied separately, for an administrator, and never added in.
  *
  * Rejections are counted as context, not as evidence against the worker: a
  * rejection is never scored, per `doc/13` E-019, so it says something about the
@@ -60,8 +113,24 @@ export async function aggregateCandidateMetrics(
   skillTag: string,
   minVerifiedProofs: number,
 ): Promise<CandidateMetric[]> {
+  // Every term must appear somewhere in the stored tag, case-insensitively. An
+  // empty term list — a query that was nothing but punctuation — matches nothing,
+  // because returning the whole network for a query with no words in it is the one
+  // outcome a search must never produce.
+  const terms = skillSearchTerms(skillTag);
+  // A query with no usable term matches nothing. Left to the query builder an
+  // empty condition list would match every worker with verified proof, so the
+  // refusal is made here where it can be explicit.
+  if (terms.length === 0) return [];
+  const tagMatches = terms.map((term) => sql`lower(${capabilityBlocks.skillTag}) like ${`%${term}%`}`);
+
   const verified = sql<number>`count(distinct ${workProofLogs.id}) filter (where ${workProofLogs.verificationStatus} = 'verified')::int`;
   const rejected = sql<number>`count(distinct ${workProofLogs.id}) filter (where ${workProofLogs.verificationStatus} = 'rejected')::int`;
+  // Split rather than lumped, because the two are different claims. `flagged` is
+  // the engine withholding a record pending a human; `fraud_blocked` is a person
+  // having upheld that. An employer shown a single combined "fraud" count would
+  // read the automatic one as a judgement nobody made.
+  const flagged = sql<number>`count(distinct ${workProofLogs.id}) filter (where ${workProofLogs.verificationStatus} = 'flagged')::int`;
   const blocked = sql<number>`count(distinct ${workProofLogs.id}) filter (where ${workProofLogs.verificationStatus} = 'fraud_blocked')::int`;
 
   const rows = await db
@@ -69,20 +138,40 @@ export async function aggregateCandidateMetrics(
       workerId: workProofLogs.workerId,
       verifiedProofs: verified.as('verified_proofs'),
       rejectedProofs: rejected.as('rejected_proofs'),
+      flaggedProofs: flagged.as('flagged_proofs'),
       fraudBlockedProofs: blocked.as('fraud_blocked_proofs'),
-      // Scored over the confirmations behind these proofs. Averaging over proof
-      // rows instead would fold unscored and pending proofs in as if they scored
-      // zero, dragging every new worker toward distrust.
-      trustScore: sql<string | null>`avg(${verifications.fraudScore})`.as('trust_score'),
-      lastVerifiedAt: sql<string | null>`max(${verifications.completedAt})`.as('last_verified_at'),
+      // Scored over the confirmations behind *verified* proofs, and nothing else.
+      //
+      // Averaging over proof rows instead would fold unscored and pending proofs
+      // in as if they scored zero, dragging every new worker toward distrust.
+      //
+      // The `filter` is the part that matters. Without it the average covers every
+      // confirmed verification, including the ones behind a `flagged` or a
+      // `fraud_blocked` record — so a proof the platform explicitly refuses to
+      // call fraud would still permanently lower a worker's score in an employer's
+      // search, and still rank them below someone else. That is the engine's
+      // withholding reading as a penalty, which is precisely what the three-way
+      // outcome policy exists to prevent. Worse, it is unrecoverable: an admin who
+      // overturns the flag restores the proof but not the score it dragged down.
+      //
+      // With the filter, `trustScore` describes exactly the proofs counted in
+      // `verifiedProofs`, so the number and the score always agree, and restoring
+      // a record restores the score with it.
+      trustScore: sql<string | null>`avg(${verifications.fraudScore}) filter (where ${workProofLogs.verificationStatus} = 'verified')`.as('trust_score'),
+      // The same filter, for the same reason. A date a withheld record supplied is
+      // not evidence of this worker having done verified work, and reporting it as
+      // "last verified" would show an employer a recency the record does not have.
+      lastVerifiedAt: sql<string | null>`max(${verifications.completedAt}) filter (where ${workProofLogs.verificationStatus} = 'verified')`.as('last_verified_at'),
+      // Carried through the aggregation rather than looked up afterwards, so the
+      // name and photo are subject to the same `discoverable` gate as the numbers
+      // they sit beside. Grouping by them as well keeps `only_full_group_by` happy.
+      displayName: sql<string | null>`max(${profiles.fullName})`.as('display_name'),
+      avatarUrl: sql<string | null>`max(${profiles.avatarUrl})`.as('avatar_url'),
     })
     .from(workProofLogs)
     .innerJoin(
       capabilityBlocks,
-      and(
-        eq(capabilityBlocks.id, workProofLogs.capabilityBlockId),
-        sql`lower(${capabilityBlocks.skillTag}) = lower(${skillTag})`,
-      ),
+      and(eq(capabilityBlocks.id, workProofLogs.capabilityBlockId), and(...tagMatches)),
     )
     .leftJoin(
       verifications,
@@ -109,7 +198,7 @@ export async function aggregateCandidateMetrics(
         or(isNull(profiles.userId), eq(profiles.discoverable, true)),
       ),
     )
-    .groupBy(workProofLogs.workerId)
+    .groupBy(workProofLogs.workerId, profiles.fullName, profiles.avatarUrl)
     .having(sql`count(distinct ${workProofLogs.id}) filter (where ${workProofLogs.verificationStatus} = 'verified') >= ${minVerifiedProofs}`)
     .orderBy(sql`verified_proofs desc, trust_score desc nulls last`);
 
@@ -125,9 +214,16 @@ export async function aggregateCandidateMetrics(
             workerId: row.workerId,
             verifiedProofs: Number(row.verifiedProofs),
             rejectedProofs: Number(row.rejectedProofs),
+            flaggedProofs: Number(row.flaggedProofs),
             fraudBlockedProofs: Number(row.fraudBlockedProofs),
             trustScore: row.trustScore === null ? null : Number(row.trustScore),
             lastVerifiedAt: toDate(row.lastVerifiedAt),
+            // A worker who never set a name still has to be distinguishable from
+            // another nameless worker, so the handle stands in rather than the
+            // card carrying nothing. The card shows the initial wherever one
+            // exists.
+            displayName: row.displayName,
+            avatarUrl: row.avatarUrl,
           },
         ],
   );

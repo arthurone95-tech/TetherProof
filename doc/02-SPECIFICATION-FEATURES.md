@@ -25,9 +25,21 @@ This document outlines the detailed functional requirements and feature specific
 ## 3. Module 2: Frictionless Verification & Anti-Fraud Engine
 
 The four features below run as one engine. A confirmed endorsement is scored on proximity,
-endorsement diversity, and media provenance, and is either counted as verified or marked
-`fraud_blocked`. The per-signal breakdown is stored so a blocked proof can be explained from
-data rather than from logs.
+endorsement diversity, and media provenance, and comes out as one of three outcomes: **verified**,
+**flagged**, or **fraud_blocked**. The per-signal breakdown is stored so a held proof can be
+explained from data rather than from logs.
+
+The three-way split is the policy, and it is deliberately asymmetric:
+
+* **Verified** — the client confirmed and nothing withheld the record.
+* **Flagged** — the signals did not agree. The record is withheld from counting as proof and
+  queued for a person. It is explicitly *not* a finding of fraud.
+* **Fraud-blocked** — reachable only through the admin review path (`doc/07`), never from a
+  score.
+
+A heuristic over weak signals cannot establish fraud, and a system that lets it try will
+eventually brand an honest worker. The engine therefore decides what may be *trusted*, not who
+is a liar: it withholds and a person decides. `fraud_blocked` is a word only a person can write.
 
 Two properties hold throughout, and they constrain everything else:
 
@@ -54,11 +66,52 @@ Two properties hold throughout, and they constrain everything else:
 * **Behavior:** Compares the GPS coordinate logged when the worker submits a task with the GPS coordinate of the client's device when the confirmation link is tapped.
 * **Implementation:** Great-circle distance via the haversine formula, compared against a configurable threshold (default 2 km). The outcome is one of `within`, `outside`, or `unavailable`, kept distinct so a client who declined to share a location is never conflated with one standing at the job site. Both endpoints apply the same range validation; `999,999` is refused on submission and on confirmation.
 
-### Feature 2.4: Media Provenance Signals
+#### Feature 2.4: Media Provenance Signals
+
+> **Superseded in part — read with `apps/api/src/lib/media-integrity.ts` and `doc/13` E-019.**
+> The submission-time gate described below now exists, and it is the only place an upload can be
+> refused on integrity grounds. It refuses a **structurally invalid container** and flags an
+> **internally contradictory capture time**; it still makes no claim whatsoever about AI-generated
+> media, and absence of metadata is still never a finding. See "What this deliberately does not
+> do" below, which remains accurate and is the reason the gate stops where it does.
+>
+> **Requirement disposition: partially delivered, and the gap is deliberate rather than
+> overlooked.** A probabilistic detector was evaluated and rejected on evidence, not on effort —
+> see `apps/api/src/lib/media-provenance.ts` for the benchmark figures and the reasoning. What is
+> built is (a) the structural/contradiction gate below, and (b) a reader for **C2PA Content
+> Credentials**, which is the one provenance signal that is cryptographically grounded rather than
+> inferred. A file that declares itself generated is kept and marked for a human; it is never
+> refused, because no detector was consulted and no signature was verified.
+>
+> The gate produces three outcomes, and the vocabulary is chosen so none of them can be read as a
+> detection claim:
+>
+> | Outcome | Trigger | Effect |
+> | --- | --- | --- |
+> | `accepted` | Nothing blocking found. | Stored. |
+> | `needs_review` | Structurally sound, but the capture time contradicts the upload moment. | Stored; the contradiction still reaches the trust engine. |
+> | `rejected` | The bytes are not the container they declare. | Refused, with wording that does not describe any threshold. |
+>
+> **A file with no metadata is `accepted`.** Metadata is stripped by every messaging app and by
+> this project's own scrubber, so its absence is the normal condition of most genuine evidence;
+> treating it as a finding would refuse honest uploads while remaining trivially avoidable.
+
 * **Description:** Provenance checks protecting the network from mislabelled or stitched-together upload attempts.
 * **Behavior:** Derives three conclusions from file metadata **while that metadata still exists**, then discards the metadata and keeps only the conclusions: whether a capture device was identified, whether the capture time was internally consistent with the moment of submission, and whether the container is structurally what its declared type claims. No make, model, serial number, or timestamp is retained.
 * **Explicitly not implemented: detection of AI-generated media.** No metadata check can reliably distinguish a generated image from a real one, and nothing in the system claims to do so. What the signals do establish is narrower and still useful: the absence of a camera signature (which capture devices reliably write), a contradictory capture time (after submission, or before 2005, where an unset clock and the 1970 epoch both land), and a container that does not match its type. These are weak evidence, scored as such. They can only lower a score, never raise it above neutral, so a clean-looking file earns nothing and no honest worker's upload is ever refused on their basis.
 * **Consequence:** `metadata_status` remains `pending` and `flagged_ai_fake` is written nowhere. See `doc/13` E-019 for why this specification had to be corrected.
+* **Why no hosted detector was integrated.** Independently benchmarked in 2026 across 16 detector
+  families, 12 datasets and 291 generators, zero-shot accuracy spread 37 percentage points between
+  the best and worst detector, and detection of current commercial generators (Flux Dev, Firefly
+  v4, Midjourney v7) averaged **18–30%** — worse than the 50% a coin flip would give. A separate
+  audit of five commercial tools on 15 **authentic** press photographs found they mislabelled real
+  images as AI-generated between 6% and **40%** of the time. A detector that is wrong about modern
+  generators most of the time and wrong about real photographs up to 40% of the time cannot decide
+  whether a worker keeps a verification: the cost is asymmetric, and a false block takes a person's
+  income while a missed synthetic image is still visible to the recipient looking at the photo.
+  Integrating one would additionally require sending a worker's evidence to a third party, which
+  the privacy model in `doc/08` already declines to do. Full figures are in
+  `apps/api/src/lib/media-provenance.ts`.
 
 ---
 

@@ -11,6 +11,7 @@ import { locationRouter } from './modules/locations/routes.js';
 import { notificationsRouter } from './modules/notifications/routes.js';
 import { proofRouter } from './modules/proofs/routes.js';
 import { publicRouter } from './modules/public/routes.js';
+import { adminReviewRouter, reviewRouter } from './modules/review/routes.js';
 import { verificationRouter } from './modules/verifications/routes.js';
 
 export const apiRouter = Router();
@@ -28,6 +29,11 @@ apiRouter.use('/locations', locationRouter);
 // Mounted at `/workers` so the full path is `/api/v1/workers/proofs`, matching
 // the API documentation. A proof is owned by the worker who performed the work.
 apiRouter.use('/workers', proofRouter);
+
+// A worker's own appeal against a record the trust engine withheld. Mounted under
+// `/workers` so the appeal path reads as the mirror of the submission that
+// produced it, and so it inherits the same ownership scoping.
+apiRouter.use('/workers', reviewRouter);
 
 // Employer discovery and matching, per the API documentation: specs and search at
 // `/employers`, invitations the employer sent at `/employers/offers`.
@@ -52,3 +58,9 @@ apiRouter.use('/public', publicRouter);
 // Admin-only employer approvals. Mounted at the API root under `/admin` to keep
 // the elevated surface on one identifiable prefix.
 apiRouter.use('/admin', employerAdminRouter);
+
+// The queue for records the trust engine withheld, and the only path to
+// `fraud_blocked` or back to `verified`. Admin-only at the mount, alongside the
+// employer approvals, because it is the same kind of decision: a person acting on
+// the platform's authority rather than their own account's.
+apiRouter.use('/admin', adminReviewRouter);

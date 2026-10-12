@@ -18,11 +18,12 @@
  * controls, and both are heuristics on data that is thin this early.
  */
 import { AppError } from '../errors.js';
+import { NEUTRAL_WEIGHT as NEUTRAL_COLLUSION_WEIGHT } from './collusion.js';
 import type { MediaSignals } from '../media-scrub.js';
 import type { ProximityResult } from './proximity.js';
 import type { CollusionAssessment } from './collusion.js';
 
-export type Verdict = 'counted' | 'blocked';
+export type Verdict = 'counted' | 'flagged' | 'blocked';
 
 export interface ScoreInput {
   response: 'confirmed' | 'rejected';
@@ -57,6 +58,17 @@ export const DEFAULT_THRESHOLDS: ScoreThresholds = {
   // gate only fires when several signals agree.
   blockBelow: 0.25,
 };
+
+/**
+ * How many independent families of evidence were adverse, and how many the
+ * engine used to require.
+ *
+ * Kept because it is the honest record of the policy change: a block used to need
+ * two of these, and no longer does, because two weak signals agreeing is not
+ * corroboration. The stored breakdown now records `adverseSignalGroups` for the
+ * reviewer instead of using it as the gate.
+ */
+export const MIN_INDEPENDENT_SIGNALS_FOR_BLOCK = 2;
 
 /**
  * Per-signal contributions, each in 0..1 where 1 is fully trustworthy.
@@ -186,22 +198,152 @@ export function assess(input: ScoreInput, thresholds: ScoreThresholds = DEFAULT_
   }
   if (reasons.length === 0) reasons.push('No adverse signals were found.');
 
+  const groups = adverseSignalGroups(input);
+
   return {
     score,
-    verdict: score <= thresholds.blockBelow ? 'blocked' : 'counted',
+    verdict: verdictFor({ score, groups, blockBelow: thresholds.blockBelow }),
     reasons,
-    detail,
+    detail: {
+      ...detail,
+      // Reported for explanation, not for the verdict. The engine no longer
+      // requires a number of corroborating families — it withholds anything at
+      // or below the threshold — but how much of the score came from how many
+      // sources is exactly what a reviewer needs to judge whether the decision
+      // was fair, so it stays in the stored breakdown.
+      corroboration: {
+        adverseSignalGroups: groups,
+        /**
+         * Kept, and now informational only. A block used to require this many
+         * independent families; it no longer does, because two weak signals
+         * agreeing is not corroboration. The constant is retained so the stored
+         * detail records the policy that was in force when the row was written,
+         * which is what makes an old row still readable.
+         */
+        formerlyRequiredForBlock: MIN_INDEPENDENT_SIGNALS_FOR_BLOCK,
+      },
+    },
   };
+}
+
+/**
+ * How many independent families of evidence are against this endorsement.
+ *
+ * Three families exist: where the verifier says they were (proximity), who else
+ * has confirmed this worker (collusion), and what the uploaded file itself says
+ * (media).
+ *
+ * Collusion counts only when its weight actually fell below neutral. A verifier
+ * who was not identified produces an explanatory finding — "network diversity
+ * could not be assessed" — which records an *absence* of evidence and must never
+ * be counted against the worker. Counting findings here would have made every
+ * anonymous confirmation corroborate an attack.
+ *
+ * Reported for explanation rather than for the verdict: after the three-way
+ * outcome policy, the count no longer decides anything, because the families are
+ * not equally trustworthy and agreement between weak signals proves nothing. It
+ * stays in the stored breakdown so a reviewer can see how much of the score came
+ * from how many sources.
+ */
+function adverseSignalGroups(input: ScoreInput): number {
+  let groups = 0;
+  if (input.proximity.status === 'outside') groups += 1;
+  if (input.collusion.weight < NEUTRAL_COLLUSION_WEIGHT) groups += 1;
+  if (mediaScore(input.media, input.captureTimeConflict) < 0.5) groups += 1;
+  return groups;
+}
+
+/**
+ * Applies the verdict, and it is the only place a proof is ever withheld.
+ *
+ * A low score alone is **not** sufficient, and neither are two adverse families.
+ * This is the correction of a demonstrated defect rather than a tuning change.
+ *
+ * The proximity signal is the heaviest in the engine at 50%, and it is read from
+ * a field the token holder supplies in the same request as their answer. A holder
+ * who declared a location on the far side of the planet drove proximity to zero,
+ * and because every other signal was neutral for a well-formed upload, that one
+ * fabricated field put the total exactly on the threshold. The proof was marked
+ * `fraud_blocked` — permanently, with no path back, and visible to employers as a
+ * fraud count on the worker's record.
+ *
+ * The second family did not save it either. **The families are not equally
+ * trustworthy, and two weak signals agreeing is not two strong signals.** Media
+ * provenance is a consistency check on a file that ordinary re-compression
+ * routinely strips; collusion is a shape a legitimate site supervisor produces by
+ * working one site all week; proximity is a self-declaration. Each can be true of
+ * an honest worker, and each can be arranged by someone aiming to make a
+ * competitor look bad.
+ *
+ * So the outcome, and the mapping is deliberately asymmetric:
+ *
+ * * `counted` — above the threshold. The ordinary case.
+ * * `flagged` — at or below it. The record is **withheld from counting as proof**
+ *   and queued for a human, and it is explicitly *not* an accusation of fraud.
+ *   Withholding the badge is the entire protective effect: the record stops
+ *   helping the worker and stops being held against them.
+ * * `blocked` — never reached automatically. `fraud_blocked` is reserved for a
+ *   human who has read the evidence and agreed, and is set by the admin review
+ *   path rather than by this engine.
+ *
+ * That last point is the substantive decision. An automated heuristic over weak
+ * signals cannot establish fraud, and a system that lets it try will eventually
+ * brand an honest worker. The engine decides what may be *trusted*, not who is a
+ * liar — so it withholds, and a person decides.
+ */
+function verdictFor(input: { score: number; groups: number; blockBelow: number }): Verdict {
+  if (input.score > input.blockBelow) return 'counted';
+  return 'flagged';
 }
 
 /**
  * Applies the verdict to a proof's status.
  *
  * Kept separate from `assess` so the pure scoring stays testable without a
- * database, and so the one place that maps a score onto an enum is obvious.
+ * database, and so the one place that maps a verdict onto an enum is obvious.
+ *
+ * An automated decision can only ever produce `flagged`. `fraud_blocked` is
+ * reachable only through the admin review path, which requires a person, an
+ * identity, and a recorded reason.
  */
-export function proofStatusFor(assessment: FraudAssessment): 'verified' | 'fraud_blocked' {
-  return assessment.verdict === 'blocked' ? 'fraud_blocked' : 'verified';
+export function proofStatusFor(assessment: FraudAssessment): 'verified' | 'flagged' {
+  return assessment.verdict === 'flagged' ? 'flagged' : 'verified';
+}
+
+/**
+ * One sentence, safe to show a worker, naming what raised a record.
+ *
+ * Built from the *kinds* of signal that fired and never from their values. A
+ * worker can act on "the file you uploaded carried no capture details"; they can
+ * do nothing with "your score was 0.23 against a threshold of 0.25", and
+ * publishing the threshold would tell anyone with a grudge how far to push.
+ *
+ * Exported because the same sentence is stored, returned to the worker, and shown
+ * to an admin reviewing an appeal — three surfaces that must not drift apart.
+ */
+export function flagReasonFor(assessment: FraudAssessment): string {
+  const detail = assessment.detail as Record<string, unknown>;
+  const proximity = detail.proximity as { status?: string } | undefined;
+  const collusion = detail.collusion as { findings?: string[]; weight?: number } | undefined;
+  const media = detail.media as Parameters<typeof mediaScore>[0] | undefined;
+  const conflict = Boolean(detail.captureTimeConflict);
+
+  const kinds: string[] = [];
+  if (proximity?.status === 'outside') {
+    kinds.push('the confirmation came from a different place than the job was logged');
+  }
+  if ((collusion?.weight ?? 0.5) < NEUTRAL_COLLUSION_WEIGHT) {
+    kinds.push('the same client has confirmed several proofs for one worker');
+  }
+  if (mediaScore(media ?? null, conflict) < 0.5) {
+    kinds.push('the uploaded file carried fewer capture details than a camera normally writes');
+  }
+
+  if (kinds.length === 0) {
+    return 'This record is held for review. It is not a finding of fraud, and you can ask for it to be looked at again.';
+  }
+
+  return `Held for review: ${kinds.join('; ')}. This is not a finding of fraud, and you can ask for it to be looked at again.`;
 }
 
 /** Guards against a threshold being configured into an accidental always-block. */

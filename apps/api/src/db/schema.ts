@@ -20,7 +20,19 @@ export const verificationStatus = pgEnum('verification_status', [
   'pending',
   'verified',
   'rejected',
+  // Migration 0008. Withheld pending human review. Distinct from `fraud_blocked`
+  // because "something looked off" and "this was fraud" are different claims, and
+  // conflating them is how an honest worker ends up permanently branded by a
+  // heuristic. Neither state counts toward a verified badge.
+  'flagged',
   'fraud_blocked',
+]);
+export const proofReviewStatus = pgEnum('proof_review_status', [
+  'none',
+  'appealed',
+  'under_review',
+  'upheld',
+  'overturned',
 ]);
 export const verificationResponse = pgEnum('verification_response', ['none', 'confirmed', 'rejected']);
 export const offerStatus = pgEnum('offer_status', ['pending', 'accepted', 'declined']);
@@ -88,6 +100,23 @@ export const profiles = pgTable(
      * cannot be used to probe for them.
      */
     discoverable: boolean('discoverable').notNull().default(true),
+    /**
+     * Whether the worker is named, with an optional photo, on the customer
+     * verification page reached by a confirmation link.
+     *
+     * Separate from `discoverable` because the two expose this worker to
+     * different audiences: `discoverable` governs employer search, while this
+     * governs whoever ends up holding a link — and a confirmation link is
+     * forwardable by nature. A worker who is happy to be found by employers may
+     * still not want their name attached to a link that travels.
+     *
+     * Defaults to true, so a worker who has done nothing but sign up is named on
+     * the page for the person they actually worked for, which is the ordinary case.
+     * Setting it false leaves the page anonymous without affecting search.
+     */
+    showNameOnVerificationLink: boolean('show_name_on_verification_link')
+      .notNull()
+      .default(true),
     /**
      * Whether the shareable capability profile page answers.
      *
@@ -199,11 +228,36 @@ export const workProofLogs = pgTable(
     transcript: text('transcript'),
     /** Set when the owning worker deleted their account. See migration 0005. */
     anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
+    /**
+     * When the platform withheld this record, and why — migration 0008.
+     *
+     * Written for both `flagged` and `fraud_blocked`. A worker who cannot see that
+     * their record stopped counting has no way to respond to it, which is the same
+     * as an undisclosed penalty.
+     */
+    flaggedAt: timestamp('flagged_at', { withTimezone: true }),
+    /**
+     * A plain sentence naming what raised the record, safe to show the worker.
+     *
+     * Never a score, a threshold, or an anti-fraud signal: those describe the
+     * detector rather than helping the worker answer it.
+     */
+    flagReason: varchar('flag_reason', { length: 400 }),
+    /** The appeal lifecycle. See migration 0008. */
+    reviewStatus: proofReviewStatus('review_status').notNull().default('none'),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    /** Which admin decided, so a decision is attributable rather than anonymous. */
+    reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+    /** When an overturned block returned the record to `verified`. */
+    restoredAt: timestamp('restored_at', { withTimezone: true }),
     createdAt,
   },
   (table) => [
     index('work_proof_logs_worker_id_idx').on(table.workerId),
     index('work_proof_logs_verification_status_idx').on(table.verificationStatus),
+    index('work_proof_logs_review_status_idx')
+      .on(table.reviewStatus)
+      .where(sql`${table.reviewStatus} <> 'none'`),
   ],
 );
 

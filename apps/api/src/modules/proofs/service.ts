@@ -28,6 +28,7 @@ import { createNotification } from '../../lib/notifications.js';
 import {
   createSignedMediaUrl,
   deleteWorkProofMedia,
+  mediaKindFromPath,
   uploadWorkProofMedia,
 } from '../../lib/storage.js';
 import { generateVerificationToken, hashVerificationToken, hashVerifierPhone } from '../../lib/token.js';
@@ -321,12 +322,9 @@ async function dispatchLink(input: {
  * The media kind of a stored proof object, read from the vetted extension.
  *
  * Images get an actual thumbnail square; audio gets a playable placeholder.
- * The extension is safe to trust here because it was assigned by the upload
- * path from the allow-list, never taken from a caller.
  */
 function mediaKindFor(path: string | null): ProofMediaKind {
-  const extension = path?.split('.').pop()?.toLowerCase() ?? '';
-  return ['mp3', 'm4a', 'aac'].includes(extension) ? 'audio' : 'image';
+  return mediaKindFromPath(path);
 }
 
 /** A proof row joined with the skill of the block it hangs on. */
@@ -341,6 +339,12 @@ interface ProofRow {
   skillTag: string | null;
   skillLevel: number | null;
   transcript: string | null;
+  /** When the platform withheld this record, and what it said about it. */
+  flaggedAt: Date | null;
+  flagReason: string | null;
+  reviewStatus: 'none' | 'appealed' | 'under_review' | 'upheld' | 'overturned';
+  reviewedAt: Date | null;
+  restoredAt: Date | null;
 }
 
 async function proofRows(workerId: string, proofId?: string): Promise<ProofRow[]> {
@@ -356,6 +360,13 @@ async function proofRows(workerId: string, proofId?: string): Promise<ProofRow[]
       skillTag: capabilityBlocks.skillTag,
       skillLevel: capabilityBlocks.skillLevel,
       transcript: workProofLogs.transcript,
+      // The review lifecycle travels with the record so the log detail page can
+      // show a worker what happened and offer the appeal, without a second read.
+      flaggedAt: workProofLogs.flaggedAt,
+      flagReason: workProofLogs.flagReason,
+      reviewStatus: workProofLogs.reviewStatus,
+      reviewedAt: workProofLogs.reviewedAt,
+      restoredAt: workProofLogs.restoredAt,
     })
     .from(workProofLogs)
     .leftJoin(capabilityBlocks, eq(capabilityBlocks.id, workProofLogs.capabilityBlockId))
@@ -392,17 +403,28 @@ async function toListItem(row: ProofRow): Promise<ProofListItem> {
 /**
  * The link state behind the freeze rule.
  *
- * A proof is editable only while nothing has been handed out for it. `linkSent`
- * is true once a verification link was actually accepted by a messaging
- * provider — after that, editing the record would make the confirmation mean
- * something other than what was sent.
+ * A proof is editable only while nothing live has been handed out for it. The
+ * question is deliberately about the *link*, not about whether a messaging
+ * provider accepted it: since the work-logging form no longer collects a phone
+ * number, a dispatch is never attempted, and a rule keyed on delivery would sit
+ * permanently false and quietly disable the freeze. What the record must not do is
+ * change while a client is holding a link that describes it.
+ *
+ * So the freeze follows the link itself: it is live from the moment it is issued
+ * until it is answered or runs out. An answered proof is held still by its
+ * `verificationStatus` instead, and a link that has expired stops freezing the log
+ * so a worker who spotted a mistake after seven days can still correct it and ask
+ * for a fresh link.
+ *
+ * Three states are reported rather than two, because "never had a link" and "had
+ * one and let it lapse" call for different words on the log's page: only the second
+ * has something to replace.
  */
 async function verificationState(
   proofId: string,
-): Promise<{ linkSent: boolean; expiresAt: string | null }> {
+): Promise<{ linkLive: boolean; linkExpired: boolean; expiresAt: string | null }> {
   const [latest] = await db
     .select({
-      dispatchStatus: verifications.dispatchStatus,
       response: verifications.response,
       expiresAt: verifications.expiresAt,
     })
@@ -411,11 +433,16 @@ async function verificationState(
     .orderBy(desc(verifications.createdAt))
     .limit(1);
 
-  if (!latest) return { linkSent: false, expiresAt: null };
+  if (!latest) return { linkLive: false, linkExpired: false, expiresAt: null };
 
-  const linkSent = latest.dispatchStatus === 'sent';
-  const outstanding = latest.response === 'none' && latest.expiresAt.getTime() > Date.now();
-  return { linkSent, expiresAt: outstanding ? latest.expiresAt.toISOString() : null };
+  const unanswered = latest.response === 'none';
+  const live = unanswered && latest.expiresAt.getTime() > Date.now();
+
+  return {
+    linkLive: live,
+    linkExpired: unanswered && !live,
+    expiresAt: live ? latest.expiresAt.toISOString() : null,
+  };
 }
 
 /** The caller's own proof row, or a 404 that does not reveal others' rows. */
@@ -437,15 +464,24 @@ export async function getWorkerProof(
   proofId: string,
 ): Promise<ProofDetailResponse> {
   const row = await findOwnedRow(workerId, proofId);
-  const { linkSent, expiresAt } = await verificationState(proofId);
+  const { linkLive, linkExpired, expiresAt } = await verificationState(proofId);
 
   return {
     proof: {
       ...(await toListItem(row)),
-      editable: row.verificationStatus === 'pending' && !linkSent,
-      verificationLinkSent: linkSent,
+      editable: row.verificationStatus === 'pending' && !linkLive,
+      verificationOutstanding: linkLive,
+      verificationLinkExpired: linkExpired,
       verificationExpiresAt: expiresAt,
       transcript: row.transcript,
+      // Passed through so a worker sees, on the record itself, that it was held,
+      // why, and whether they have already asked for it to be looked at again.
+      // These are the worker's own fields — a score or a threshold is not sent.
+      flaggedAt: row.flaggedAt?.toISOString() ?? null,
+      flagReason: row.flagReason,
+      reviewStatus: row.reviewStatus,
+      reviewedAt: row.reviewedAt?.toISOString() ?? null,
+      restoredAt: row.restoredAt?.toISOString() ?? null,
     },
   };
 }
@@ -463,14 +499,14 @@ export async function updateWorkerProof(
   input: UpdateProofInput,
 ): Promise<ProofDetailResponse> {
   const row = await findOwnedRow(workerId, proofId);
-  const { linkSent } = await verificationState(proofId);
+  const { linkLive } = await verificationState(proofId);
 
   if (row.verificationStatus !== 'pending') {
     throw AppError.conflict('This log has already been verified and can no longer be edited.');
   }
-  if (linkSent) {
+  if (linkLive) {
     throw AppError.conflict(
-      'A confirmation link was already sent for this log, so it can no longer be edited.',
+      'A confirmation link is still live for this log, so it can no longer be edited.',
     );
   }
 
@@ -546,9 +582,11 @@ export async function workerOverview(workerId: string): Promise<WorkerOverviewRe
  * the profile cannot drift from the logbook it summarises (the same reasoning
  * that governs search in `lib/matching.ts`).
  *
- * `verifiedProofs` counts proofs whose verdict is `verified`; `rejected` and
- * `fraud_blocked` proofs are deliberately kept out of the number a stranger or
- * an employer sees.
+ * `verifiedProofs` counts proofs whose verdict is `verified`, and nothing else
+ * counts. `rejected`, `flagged` and `fraud_blocked` proofs are all deliberately
+ * kept out of the number a stranger or an employer sees — a withheld record is a
+ * question, not a credit, and giving it any weight would let a pending review
+ * inflate a worker's standing.
  */
 export async function workerCapabilities(
   workerId: string,
@@ -682,15 +720,14 @@ export async function workerExpiringLinks(
  * never handed over.
  *
  * The original client phone number is not stored (only a salted hash is), so a
- * reminder cannot silently re-message the client: like the very first
- * submission without a number, it hands the worker a new single-use link to
- * share. That is the honest version of "resend" within the privacy model the
- * product already keeps.
+ * reminder cannot silently re-message the client: it hands the worker a new
+ * single-use link to share. That is the honest version of "resend" within the
+ * privacy model the product already keeps, and it is why re-sharing is a *new
+ * request* rather than a redelivery of the old one — the two are deliberately not
+ * the same operation.
  *
- * Refused when a link is still active — a worker cannot mint a second valid
- * link for the same log while the first is live — and when the log has already
- * reached a verdict. The freeze rule is untouched: a reminder issues a link, it
- * never reopens editing.
+ * Refused while a link is live and once the log has reached a verdict. The freeze
+ * rule is untouched: a reminder issues a link, it never reopens editing.
  */
 export async function resendVerificationLink(
   workerId: string,
@@ -704,24 +741,33 @@ export async function resendVerificationLink(
     );
   }
 
-  const { linkSent, expiresAt } = await verificationState(proofId);
-  if (linkSent && expiresAt) {
-    throw AppError.conflict(
-      'A confirmation link is still active for this log. The client can use the one that was sent.',
-    );
-  }
+  const { expiresAt } = await verificationState(proofId);
 
-  // An expired, unanswered link is the exact case a reminder exists for. The
+  // A live link is replaceable, because the worker cannot get it back. The API
+  // keeps only a hash of the token, so the address exists exactly once — on the
+  // screen that issued it — and is unrecoverable afterwards. Refusing here left
+  // the log page offering a button that could only ever fail, and a worker who
+  // had lost the link with days still to run had no way out.
+  //
+  // Replacing is not minting a second request. The supersede step below retires
+  // the outstanding row inside the same transaction that issues the new one, so
+  // the old link stops working immediately and exactly one answerable link is
+  // ever outstanding — the same guarantee the expired-link path relied on.
+
+  // A link that lapsed unanswered is the exact case a reminder exists for. The
   // worker is told it died and that a fresh one is ready, so the action has a
   // visible consequence rather than silently creating a second link.
-  if (linkSent && !expiresAt) {
-    await createNotification(
-      workerId,
-      'link_expired',
-      'Confirmation link expired',
-      `The confirmation link for ${row.skillTag ?? 'that skill'} expired. A fresh one is ready to share.`,
-      `/logs/${proofId}`,
-    );
+  if (expiresAt === null) {
+    const hadOutstanding = await hasUnansweredVerification(proofId);
+    if (hadOutstanding) {
+      await createNotification(
+        workerId,
+        'link_expired',
+        'Confirmation link expired',
+        `The confirmation link for ${row.skillTag ?? 'that skill'} expired. A fresh one is ready to share.`,
+        `/logs/${proofId}`,
+      );
+    }
   }
 
   const worker = await db
@@ -734,17 +780,41 @@ export async function resendVerificationLink(
   const rawToken = generateVerificationToken();
   const nextExpiry = new Date(Date.now() + VERIFICATION_TTL_SECONDS * 1000);
 
-  const [verification] = await db
-    .insert(verifications)
-    .values({
-      workProofId: proofId,
-      // No number is known for a resend; the worker shares the fresh link the
-      // same way the first submission without a number was shared.
-      verifierPhoneHash: null,
-      tokenHash: hashVerificationToken(rawToken),
-      expiresAt: nextExpiry,
-    })
-    .returning({ id: verifications.id });
+  // Supersede-then-issue, in one transaction.
+  //
+  // Without the supersede step a proof can end up with two answerable requests at
+  // once: the previous row is merely *not the latest*, which stops it being read
+  // as current, but its token still hashes to a live row with `response = 'none'`
+  // and would still accept a decision. Two live links means two valid answers for
+  // one record, and whichever landed last would win. Retiring the older row first
+  // is what makes "one request, one decision" a property of the data rather than
+  // of which row a query happens to read.
+  //
+  // Only unanswered rows are retired. A recorded decision is never touched here,
+  // so replacing a link can never erase a confirmation or a rejection.
+  const [verification] = await db.transaction(async (tx) => {
+    await tx
+      .update(verifications)
+      .set({ expiresAt: new Date(), dispatchStatus: 'superseded' })
+      .where(
+        and(
+          eq(verifications.workProofId, proofId),
+          eq(verifications.response, 'none'),
+        ),
+      );
+
+    return tx
+      .insert(verifications)
+      .values({
+        workProofId: proofId,
+        // No number is known for a resend; the worker shares the fresh link the
+        // same way the first submission without a number was shared.
+        verifierPhoneHash: null,
+        tokenHash: hashVerificationToken(rawToken),
+        expiresAt: nextExpiry,
+      })
+      .returning({ id: verifications.id });
+  });
 
   if (!verification) {
     throw AppError.internal('The new link could not be prepared.');
@@ -764,6 +834,28 @@ export async function resendVerificationLink(
     verificationExpiresAt: nextExpiry.toISOString(),
     verificationLinkSent: dispatch,
   };
+}
+
+/**
+ * Whether this proof has ever had an unanswered request, live or lapsed.
+ *
+ * Used only to decide whether telling the worker their link expired is factually
+ * true. A proof that has never been issued a link has nothing to have expired, and
+ * a notification saying otherwise would be a small lie in the worker's own feed.
+ */
+async function hasUnansweredVerification(proofId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: verifications.id })
+    .from(verifications)
+    .where(
+      and(
+        eq(verifications.workProofId, proofId),
+        eq(verifications.response, 'none'),
+      ),
+    )
+    .limit(1);
+
+  return rows.length > 0;
 }
 
 /** ISO string from an aggregate that may arrive as a string or a Date. */

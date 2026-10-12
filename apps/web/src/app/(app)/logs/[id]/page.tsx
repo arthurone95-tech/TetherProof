@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import type { ProofDetailResponse } from '@tetherproof/shared';
 import { ResendLinkButton } from '@/components/proofs/ResendLinkButton';
+import { AppealButton } from '@/components/proofs/AppealButton';
 import { SkillLevelBadge, VerificationStatusPill } from '@/components/proofs/ProofListItemView';
 import { ApiRequestError } from '@/lib/api-error';
 import { prettyCoords } from '@/lib/gps';
@@ -68,16 +69,27 @@ export default async function LogDetailPage({
     year: 'numeric',
   });
 
-  // A link has gone out for this log and has not been answered. The link is
-  // either still live — the verifier can still answer — or it has expired,
+  // A live link has gone out for this log and has not been answered. The link is
+  // either still answerable — the verifier can still reply — or it has run out,
   // which is the one state where a fresh link resolves the log.
-  const confirmationOutstanding = proof.verificationStatus === 'pending' && proof.verificationLinkSent;
+  const confirmationLive =
+    proof.verificationStatus === 'pending' && proof.verificationOutstanding;
   const confirmationExpired =
-    confirmationOutstanding && proof.verificationExpiresAt === null;
+    proof.verificationStatus === 'pending' && proof.verificationLinkExpired;
 
   // A concluded log — confirmed, refused, or blocked — is frozen for good and
   // carries no action to take.
   const concluded = proof.verificationStatus !== 'pending';
+
+  // Withheld records say so in their own panel above, which explains the appeal.
+  // Repeating it here in the closing note would read as a second, harsher verdict.
+  const conclusionNote = concluded ? (
+    proof.verificationStatus === 'rejected' ? (
+      'This log has already been answered and can no longer be edited. It was not confirmed by the person it was sent to.'
+    ) : proof.verificationStatus === 'verified' ? (
+      'This log has already been answered and can no longer be edited. The verification is on your record.'
+    ) : null
+  ) : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -151,7 +163,7 @@ export default async function LogDetailPage({
         </div>
       ) : null}
 
-      {confirmationOutstanding ? (
+      {confirmationLive || confirmationExpired ? (
         <div className="rounded-2xl border border-amber-200/70 bg-amber-50 p-5">
           <h2 className="text-sm font-semibold tracking-wide text-amber-900 uppercase">
             Confirmation
@@ -163,7 +175,7 @@ export default async function LogDetailPage({
               </p>
               <p className="mt-1 text-sm text-amber-800">
                 Raise a fresh link and share it again — the new link lasts just as long as the
-                first one.
+                first one, and the old one stops working immediately.
               </p>
               <div className="mt-3">
                 <ResendLinkButton proofId={proof.id} subtle />
@@ -172,26 +184,26 @@ export default async function LogDetailPage({
           ) : (
             <>
               <p className="mt-2 text-sm text-amber-900">
-                A confirmation link was sent for this log. It is live until{' '}
-                <strong>
-                  {expiryDate(proof.verificationExpiresAt ?? '')}
-                </strong>
-                , and the person confirming your work can still answer while it is.
+                A confirmation link is open for this log. It can be answered until{' '}
+                <strong>{expiryDate(proof.verificationExpiresAt ?? '')}</strong>.
               </p>
               <p className="mt-1 text-sm text-amber-800">
-                The record is fixed once the answer comes back.
+                The record stays fixed while it is open, and once the answer comes back.
               </p>
+              <div className="mt-3">
+                <ResendLinkButton proofId={proof.id} subtle label="Get a new link" />
+              </div>
             </>
           )}
         </div>
       ) : null}
 
-      {!confirmationOutstanding && !concluded ? (
+      {!confirmationLive && !concluded ? (
         <div className="rounded-2xl border border-brand-100 bg-white p-6">
           <h2 className="text-lg font-semibold text-ink-900">Edit this log</h2>
           <p className="mt-1 text-sm text-ink-600">
-            It can still be changed because no confirmation link has been sent for it yet. Once
-            one goes out, the record is fixed.
+            No confirmation link is open for it, so it can still be changed. Opening a new link
+            fixes the record again.
           </p>
           <div className="mt-4">
             <EditLogForm proof={proof} />
@@ -199,15 +211,88 @@ export default async function LogDetailPage({
         </div>
       ) : null}
 
-      {concluded ? (
-        <p className="rounded-xl bg-brand-50 px-4 py-3 text-sm text-ink-700">
-          This log has already been confirmed and can no longer be edited.
-          {proof.verificationStatus === 'rejected'
-            ? ' It was not confirmed by the person it was sent to.'
-            : proof.verificationStatus === 'fraud_blocked'
-              ? ' It was blocked by the anti-fraud engine.'
-              : ' The verification is on your record.'}
-        </p>
+      {proof.verificationStatus === 'flagged' || proof.verificationStatus === 'fraud_blocked' ? (
+        <div className="rounded-2xl border border-amber-300 bg-amber-50 p-5">
+          <h2 className="text-sm font-semibold tracking-wide text-amber-900 uppercase">
+            Held for review
+          </h2>
+
+          {proof.verificationStatus === 'flagged' ? (
+            <>
+              <p className="mt-2 text-sm font-medium text-amber-900">
+                A client confirmed this work, and it is not counting toward your record while
+                someone looks at it.
+              </p>
+              <p className="mt-2 text-sm text-amber-900">
+                Nothing has been decided against you. Some signals about this entry did not agree
+                with each other, and they are checked by a person before anything is settled.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="mt-2 text-sm font-medium text-amber-900">
+                This record was reviewed and the decision to hold it was upheld.
+              </p>
+              <p className="mt-2 text-sm text-amber-900">
+                It does not count toward your record. The decision was made by a person and the
+                findings behind it are kept on file.
+              </p>
+            </>
+          )}
+
+          {proof.flagReason ? (
+            <p className="mt-3 rounded-xl bg-white/70 p-3 text-sm text-amber-900">
+              {proof.flagReason}
+            </p>
+          ) : null}
+
+          <p className="mt-3 text-xs text-amber-800">
+            {proof.flaggedAt
+              ? `Held since ${new Date(proof.flaggedAt).toLocaleDateString(undefined, {
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                })}.`
+              : null}
+            {proof.restoredAt
+              ? ` Restored on ${new Date(proof.restoredAt).toLocaleDateString(undefined, {
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                })}.`
+              : null}
+          </p>
+
+          {proof.reviewStatus === 'none' && proof.verificationStatus === 'flagged' ? (
+            <>
+              <AppealButton proofId={proof.id} />
+              <p className="mt-2 text-xs text-amber-800">
+                Asking does not change the outcome on its own. It puts this in front of someone who
+                can look at the evidence.
+              </p>
+            </>
+          ) : null}
+
+          {proof.reviewStatus === 'appealed' ? (
+            <p className="mt-3 text-sm font-medium text-amber-900">
+              You asked for this to be reviewed. It is in the queue.
+            </p>
+          ) : null}
+          {proof.reviewStatus === 'under_review' ? (
+            <p className="mt-3 text-sm font-medium text-amber-900">
+              Someone is looking at this now.
+            </p>
+          ) : null}
+          {proof.reviewStatus === 'overturned' ? (
+            <p className="mt-3 text-sm font-medium text-emerald-800">
+              This was reviewed and put back on your record. It counts again.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {conclusionNote ? (
+        <p className="rounded-xl bg-brand-50 px-4 py-3 text-sm text-ink-700">{conclusionNote}</p>
       ) : null}
     </div>
   );

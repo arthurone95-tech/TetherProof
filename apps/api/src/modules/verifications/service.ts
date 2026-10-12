@@ -2,19 +2,22 @@ import { and, eq, isNotNull, ne } from 'drizzle-orm';
 import { ERROR_CODES } from '@tetherproof/shared';
 import { env } from '../../config/env.js';
 import { db } from '../../db/client.js';
-import { capabilityBlocks, verifications, workProofLogs } from '../../db/schema.js';
+import { capabilityBlocks, profiles, verifications, workProofLogs } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
 import { assessCollusion, type Endorsement } from '../../lib/fraud/collusion.js';
 import { evaluateProximity } from '../../lib/fraud/proximity.js';
 import {
   assertUsableThresholds,
   assess,
+  flagReasonFor,
   proofStatusFor,
   type FraudAssessment,
 } from '../../lib/fraud/score.js';
 import type { MediaSignals } from '../../lib/media-scrub.js';
 import { createNotification } from '../../lib/notifications.js';
-import { hashVerificationToken } from '../../lib/token.js';
+import { createSignedMediaUrl, mediaKindFromPath } from '../../lib/storage.js';
+import { hashVerificationToken, hashVerifierKey } from '../../lib/token.js';
+import { normalizeVerifierKey } from '../../lib/verifier-key.js';
 import type { ConfirmInput } from './schemas.js';
 
 /**
@@ -24,12 +27,49 @@ import type { ConfirmInput } from './schemas.js';
  * fraud score, and media URLs, which would leak PII or let a link holder probe
  * the anti-fraud system.
  */
+/**
+ * Everything a client sees from a link they were sent.
+ *
+ * Deliberately excludes worker identity, verifier phone number, GPS telemetry,
+ * fraud score, and the storage path of the media, none of which the person
+ * answering is entitled to. The evidence itself *is* included, because a
+ * confirmation asked for on the strength of a photograph is not a confirmation
+ * if the photograph cannot be seen — but it arrives as a short-lived signed URL,
+ * minted here at read time from a private bucket, so the link holder never
+ * receives a storage credential or a reusable object address.
+ */
 export interface VerificationSummary {
   skillTag: string | null;
+  /** The worker's own words about the job, shown verbatim so it can be checked. */
   taskSummary: string;
   status: 'awaiting_response' | 'confirmed' | 'rejected';
   expiresAt: string;
   respondedAt: string | null;
+  /** The proficiency tier the worker claims for this skill, 1 to 3. */
+  skillLevel: number | null;
+  /** When the worker logged the work, so a stale claim is recognisable. */
+  loggedAt: string;
+  /** Whether the evidence is a photograph or a recording. */
+  mediaKind: 'image' | 'audio' | null;
+  /** Short-lived signed URL for the evidence, or null when it cannot be produced. */
+  mediaUrl: string | null;
+  /**
+   * True when evidence exists but could not be signed for this request.
+   *
+   * Distinct from "no evidence", so the page can say the file is unavailable
+   * rather than implying the worker submitted nothing.
+   */
+  mediaUnavailable: boolean;
+  /**
+   * Who did the work, when the worker allows it to be shown here.
+   *
+   * Both are null when the worker set `showNameOnVerificationLink` to false, when
+   * they have no profile row, or when their account has been anonymised — all three
+   * arrive at the page as the same absence, so there is no way to tell a private
+   * worker from a nameless one.
+   */
+  workerName: string | null;
+  workerAvatarUrl: string | null;
 }
 
 async function loadByTokenHash(tokenHash: string) {
@@ -47,10 +87,23 @@ async function loadByTokenHash(tokenHash: string) {
       createdAt: workProofLogs.createdAt,
       anonymisedAt: workProofLogs.anonymisedAt,
       skillTag: capabilityBlocks.skillTag,
+      skillLevel: capabilityBlocks.skillLevel,
+      mediaUrl: workProofLogs.mediaUrl,
+      // Read here but shaped at the edge, never returned raw. A confirmation link
+      // is forwardable, so what leaves this module for the page is only the name
+      // and photo, and only when the worker has not opted out of being named on
+      // it. The flag is carried rather than applied in SQL so that a worker who
+      // switched it off is anonymous for the same reason as one who never had a
+      // profile at all — the page cannot tell the two apart, and neither can a
+      // caller.
+      workerFullName: profiles.fullName,
+      workerAvatarUrl: profiles.avatarUrl,
+      showNameOnVerificationLink: profiles.showNameOnVerificationLink,
     })
     .from(verifications)
     .innerJoin(workProofLogs, eq(verifications.workProofId, workProofLogs.id))
     .leftJoin(capabilityBlocks, eq(workProofLogs.capabilityBlockId, capabilityBlocks.id))
+    .leftJoin(profiles, eq(profiles.userId, workProofLogs.workerId))
     .where(eq(verifications.tokenHash, tokenHash))
     .limit(1);
 
@@ -114,13 +167,48 @@ function assertUsable(record: LoadedVerification): asserts record is UsableVerif
   }
 }
 
-function toSummary(record: NonNullable<LoadedVerification>): VerificationSummary {
+/**
+ * Shapes a row into the summary the verification page renders.
+ *
+ * The evidence is signed here rather than stored as an address. `mediaUrl` in the
+ * database is a bucket-relative object path, which is not a URL anyone can open;
+ * minting a short-lived signed one per request is what lets a client who was sent
+ * the link actually look at the photograph, without the bucket becoming public and
+ * without a storage credential ever leaving this process.
+ *
+ * A signing failure is deliberately not an error. The decision itself is still
+ * answerable without the picture, so refusing to show the page because storage had
+ * a bad minute would take away the recipient's one chance to record it. The page
+ * says the file is unavailable and the answer still stands.
+ */
+async function toSummary(record: NonNullable<LoadedVerification>): Promise<VerificationSummary> {
+  let mediaUrl: string | null = null;
+  let mediaUnavailable = false;
+
+  if (record.mediaUrl) {
+    try {
+      mediaUrl = await createSignedMediaUrl(record.mediaUrl);
+    } catch {
+      mediaUnavailable = true;
+    }
+  }
+
   return {
     skillTag: record.skillTag,
     taskSummary: record.description,
     status: record.response === 'none' ? 'awaiting_response' : record.response,
     expiresAt: record.expiresAt.toISOString(),
     respondedAt: record.completedAt ? record.completedAt.toISOString() : null,
+    skillLevel: record.skillLevel,
+    loggedAt: record.createdAt.toISOString(),
+    mediaKind: record.mediaUrl ? mediaKindFromPath(record.mediaUrl) : null,
+    mediaUrl,
+    mediaUnavailable,
+    // One decision, applied to both fields at once. Reading them separately would
+    // let a future edit show the photo while withholding the name, which is the
+    // combination that identifies someone with no stated reason.
+    workerName: record.showNameOnVerificationLink ? record.workerFullName : null,
+    workerAvatarUrl: record.showNameOnVerificationLink ? record.workerAvatarUrl : null,
   };
 }
 
@@ -157,7 +245,6 @@ export async function getVerificationSummary(rawToken: string): Promise<Verifica
 
   return toSummary(record);
 }
-
 /**
  * Every completed endorsement by an identifiable verifier, except the one being
  * scored.
@@ -173,6 +260,15 @@ export async function getVerificationSummary(rawToken: string): Promise<Verifica
  */
 const COLLUSION_HISTORY_LIMIT = 1000;
 
+/**
+ * A verifier is identifiable either by the salted hash of a phone number supplied
+ * at submission, or by the salted hash of a self-generated browser pseudonym sent
+ * with the answer. Both live in the same column, which is why the history filter
+ * tests the column for presence rather than for one particular source: the graph
+ * does not care which mechanism identified the verifier, only that it was the
+ * same one twice. See `lib/verifier-key.ts` for why the second mechanism exists
+ * and what it cannot do.
+ */
 async function loadEndorsementHistory(excludeVerificationId: string): Promise<Endorsement[]> {
   const rows = await db
     .select({
@@ -240,13 +336,14 @@ async function loadMediaSignals(workProofId: string): Promise<MediaSignals | nul
  * Runs the trust engine over one completed endorsement.
  *
  * Split out from `submitVerification` because it is pure of the write: the score
- * is computed first, and only then applied. The order is what stops a
- * `fraud_blocked` verdict from overwriting itself with `verified` a moment later.
+ * is computed first, and only then applied. The order is what stops a `flagged`
+ * verdict from being overwritten with `verified` a moment later.
  */
 async function evaluateTrust(
   record: UsableVerification,
   response: 'confirmed' | 'rejected',
   verifierGps: string | null,
+  verifierKeyHash: string | null,
 ): Promise<FraudAssessment> {
   const thresholds = {
     proximityKm: env.FRAUD_PROXIMITY_KM,
@@ -265,8 +362,11 @@ async function evaluateTrust(
     thresholds.proximityKm,
   );
 
+  // The pseudonym this answer arrived with, if any, is what identifies the
+  // verifier for this decision. It is stored on the row below and read back here
+  // so the graph and the stored record can never disagree about who answered.
   const collusion = assessCollusion(
-    { workerId: record.workerId, verifierKey: record.verifierPhoneHash },
+    { workerId: record.workerId, verifierKey: verifierKeyHash ?? record.verifierPhoneHash },
     history,
   );
 
@@ -298,7 +398,10 @@ export async function submitVerification(
   status: 'confirmed' | 'rejected';
   skillTag: string | null;
   fraudScore: number | null;
-  verificationStatus: 'verified' | 'rejected' | 'fraud_blocked';
+  verificationStatus: 'verified' | 'rejected' | 'flagged';
+  /** True when the platform is withholding the record despite this confirmation. */
+  withheld: boolean;
+  withheldReason: string | null;
 }> {
   const tokenHash = hashVerificationToken(rawToken);
   const record = await loadByTokenHash(tokenHash);
@@ -307,10 +410,17 @@ export async function submitVerification(
   const response = input.response;
   const verifierGps = input.verifierGps ?? null;
 
+  // The recipient's own browser pseudonym, if they chose to send one. Normalised
+  // and hashed before it is written, exactly as a phone number would be, so the
+  // column never holds a reversible value and a malformed header is simply absent
+  // rather than stored.
+  const deviceKey = normalizeVerifierKey(input.verifierKey);
+  const verifierKeyHash = deviceKey ? hashVerifierKey(deviceKey) : null;
+
   // Scored before the write, so the verdict is known when the proof status is
   // set. Reversing these two would write `verified` and then immediately
   // overwrite it, leaving a blocked proof counted as verified in between.
-  const assessment = await evaluateTrust(record, response, verifierGps);
+  const assessment = await evaluateTrust(record, response, verifierGps, verifierKeyHash);
 
   const completedAt = new Date();
   const updated = await db
@@ -319,6 +429,11 @@ export async function submitVerification(
       response,
       verifierGps,
       completedAt,
+      // Written only when the recipient supplied one, so the column stays null for
+      // the anonymous answers it already covered — a null here means "this
+      // verifier chose not to be recognised", which the engine reads as neutral
+      // rather than as a finding.
+      ...(verifierKeyHash ? { verifierPhoneHash: verifierKeyHash } : {}),
       proximityKm: assessment.detail.proximity
         ? (assessment.detail.proximity as { distanceKm: number | null }).distanceKm
         : null,
@@ -337,27 +452,47 @@ export async function submitVerification(
     });
   }
 
-  // A rejection is reported as a rejection. A confirmed endorsement that trips
-  // the gate is reported as confirmed to the client, because the client did
-  // confirm it, but the proof is blocked from counting as verified.
+  // A rejection is reported as a rejection. A confirmed endorsement is reported
+  // as confirmed, whatever the engine decided, because from the client's side they
+  // did confirm it — and the client is told the withheld outcome too, so nobody
+  // leaves the page believing the record is now trusted.
   const proofStatus =
     response === 'rejected' ? 'rejected' : proofStatusFor(assessment);
 
   await db
     .update(workProofLogs)
-    .set({ verificationStatus: proofStatus })
+    .set({
+      verificationStatus: proofStatus,
+      // Written only when something was withheld, so an ordinary confirmation
+      // leaves these null and a flagged record always carries both when it
+      // happened and a sentence the worker is allowed to read.
+      ...(proofStatus === 'flagged'
+        ? { flaggedAt: new Date(), flagReason: flagReasonFor(assessment) }
+        : {}),
+    })
     .where(eq(workProofLogs.id, record.workProofId));
 
-  // The worker is told the moment a client answers. A rejection is reported as
-  // a rejection; a confirmed endorsement still notifies, whatever the engine
-  // decided, because from the worker's side the client did respond.
+  // The verifier's decision and the platform's assessment of the record are two
+  // different facts, and the worker is owed both.
+  //
+  // A confirmation the engine then withholds is still a confirmation: the client
+  // did answer, and saying otherwise would misreport what happened. But telling
+  // the worker only "a client confirmed your work" would hide that their record
+  // is not counting — the exact failure that made `fraud_blocked` indefensible,
+  // an undisclosed penalty the worker could neither see nor answer.
   await createNotification(
     record.workerId,
     response === 'confirmed' ? 'verification_confirmed' : 'verification_rejected',
-    response === 'confirmed' ? 'Work verified' : 'Work not confirmed',
-    `${record.skillTag ?? 'That skill'} — a client ${
-      response === 'confirmed' ? 'confirmed' : 'did not confirm'
-    } your work.`,
+    proofStatus === 'flagged'
+      ? 'Work confirmed but held for review'
+      : response === 'confirmed'
+        ? 'Work verified'
+        : 'Work not confirmed',
+    proofStatus === 'flagged'
+      ? `${record.skillTag ?? 'That skill'} — the client confirmed this work, and it is being held back from counting while it is reviewed. Nothing has been decided against you.`
+      : `${record.skillTag ?? 'That skill'} — a client ${
+          response === 'confirmed' ? 'confirmed' : 'did not confirm'
+        } your work.`,
     `/logs/${record.workProofId}`,
   );
 
@@ -365,7 +500,16 @@ export async function submitVerification(
     status: response,
     skillTag: record.skillTag,
     fraudScore: assessment.score,
-    verificationStatus: proofStatus,
+    // Narrowed for the client: a rejection is `rejected`, and a confirmed answer
+    // is either counted or withheld. `fraud_blocked` is deliberately absent —
+    // the engine cannot produce it, and a client is never told a record was ruled
+    // fraudulent, because nobody has ruled on it.
+    verificationStatus: proofStatus === 'rejected' ? 'rejected' : proofStatus,
+    // The client is told the platform's assessment as well as their own answer, so
+    // the page can never imply that tapping Confirm made the record trusted. A
+    // withheld record is reported plainly rather than as a success.
+    withheld: proofStatus === 'flagged',
+    withheldReason: proofStatus === 'flagged' ? flagReasonFor(assessment) : null,
   };
 }
 

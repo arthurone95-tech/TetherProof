@@ -66,8 +66,26 @@ Stores individual task completions, media proofs, and telemetry data.
 * `media_timestamp_plausible` (BOOLEAN, True when the discarded capture time was consistent with the submission)
 * `media_encoder_known` (BOOLEAN, True when the container is structurally what its declared type claims)
 * `submission_gps` (VARCHAR)
-* `verification_status` (ENUM: `pending`, `verified`, `rejected`, `fraud_blocked`)
+* `verification_status` (ENUM: `pending`, `verified`, `rejected`, `flagged`, `fraud_blocked`)
+* `flagged_at` (TIMESTAMP) — set on both `flagged` and `fraud_blocked`
+* `flag_reason` (VARCHAR 400) — a plain sentence the worker may read; never a score or a threshold
+* `review_status` (ENUM `proof_review_status`: `none`, `appealed`, `under_review`, `upheld`, `overturned`; default `none`)
+* `reviewed_at` (TIMESTAMP), `reviewed_by` (UUID → `users.id`, `ON DELETE SET NULL`)
+* `restored_at` (TIMESTAMP) — set when an overturned block returned the record to `verified`
 * `created_at` (TIMESTAMP)
+
+`flagged` and `fraud_blocked` are deliberately distinct states. "Something about this did not
+add up" and "this was fraud" are different claims with very different consequences for the
+person named on the record; collapsing them is how a heuristic becomes an accusation. Both
+withhold the record from counting as proof — that is the whole protective effect — but only one
+is a judgement about the worker, and only an administrator can make it.
+
+`review_status` exists so that "an admin looked at this and agreed" and "nobody has looked at
+this yet" are never indistinguishable on a worker's record. `upheld` and `overturned` are
+terminal and both stored rather than inferred. An overturned review restores `verification_status`
+to `verified` and stamps `restored_at`; it does **not** delete the engine's findings, which stay
+on the verification row, because an appeal that erased the reason would let anyone clear a
+genuine finding by objecting to it.
 
 The four `media_*` columns are booleans only, derived from metadata the scrubber destroyed
 before storage. There is deliberately no column anywhere for a camera make, model, serial

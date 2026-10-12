@@ -28,13 +28,40 @@ export type SelfRegisterRole = (typeof SELF_REGISTER_ROLES)[number];
 export const METADATA_STATUSES = ['pending', 'valid', 'flagged_ai_fake'] as const;
 export type MetadataStatus = (typeof METADATA_STATUSES)[number];
 
+/**
+ * The states a work record can be in.
+ *
+ * `flagged` is deliberately distinct from `fraud_blocked`. "Something about this
+ * did not add up" and "this was fraud" are different claims with very different
+ * consequences for the worker named on the record, and collapsing them is how a
+ * heuristic becomes an accusation. Both withhold the record from counting as
+ * proof; only one of them is a judgement about the person, and that judgement is
+ * only ever made by a human.
+ */
 export const VERIFICATION_STATUSES = [
   'pending',
   'verified',
   'rejected',
+  'flagged',
   'fraud_blocked',
 ] as const;
 export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
+
+/**
+ * The appeal lifecycle for a withheld record.
+ *
+ * `upheld` and `overturned` are terminal and are both recorded rather than
+ * inferred, because "an admin agreed with this" and "nobody has looked at this
+ * yet" must never be indistinguishable on a worker's record.
+ */
+export const PROOF_REVIEW_STATUSES = [
+  'none',
+  'appealed',
+  'under_review',
+  'upheld',
+  'overturned',
+] as const;
+export type ProofReviewStatus = (typeof PROOF_REVIEW_STATUSES)[number];
 
 export const VERIFICATION_RESPONSES = ['none', 'confirmed', 'rejected'] as const;
 export type VerificationResponse = (typeof VERIFICATION_RESPONSES)[number];

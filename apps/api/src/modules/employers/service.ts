@@ -309,10 +309,15 @@ export async function deleteSpec(specId: string, employerId: string): Promise<vo
 /**
  * Ranks masked candidates for a spec or an ad-hoc query.
  *
- * What leaves this function is deliberately thin: a handle, the skill, three
- * aggregate numbers, and a distance. There is no worker id, name, email, phone,
- * avatar, or coordinate in the returned shape, and nothing here is reachable that
- * would let a caller join a card back to a person.
+ * What leaves this function is deliberately thin: a handle, the skill, the
+ * worker's own name and photo, three aggregate numbers, and a distance. The name
+ * and photo are present only for a worker who is `discoverable`, which the
+ * aggregation enforces, and they are what let an employer tell two otherwise
+ * identical candidates apart before deciding whom to invite. Contact details are
+ * not here: those are released by an accepted invitation, not by a search.
+ * There is no worker id, email, phone, or coordinate in the returned shape, and
+ * nothing here is reachable that would let a caller join a card back to a person
+ * beyond the name they chose to publish.
  *
  * `blocked` proofs never contribute to `verifiedProofs`, which is the whole reason
  * the anti-fraud engine exists. A worker whose history is mostly blocked proofs
@@ -394,6 +399,20 @@ export async function searchCandidates(
       // is case-insensitive, so a worker who recorded "Welding" would otherwise see
       // their own tag echoed back differently from what they typed.
       skillTag: requiredSkill,
+      // Identity, for a worker who is `discoverable` — the flag is applied in the
+      // aggregation, so a card that reaches this point belongs to someone who
+      // agreed to be found. An employer choosing between two workers who are
+      // otherwise identical on paper needs to be able to tell them apart.
+      displayName: metric.displayName,
+      avatarUrl: metric.avatarUrl,
+      // Only the verified count reaches an employer, and it already excludes
+      // withheld records — `flagged` and `fraud_blocked` are not added in.
+      //
+      // Deliberately no separate count for either. They are different claims: a
+      // `flagged` record is the engine withholding a confirmation pending a human,
+      // and a `fraud_blocked` one is a person having upheld it. Publishing them as
+      // a number against the worker would let an open question read as a settled
+      // judgement, which is the conflation the review policy exists to prevent.
       verifiedProofs: metric.verifiedProofs,
       trustScore: metric.trustScore,
       lastVerifiedAt: metric.lastVerifiedAt ? metric.lastVerifiedAt.toISOString() : null,

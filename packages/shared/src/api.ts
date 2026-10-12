@@ -4,6 +4,7 @@ import type {
   EmployerVerificationStatus,
   InvitationPreference,
   NotificationKind,
+  ProofReviewStatus,
   SkillLevel,
   UserRole,
   VerificationStatus,
@@ -97,14 +98,28 @@ export interface CapabilitySpec {
 /**
  * One candidate card, as a masked result.
  *
- * There is no worker id, name, email, phone, avatar, or coordinate in this shape.
+ * There is no worker id, email, phone, or coordinate in this shape.
  * `candidateHandle` is the only way to act on the card, and the server resolves
- * it solely for the employer that search was run for.
+ * it solely for the employer that search was run for. A name and an optional
+ * photo are present because the worker is `discoverable`; contact details are
+ * still withheld until an invitation is accepted.
  */
 export interface CandidateCard {
   /** Opaque, employer-scoped, expiring. Not derivable from the worker. */
   candidateHandle: string;
   skillTag: string;
+  /**
+   * The worker's name, or null when they have not set one.
+   *
+   * Present only because the worker is `discoverable`: that flag is the worker's
+   * own statement that they may be found by an employer, and it is enforced at the
+   * aggregation layer rather than here, so a card that exists at all is a card
+   * whose owner agreed to be found. Nothing else identifying rides along — no id,
+   * no email, no phone, no coordinates.
+   */
+  displayName: string | null;
+  /** A photo the worker chose to upload. Null is ordinary and needs no substitute upload. */
+  avatarUrl: string | null;
   /** Count of proofs for this skill confirmed by a client. Never includes blocked ones. */
   verifiedProofs: number;
   /**
@@ -277,6 +292,43 @@ export interface AdminEmployersResponse {
 }
 
 /**
+ * One withheld work record, as a reviewer sees it.
+ *
+ * Everything here is already on the record or derivable from it. There is no
+ * worker identity, no name, no email, and no contact handle: a reviewer is
+ * deciding whether an automated integrity decision was fair, and that question is
+ * answerable from the evidence and the signals alone.
+ */
+export interface AdminProofReviewItem {
+  proofId: string;
+  skillTag: string | null;
+  description: string;
+  /** The plain sentence the worker was shown. */
+  flagReason: string | null;
+  flaggedAt: string | null;
+  reviewStatus: ProofReviewStatus;
+  /** `flagged` until a reviewer upholds it; `fraud_blocked` once they have. */
+  verificationStatus: 'flagged' | 'fraud_blocked';
+  /** The engine's number, for the reviewer. Never sent to the worker. */
+  fraudScore: number | null;
+  /** What the client actually did. A rejection is never reviewable. */
+  clientResponse: 'confirmed' | 'rejected' | null;
+}
+
+/**
+ * The two decisions a reviewer may take on a withheld record.
+ *
+ * `upheld` is the only path to `fraud_blocked` anywhere in the system, and
+ * `overturned` is the only path back to `verified`. Both are terminal.
+ */
+export const PROOF_REVIEW_OUTCOMES = ['upheld', 'overturned'] as const;
+export type ProofReviewOutcome = (typeof PROOF_REVIEW_OUTCOMES)[number];
+
+export interface AdminProofReviewResponse {
+  items: AdminProofReviewItem[];
+}
+
+/**
  * Result of registering, confirming, or signing in.
  *
  * `session` is null only while the account is unconfirmed; E-007 removed the
@@ -313,6 +365,9 @@ export interface ProfileResponse {
    * Privacy and sharing state for the caller's own account.
    *
    * `discoverable` controls whether the worker appears in employer search.
+   * `showNameOnVerificationLink` controls whether the worker is named on the
+   * customer page reached by a confirmation link — a different audience, because
+   * such a link is forwardable, so one flag cannot honestly cover both.
    * `publicProfile` controls whether `/public/profiles/:slug` answers;
    * `publicSlug` is the unguessable address of that page, generated once and
    * non-empty only while the page is enabled. `invitationPreference` says which
@@ -321,6 +376,7 @@ export interface ProfileResponse {
    * as the worker defaults and are ignored.
    */
   discoverable: boolean;
+  showNameOnVerificationLink: boolean;
   publicProfile: boolean;
   publicSlug: string | null;
   invitationPreference: InvitationPreference;
@@ -392,18 +448,50 @@ export interface ProofsResponse {
  * A single log entry's detail, for the logbook detail screen.
  *
  * `editable` is the freeze rule: a log can be edited only while its
- * verification is still pending AND no verification link has actually been
- * sent to anyone. Once a link is out — or the proof has been verified,
- * rejected, or blocked — the record is frozen, so an edited record can never
- * be confirmed by a link that was already handed out.
+ * verification is still pending AND no confirmation link is live for it. Once a
+ * link is out — or the proof has been verified, rejected, or blocked — the
+ * record is frozen, so an edited record can never be confirmed by a link that was
+ * already handed out. A link that has simply run out stops the freeze again, so a
+ * worker who spotted a mistake after the seven days can still correct it.
+ *
+ * The field is named for the link rather than for a delivery, because the
+ * work-logging form does not collect a client's number any more: what matters is
+ * whether someone can still answer, not whether a messaging provider accepted it.
  */
 export interface ProofDetail extends ProofListItem {
   /** Whether the worker may change this entry right now. */
   editable: boolean;
-  /** Whether a confirmation link was already delivered for this entry. */
-  verificationLinkSent: boolean;
+  /** Whether a confirmation link is live and could still be answered. */
+  verificationOutstanding: boolean;
+  /**
+   * Whether a link was issued for this entry and ran out without an answer.
+   *
+   * Distinct from `verificationOutstanding` because the two call for different
+   * words: one is a request still open, the other is one that has lapsed and can
+   * be replaced. A log that was never issued a link is neither.
+   */
+  verificationLinkExpired: boolean;
   /** When the outstanding single-use link stops working. Null once used/expired/concluded. */
   verificationExpiresAt: string | null;
+  /**
+   * When the platform withheld this record, or null if it never was.
+   *
+   * Set for both `flagged` and `fraud_blocked`. A worker who cannot see that a
+   * record stopped counting has no way to respond to it, which is how a penalty
+   * becomes indefensible.
+   */
+  flaggedAt: string | null;
+  /**
+   * A plain-language sentence naming what raised the record, safe to show the
+   * worker. Never a score, a threshold, or an anti-fraud signal: those describe
+   * the detector rather than helping the worker answer it.
+   */
+  flagReason: string | null;
+  /** Where an appeal has got to. `none` means nothing has been challenged. */
+  reviewStatus: ProofReviewStatus;
+  reviewedAt: string | null;
+  /** When an overturned block returned this record to `verified`. */
+  restoredAt: string | null;
   /**
    * The words the API transcribed from a voice recording, when one was captured
    * and a transcription provider was configured. Null for photo proofs, for
