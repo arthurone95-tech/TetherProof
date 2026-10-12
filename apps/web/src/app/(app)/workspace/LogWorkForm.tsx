@@ -10,6 +10,7 @@ import { prettyCoords } from '@/lib/gps';
 import { SKILL_LEVELS } from '@/lib/capabilities';
 import { Field } from '@/components/ui/Field';
 import { SubmitButton } from '@/components/ui/SubmitButton';
+import { ShareLinkButton } from '@/components/proofs/ShareLinkButton';
 
 type MediaKind = 'photo' | 'voice';
 
@@ -599,18 +600,6 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
         ) : null}
       </fieldset>
 
-      <Field
-        name="verifierPhone"
-        label="Their phone number"
-        type="tel"
-        inputMode="tel"
-        maxLength={20}
-        placeholder="+233241234567"
-        autoComplete="tel"
-        error={state.field === 'verifierPhone' ? state.error : undefined}
-        hint="Optional. With a number they are sent the link to confirm this. Without one you get the link to pass on yourself."
-      />
-
       {state.error && !state.field ? (
         <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
           {state.error}
@@ -660,6 +649,13 @@ function Choice({
  * The token is shown because the API returns it exactly once and keeps only its
  * digest: nothing can produce it a second time, so hiding it here would be
  * discarding the only copy rather than protecting it.
+ *
+ * Sharing is the worker's job now. The form no longer asks for the client's number,
+ * so nothing is dispatched and nothing is claimed to have been sent — the link is
+ * handed over and the worker decides who receives it, by whichever app they already
+ * use. Both Copy and Share sit here because one of them is always available: the
+ * share sheet needs a browser that has one and a device with apps installed, and
+ * copying needs neither.
  */
 function LoggedPanel({
   result,
@@ -674,6 +670,7 @@ function LoggedPanel({
     try {
       await navigator.clipboard.writeText(result.verificationUrl);
       setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch {
       // A refused clipboard is a browser decision, not a broken submission. The
       // link is on screen and selectable, so there is nothing to report beyond
@@ -695,28 +692,34 @@ function LoggedPanel({
 
       <div className="rounded-xl border border-brand-100 p-4">
         <p className="text-sm font-medium text-ink-900">
-          {result.verificationLinkSent
-            ? 'The confirmation link was sent to the number you gave.'
-            : 'Nobody was sent a link, so this one is yours to pass on.'}
+          Nobody has been sent anything — this link is yours to pass on.
         </p>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
+        <p className="mt-1 text-sm text-ink-600">
+          Send it to the person who received the work or supervised it. They open it to read what
+          you logged, look at the photo, and confirm or reject it. No account needed.
+        </p>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
           <code className="min-w-0 flex-1 break-all rounded-lg bg-ink-900/5 px-3 py-2 text-xs text-ink-900">
             {result.verificationUrl}
           </code>
-          <button
-            type="button"
-            onClick={copy}
-            className="inline-flex min-h-11 shrink-0 items-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50"
-          >
-            {copied ? 'Copied' : 'Copy link'}
-          </button>
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <ShareLinkButton url={result.verificationUrl} />
+            <button
+              type="button"
+              onClick={copy}
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50"
+            >
+              {copied ? 'Copied' : 'Copy link'}
+            </button>
+          </div>
         </div>
         <p role="status" aria-live="polite" className="mt-2 text-sm text-brand-700">
           {copied ? 'Link copied to your clipboard.' : ''}
         </p>
         <p className="mt-1 text-sm text-ink-600">
-          It works once, and stops working on{' '}
-          {new Date(result.verificationExpiresAt).toLocaleDateString()}.
+          They can answer once, and the link stops working on{' '}
+          {new Date(result.verificationExpiresAt).toLocaleDateString()}. After that you can get a
+          fresh one from your logs.
         </p>
       </div>
 

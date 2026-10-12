@@ -5,11 +5,22 @@ import { Check, Copy, RotateCcw } from 'lucide-react';
 import { resendVerification } from '@/lib/actions';
 import type { ResendActionState } from '@/lib/actions';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
+import { ShareLinkButton } from './ShareLinkButton';
 
 interface ResendLinkButtonProps {
   proofId: string;
   /** A quiet variant for a notice tucked into a page rather than a card of its own. */
   subtle?: boolean;
+  /**
+   * What the button says.
+   *
+   * Two names for one action, because the two situations read differently. An
+   * expired link is simply replaced — "Get a fresh link". A link that is still
+   * open is *superseded*, and the worker needs to see that before tapping,
+   * because anyone already holding it will stop being able to answer — "Get a new
+   * link". Calling that one "fresh" would promise a harmless second copy.
+   */
+  label?: string;
 }
 
 /**
@@ -23,7 +34,11 @@ interface ResendLinkButtonProps {
  * whole exchange lives in one component instead of two forms converging on the
  * same action.
  */
-export function ResendLinkButton({ proofId, subtle = false }: ResendLinkButtonProps) {
+export function ResendLinkButton({
+  proofId,
+  subtle = false,
+  label = 'Get a fresh link',
+}: ResendLinkButtonProps) {
   const [state, action] = useActionState(resendVerification, {} as ResendActionState);
   const result = state.done === true ? state.result : null;
 
@@ -40,7 +55,7 @@ export function ResendLinkButton({ proofId, subtle = false }: ResendLinkButtonPr
           }
         >
           <RotateCcw aria-hidden="true" className="h-4 w-4" strokeWidth={ICON_STROKE_WIDTH} />
-          Get a fresh link
+          {label}
         </button>
       </form>
 
@@ -59,6 +74,11 @@ export function ResendLinkButton({ proofId, subtle = false }: ResendLinkButtonPr
 type FreshLinkResult = {
   verificationUrl: string;
   verificationExpiresAt: string;
+  /**
+   * Whether a provider dispatched the fresh link. Always false today, because no
+   * number is stored to dispatch to; retained so a future automatic-delivery flow
+   * reports through the same field rather than needing the contract reopened.
+   */
   verificationLinkSent: boolean;
 };
 
@@ -82,12 +102,18 @@ function FreshLink({ result }: { result: FreshLinkResult }) {
   return (
     <div className="rounded-xl border border-emerald-200/70 bg-emerald-50 p-3">
       <p className="text-sm text-emerald-900">
-        Share this link with the person confirming your work{result.verificationLinkSent ? ' — again' : ''}.
+        Share this link with the person confirming your work. It is the only link that works — the
+        one it replaces stops working now.
       </p>
       <div className="mt-2 flex items-center gap-2">
         <code className="min-w-0 flex-1 truncate rounded-lg bg-white px-3 py-2 text-xs text-ink-800">
           {result.verificationUrl}
         </code>
+        <ShareLinkButton
+          url={result.verificationUrl}
+          label="Share"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-brand-600 text-brand-700 transition-colors hover:bg-brand-50"
+        />
         <button
           type="button"
           onClick={copyLink}

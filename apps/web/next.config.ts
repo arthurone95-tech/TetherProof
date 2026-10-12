@@ -126,6 +126,11 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // The shared contracts package ships TypeScript sources in this workspace.
   transpilePackages: ['@tetherproof/shared'],
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '25mb',
+    },
+  },
   async headers() {
     return [
       {
