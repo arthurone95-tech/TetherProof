@@ -131,8 +131,9 @@ export function navFor(role: UserRole): NavItem[] {
  * person reaching them from the app gets the app's back header rather than
  * marketing chrome.
  *
- * Sign-out is not here on purpose; it lives on the Profile page, next to the
- * account it ends.
+ * Sign-out is not in this list because it is not a destination: the menu
+ * component renders it as its own row beneath these groups, where it can be a
+ * form that ends the session rather than a link.
  */
 export const ACCOUNT_MENU: ReadonlyArray<MenuGroup> = [
   {

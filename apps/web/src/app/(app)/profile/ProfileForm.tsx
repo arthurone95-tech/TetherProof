@@ -1,8 +1,9 @@
 'use client';
 
 import { useActionState, useEffect, useState } from 'react';
+import Link from 'next/link';
 import type { UserRole } from '@tetherproof/shared';
-import { Pencil } from 'lucide-react';
+import { ArrowRight, Pencil } from 'lucide-react';
 import { saveProfile } from '@/lib/actions';
 import { EMPTY_FORM, type FormState } from '@/lib/form-state';
 import { locateMessage, useGeolocation } from '@/lib/use-geolocation';
@@ -15,32 +16,23 @@ import { SubmitButton } from '@/components/ui/SubmitButton';
 import { AvatarEditor } from './AvatarEditor';
 
 /**
- * The member's own details: their photo, name, organisation, and the point
- * distances are measured from.
+ * The person behind the account: their photo, their name, and — for a worker —
+ * the point a distance is measured from.
  *
  * The page opens showing what the account says rather than a form to change it —
- * the read-only view is the answer to "who am I", and editing starts only when
- * the person asks for it. That keeps an ordinary visit from looking like a form
- * was dropped on them, and means a glance at the page is a statement about the
- * account instead of a list of empty boxes.
+ * the read-only view answers "who am I", and editing starts only when asked. A
+ * glance at the page is then a statement about the account instead of a list of
+ * empty boxes.
  *
- * One form for both roles rather than two that write the same row, because the
- * differences are about which fields exist and not about how any of them are
- * saved. An employer gets the organisation name because that is what a worker
- * reads on an invitation; a worker does not, because there is nothing for it to
- * hold.
+ * The employer's company identity does not live here: the organization name and
+ * the search location are what candidates and an administrator see, and they
+ * must not be a second, drifting copy of the Organization page. So for an
+ * employer this form edits personal details only and points at Organization for
+ * the rest, while a worker keeps their own location, which is personal to them.
  *
- * The photo is changed by tapping the photo. That opens `AvatarEditor`, one
- * sheet with the picture, a pencil and a trash button, and Save and Cancel —
- * the upload and remove actions it runs are the only writers of the photo (the
- * API is the only writer of the column: there is no client-supplied avatar URL
- * anywhere). The signed URL the API returns expires, so the page refetches it
- * with every navigation rather than caching a picture that can no longer be
- * opened.
- *
- * The location is optional and says so in as many words: leaving it blank means
- * searches run without a distance filter rather than silently measuring from a
- * stale point.
+ * The photo is changed by tapping it. `AvatarEditor` is the one sheet that
+ * uploads or removes it, so there is no second place that decides what a photo
+ * is — the API is the only writer of the column.
  */
 export function ProfileForm({
   role,
@@ -103,18 +95,39 @@ export function ProfileForm({
           </button>
           <div className="min-w-0">
             <p className="truncate text-lg font-semibold text-ink-900">{fullName ?? '—'}</p>
-            {isEmployer && organizationName ? (
-              <p className="truncate text-sm text-ink-600">{organizationName}</p>
-            ) : null}
             <p className="truncate text-sm text-ink-600">
-              {locationGps ? describeLocation(locationGps) : 'No location set.'}
+              {isEmployer ? 'Your personal account' : 'Your account'}
             </p>
+            {!isEmployer ? (
+              <p className="truncate text-sm text-ink-600">
+                {locationGps ? describeLocation(locationGps) : 'No location set.'}
+              </p>
+            ) : null}
           </div>
         </div>
 
-        {state.done === true ? (
-          <FormSuccess when>Your details are saved.</FormSuccess>
+        {isEmployer ? (
+          <Link
+            href="/employer/organization"
+            className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-brand-100 p-3 transition-colors hover:border-brand-600"
+          >
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold text-ink-900">
+                {organizationName?.trim() || 'No organization name set'}
+              </span>
+              <span className="block text-xs text-ink-600">
+                Company details and search location are managed here.
+              </span>
+            </span>
+            <ArrowRight
+              aria-hidden="true"
+              className="h-4 w-4 shrink-0 text-ink-500"
+              strokeWidth={ICON_STROKE_WIDTH}
+            />
+          </Link>
         ) : null}
+
+        <FormSuccess when={state.done === true}>Your details are saved.</FormSuccess>
 
         <div className="mt-4">
           <Button variant="secondary" onClick={() => setEditing(true)}>
@@ -156,72 +169,71 @@ export function ProfileForm({
           placeholder="Ama Mensah"
           required
           error={state.field === 'fullName' ? state.error : undefined}
+          hint={
+            isEmployer
+              ? 'Your personal name. Candidates see the organization name on their invitation.'
+              : undefined
+          }
         />
 
         {isEmployer ? (
-          <Field
-            name="organizationName"
-            label="Organization name"
-            defaultValue={organizationName ?? ''}
-            maxLength={200}
-            placeholder="Acme Solar Ltd"
-            error={state.field === 'organizationName' ? state.error : undefined}
-            hint="Workers see this on an invitation. Without it they see only your account name."
-          />
-        ) : null}
-
-        <fieldset className="rounded-xl border border-brand-100 p-4">
-          <legend className="px-1 text-sm font-medium text-ink-900">
-            {isEmployer ? 'Search location' : 'Your location'}
-          </legend>
-          <p className="mb-4 text-sm text-ink-600">
-            {isEmployer
-              ? 'Distances in search results are measured from here.'
-              : 'Employers can narrow a search by distance, and yours is measured from this point.'}{' '}
-            {locationGps
-              ? 'Currently set. Clear both fields below to turn it off.'
-              : 'Nothing is set yet, so you are not filtered by distance.'}
+          <p className="rounded-xl bg-brand-50 p-3 text-sm text-ink-700">
+            Company details and the search location are on the{' '}
+            <Link href="/employer/organization" className="font-semibold text-brand-700 underline">
+              Organization page
+            </Link>
+            .
           </p>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field
-              key={`latitude-${seed}`}
-              name="latitude"
-              label="Latitude"
-              inputMode="decimal"
-              defaultValue={prefill[0]}
-              step="any"
-            />
-            <Field
-              key={`longitude-${seed}`}
-              name="longitude"
-              label="Longitude"
-              inputMode="decimal"
-              defaultValue={prefill[1]}
-              step="any"
-            />
-          </div>
-
-          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-            <button
-              type="button"
-              onClick={fillFromDevice}
-              disabled={locateState === 'locating'}
-              className="inline-flex min-h-11 items-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {locateState === 'locating' ? 'Finding you…' : 'Use my location'}
-            </button>
-            <p className="text-sm text-ink-600">
-              Decimal degrees, for example 5.6037 and -0.1870. Clear both to remove it.
+        ) : (
+          <fieldset className="rounded-xl border border-brand-100 p-4">
+            <legend className="px-1 text-sm font-medium text-ink-900">Your location</legend>
+            <p className="mb-4 text-sm text-ink-600">
+              Employers can narrow a search by distance, and yours is measured from this point.{' '}
+              {locationGps
+                ? 'Currently set. Clear both fields below to turn it off.'
+                : 'Nothing is set yet, so you are not filtered by distance.'}
             </p>
-          </div>
 
-          {locateMessage(locateState) ? (
-            <p role="status" className="mt-2 text-sm text-ink-600">
-              {locateMessage(locateState)}
-            </p>
-          ) : null}
-        </fieldset>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field
+                key={`latitude-${seed}`}
+                name="latitude"
+                label="Latitude"
+                inputMode="decimal"
+                defaultValue={prefill[0]}
+                step="any"
+              />
+              <Field
+                key={`longitude-${seed}`}
+                name="longitude"
+                label="Longitude"
+                inputMode="decimal"
+                defaultValue={prefill[1]}
+                step="any"
+              />
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <button
+                type="button"
+                onClick={fillFromDevice}
+                disabled={locateState === 'locating'}
+                className="inline-flex min-h-11 items-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {locateState === 'locating' ? 'Finding you…' : 'Use my location'}
+              </button>
+              <p className="text-sm text-ink-600">
+                Decimal degrees, for example 5.6037 and -0.1870. Clear both to remove it.
+              </p>
+            </div>
+
+            {locateMessage(locateState) ? (
+              <p role="status" className="mt-2 text-sm text-ink-600">
+                {locateMessage(locateState)}
+              </p>
+            ) : null}
+          </fieldset>
+        )}
 
         {state.error ? (
           <p role="alert" className="text-sm font-medium text-red-800">

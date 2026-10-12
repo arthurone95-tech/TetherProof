@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Mail, Phone } from 'lucide-react';
@@ -8,13 +9,15 @@ import type {
   SentOffer,
   SentOffersResponse,
 } from '@tetherproof/shared';
-import { Avatar } from '@/components/ui/Avatar';
-import { Card } from '@/components/ui/Card';
-import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
+import { ApiRequestError } from '@/lib/api-error';
 import { apiServer, currentProfile } from '@/lib/server/api';
+import { Avatar } from '@/components/ui/Avatar';
+import { Banner } from '@/components/ui/Banner';
+import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
+import { PeopleTabs } from './PeopleTabs';
 
 export const metadata: Metadata = {
-  title: 'Candidates — TetherProof',
+  title: 'People — TetherProof',
 };
 
 const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -26,11 +29,14 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
 /**
  * The employer's invitations and the people who answered them.
  *
- * The accepted section is the one place contact details appear, and it only ever
+ * The accepted tab is the one place contact details appear, and it only ever
  * contains workers who chose to be contacted by accepting: the reveal is the
  * thing an acceptance buys, not a setting an employer can flip. Pending
  * invitations stay masked, and a decline reveals nothing beyond the fact of the
  * decline — identity flows one way, and only after agreement.
+ *
+ * The two lists are fetched independently so one endpoint being down shows an
+ * error inside its own tab rather than blanking the whole screen.
  */
 export default async function EmployerCandidatesPage() {
   const user = await currentProfile();
@@ -38,53 +44,27 @@ export default async function EmployerCandidatesPage() {
   if (user.role === 'worker') redirect('/dashboard');
   if (user.role !== 'employer') redirect('/pending');
 
-  const [acceptedResponse, sentResponse] = await Promise.all([
+  const [acceptedResult, sentResult] = await Promise.allSettled([
     apiServer<AcceptedCandidatesResponse>('/employers/candidates'),
     apiServer<SentOffersResponse>('/employers/offers'),
   ]);
 
-  const accepted = acceptedResponse.candidates;
-  const pending = sentResponse.offers.filter((offer) => offer.status === 'pending');
-  const declinedCount = sentResponse.offers.filter((offer) => offer.status === 'declined').length;
+  const accepted = acceptedResult.status === 'fulfilled' ? acceptedResult.value.candidates : [];
+  const acceptedError = loadError(acceptedResult);
+
+  const offers = sentResult.status === 'fulfilled' ? sentResult.value.offers : [];
+  const pending = offers.filter((offer) => offer.status === 'pending');
+  const declinedCount = offers.filter((offer) => offer.status === 'declined').length;
+  const awaitingError = loadError(sentResult);
 
   return (
-    <div className="flex flex-col gap-6">
-      <p className="text-sm text-ink-600">
-        Invitations you have sent and the candidates who answered. Contact details unlock the moment a
-        candidate accepts.
-      </p>
-
-      <Card title={`Accepted candidates${accepted.length > 0 ? ` (${accepted.length})` : ''}`}>
-        {accepted.length === 0 ? (
-          <EmptyState>
-            No one has accepted an invitation yet. When a candidate does, their name and contact
-            details appear here.
-          </EmptyState>
-        ) : (
-          <ul className="flex flex-col gap-3">
-            {accepted.map((candidate) => (
-              <AcceptedRow key={candidate.offerId} candidate={candidate} />
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      <Card title={`Awaiting a reply${pending.length > 0 ? ` (${pending.length})` : ''}`}>
-        {pending.length === 0 ? (
-          <EmptyState>No invitations are waiting on an answer right now.</EmptyState>
-        ) : (
-          <ul className="flex flex-col gap-3">
-            {pending.map((offer) => (
-              <PendingRow key={offer.id} offer={offer} />
-            ))}
-          </ul>
-        )}
-        {declinedCount > 0 ? (
-          <p className="mt-4 rounded-xl bg-neutral-50 p-3 text-xs text-ink-600">
-            {declinedCount} {declinedCount === 1 ? 'invitation was' : 'invitations were'} declined.
-          </p>
-        ) : null}
-      </Card>
+    <div className="flex flex-col gap-4">
+      <PeopleTabs
+        acceptedCount={accepted.length}
+        awaitingCount={pending.length}
+        accepted={<AcceptedPanel candidates={accepted} error={acceptedError} />}
+        awaiting={<AwaitingPanel pending={pending} declinedCount={declinedCount} error={awaitingError} />}
+      />
 
       <div className="rounded-2xl border border-dashed border-brand-200 bg-brand-50/20 p-4 text-sm text-ink-600">
         Not enough candidates yet?{' '}
@@ -93,6 +73,74 @@ export default async function EmployerCandidatesPage() {
         </Link>{' '}
         to invite more people.
       </div>
+    </div>
+  );
+}
+
+/** A readable reason for a failed sidebar read, or null when it succeeded. */
+function loadError(result: PromiseSettledResult<unknown>): string | null {
+  if (result.status === 'fulfilled') return null;
+  return result.reason instanceof ApiRequestError
+    ? result.reason.message
+    : 'We could not load this list just now. Please try again.';
+}
+
+function AcceptedPanel({ candidates, error }: { candidates: AcceptedCandidate[]; error: string | null }) {
+  if (error) {
+    return (
+      <Banner tone="problem" title="Could not load accepted candidates">
+        {error}
+      </Banner>
+    );
+  }
+
+  if (candidates.length === 0) {
+    return (
+      <EmptyState>
+        No one has accepted an invitation yet. When a candidate does, their name and contact details
+        appear here.
+      </EmptyState>
+    );
+  }
+
+  return (
+    <ul className="flex flex-col gap-3">
+      {candidates.map((candidate) => (
+        <AcceptedRow key={candidate.offerId} candidate={candidate} />
+      ))}
+    </ul>
+  );
+}
+
+function AwaitingPanel({
+  pending,
+  declinedCount,
+  error,
+}: {
+  pending: SentOffer[];
+  declinedCount: number;
+  error: string | null;
+}) {
+  if (error) {
+    return <Banner tone="problem" title="Could not load your invitations">{error}</Banner>;
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {pending.length === 0 ? (
+        <EmptyState>No invitations are waiting on an answer right now.</EmptyState>
+      ) : (
+        <ul className="flex flex-col gap-3">
+          {pending.map((offer) => (
+            <PendingRow key={offer.id} offer={offer} />
+          ))}
+        </ul>
+      )}
+      {declinedCount > 0 ? (
+        <p className="rounded-xl bg-neutral-50 p-3 text-xs text-ink-600">
+          {declinedCount} {declinedCount === 1 ? 'invitation was' : 'invitations were'} declined.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -170,6 +218,6 @@ function PendingRow({ offer }: { offer: SentOffer }) {
   );
 }
 
-function EmptyState({ children }: { children: React.ReactNode }) {
+function EmptyState({ children }: { children: ReactNode }) {
   return <p className="rounded-xl bg-brand-50 p-4 text-sm text-ink-600">{children}</p>;
 }

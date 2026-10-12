@@ -114,15 +114,15 @@ export function AppHeader({
  * Explicit rather than derived from the navigation items because the two do not
  * agree everywhere: `/profile` is a section by name but no longer a tab, and
  * `/invites` keeps the brand in the header. Longest match wins, so
- * `/employer/search` reads "Candidate search" rather than being caught by the
+ * `/employer/search` reads "Find candidates" rather than being caught by the
  * shorter `/employer` entry.
  */
 const SECTION_TITLES: ReadonlyArray<readonly [string, string]> = [
   ['/workspace', 'Workspace'],
   ['/logs', 'Logs'],
   ['/profile', 'Profile'],
-  ['/employer/search', 'Candidate search'],
-  ['/employer/candidates', 'Candidates'],
+  ['/employer/search', 'Find candidates'],
+  ['/employer/candidates', 'People'],
   ['/employer/organization', 'Organization'],
   ['/admin', 'Approvals'],
 ];

@@ -2,9 +2,7 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import type { ConnectionsResponse, WorkerCapabilityProfileResponse } from '@tetherproof/shared';
 import { Card } from '@/components/ui/Card';
-import { signOut } from '@/lib/actions';
 import { currentProfile, apiServer } from '@/lib/server/api';
-import { SignOutButton } from '@/components/shell/SignOutButton';
 import { CapabilitiesCard } from './CapabilitiesCard';
 import { ConnectionsCard } from './ConnectionsCard';
 import { ProfileForm } from './ProfileForm';
@@ -18,11 +16,13 @@ export const metadata: Metadata = {
  * Where a member reads and edits what their account says about them, and — for
  * a worker — what the account proves.
  *
- * Profile is a primary tab now, so the page carries its own heading in the
- * header and keeps the bottom navigation. It shows the details card every role
- * has (photo, name, organisation, location), open for editing on request, and
- * the worker-only record: the proven capabilities with per-skill levels and
- * verified counts, the shareable page link, and the connected work sources.
+ * Opened from the account menu, so its header is a back header carrying the
+ * page's name. The details card every role has is personal: a photo, a name,
+ * and (for a worker) the location distances are measured from. An employer's
+ * organization name and search location are not edited here because they are
+ * not personal — they live on the Organization page, one source of truth for
+ * what candidates and an administrator see. The rest of the page is the worker
+ * record: proven capabilities, the shareable page, and the connected sources.
  *
  * The capability read and the connection read are deliberately parallel: one
  * round trip for both, and either failing on its own hides that card rather
@@ -76,13 +76,6 @@ export default async function ProfilePage() {
           <ConnectionsCard connections={connections.connections} />
         </Card>
       ) : null}
-
-      <Card title="Sign out">
-        <p className="text-sm text-ink-600">Ends your session on this device only.</p>
-        <form action={signOut} className="mt-4">
-          <SignOutButton />
-        </form>
-      </Card>
     </div>
   );
 }

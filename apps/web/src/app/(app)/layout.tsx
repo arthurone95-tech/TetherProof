@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
-import type { NotificationsResponse, ReceivedOffersResponse } from '@tetherproof/shared';
 import { AppShell } from '@/components/shell/AppShell';
 import { homeFor, navFor, roleLabel } from '@/lib/navigation';
-import { apiServer, currentProfile } from '@/lib/server/api';
+import { currentProfile } from '@/lib/server/api';
+import { getInvitationInbox, getNotifications } from '@/lib/server/shell-data';
 
 /**
  * The frame around every signed-in screen.
@@ -61,7 +61,7 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
 async function pendingInvitationsFor(role: string): Promise<number> {
   if (role !== 'worker') return 0;
   try {
-    const inbox = await apiServer<ReceivedOffersResponse>('/invites/offers');
+    const inbox = await getInvitationInbox();
     return inbox.pendingCount;
   } catch {
     return 0;
@@ -81,7 +81,7 @@ async function pendingInvitationsFor(role: string): Promise<number> {
 async function unreadNotificationsFor(role: string): Promise<number> {
   if (role !== 'worker' && role !== 'employer') return 0;
   try {
-    const feed = await apiServer<NotificationsResponse>('/notifications');
+    const feed = await getNotifications();
     return feed.unreadCount;
   } catch {
     return 0;

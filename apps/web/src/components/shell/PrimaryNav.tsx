@@ -41,11 +41,17 @@ export function PrimaryNav({ items, variant, badge }: PrimaryNavProps) {
   const pathname = usePathname();
   const badged = badge && badge.count > 0 ? badge : undefined;
 
+  // The one destination this path belongs to, chosen by the longest matching
+  // address rather than the first test. `/employer` is a prefix of every other
+  // employer tab, so a plain prefix test lit Home on all of them; the most
+  // specific match is the screen the member is actually standing on.
+  const activeHref = activeHrefFor(items, pathname);
+
   if (variant === 'tabs') {
     return (
       <ul className="flex">
         {items.map((item) => {
-          const active = isActive(item.href, pathname);
+          const active = item.href === activeHref;
           const count = badged?.href === item.href ? badged.count : 0;
           return (
             <li key={item.href} className="min-w-0 flex-1">
@@ -82,7 +88,7 @@ export function PrimaryNav({ items, variant, badge }: PrimaryNavProps) {
   return (
     <ul className="flex items-center gap-1">
       {items.map((item) => {
-        const active = isActive(item.href, pathname);
+        const active = item.href === activeHref;
         const count = badged?.href === item.href ? badged.count : 0;
         return (
           <li key={item.href}>
@@ -110,12 +116,24 @@ export function PrimaryNav({ items, variant, badge }: PrimaryNavProps) {
 }
 
 /**
- * A destination is active for its own address and for anything underneath it,
- * so `/settings/account` also marks itself when a future settings page is added.
- * Anchors and query strings are not part of the address the router reports, so
- * they need no handling here.
+ * The active destination for a path: the longest of the items it sits under.
+ *
+ * An item covers its own address and anything below it, so a worker on
+ * `/dashboard` is on Home and a nested future page under `/employer/search`
+ * stays on Candidate search. When two items both cover the path — the employer
+ * Dashboard (`/employer`) and any of its siblings — the longer (more specific)
+ * address wins, which is the page actually being shown.
  */
-function isActive(href: string, pathname: string): boolean {
+function activeHrefFor(items: NavItem[], pathname: string): string | null {
+  let match: string | null = null;
+  for (const item of items) {
+    if (!isWithin(item.href, pathname)) continue;
+    if (match === null || item.href.length > match.length) match = item.href;
+  }
+  return match;
+}
+
+function isWithin(href: string, pathname: string): boolean {
   if (pathname === href) return true;
   return pathname.startsWith(href.endsWith('/') ? href : `${href}/`);
 }

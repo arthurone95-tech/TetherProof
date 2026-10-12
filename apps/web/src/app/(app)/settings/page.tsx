@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { ShieldCheck, UserRound, ChevronRight, type LucideIcon } from 'lucide-react';
+import { Building2, ChevronRight, ShieldCheck, Trash2, UserRound, type LucideIcon } from 'lucide-react';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 import { currentProfile } from '@/lib/server/api';
 
@@ -9,27 +9,48 @@ export const metadata: Metadata = {
   title: 'Settings — TetherProof',
 };
 
+interface Entry {
+  href: string;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+}
+
 /**
- * The settings index: one entry per group of choices.
+ * The settings index: real, grouped choices.
  *
- * Opened from the header menu, so the header shows a back icon and "Settings"
- * and the page carries no heading of its own. The privacy entry exists only for
- * workers — those choices (who may find you, invite you, and see your record)
- * are worker concepts, and an empty group would be worse than an absent one.
- * Account, which every role can delete, is the one entry everyone gets.
+ * Everything here is something the account can actually save and the API
+ * enforces. The entries are grouped by what they are about — the member's own
+ * details, the worker's sharing preferences, and — kept apart and marked
+ * destructive — deleting the account. A group that would be empty is left out
+ * instead of shown as a heading with nothing under it: an employer has no
+ * worker privacy choices, and inventing a decoration for that would imply a
+ * setting they do not have.
  */
 export default async function SettingsPage() {
   const profile = await currentProfile();
   if (!profile) redirect('/login');
 
-  const entries: Array<{ href: string; title: string; description: string; icon: LucideIcon }> = [
+  const account: Entry[] = [
     {
-      href: '/settings/account',
-      title: 'Account',
-      description: 'Delete your account and start its data cleanup.',
+      href: '/profile',
+      title: 'Your profile',
+      description: 'Your name, photo, and location.',
       icon: UserRound,
     },
-    ...(profile.role === 'worker'
+  ];
+
+  if (profile.role === 'employer') {
+    account.push({
+      href: '/employer/organization',
+      title: 'Organization',
+      description: 'Your company name and the point searches measure from.',
+      icon: Building2,
+    });
+  }
+
+  const preferences: Entry[] =
+    profile.role === 'worker'
       ? [
           {
             href: '/settings/privacy',
@@ -38,37 +59,78 @@ export default async function SettingsPage() {
             icon: ShieldCheck,
           },
         ]
-      : []),
-  ];
+      : [];
+
+  const danger: Entry = {
+    href: '/settings/account',
+    title: 'Delete account',
+    description: 'Remove your account and start its data cleanup. This cannot be undone.',
+    icon: Trash2,
+  };
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
-      <ul className="flex flex-col gap-3">
-        {entries.map((entry) => {
-          const Icon = entry.icon;
-          return (
-            <li key={entry.href}>
-              <Link
-                href={entry.href}
-                className="flex items-center gap-3 rounded-2xl border border-brand-100 bg-white p-4 transition-colors hover:border-brand-600"
-              >
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700">
-                  <Icon aria-hidden="true" className="h-5 w-5" strokeWidth={ICON_STROKE_WIDTH} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block font-semibold text-ink-900">{entry.title}</span>
-                  <span className="block text-sm text-ink-600">{entry.description}</span>
-                </span>
-                <ChevronRight
-                  aria-hidden="true"
-                  className="h-5 w-5 shrink-0 text-ink-400"
-                  strokeWidth={ICON_STROKE_WIDTH}
-                />
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-7">
+      <SettingsGroup title="Account" entries={account} />
+
+      {preferences.length > 0 ? <SettingsGroup title="Privacy" entries={preferences} /> : null}
+
+      <section aria-labelledby="danger-heading" className="flex flex-col gap-3">
+        <h2
+          id="danger-heading"
+          className="px-1 text-xs font-bold tracking-wider text-ink-500 uppercase"
+        >
+          Danger zone
+        </h2>
+        <ul className="flex flex-col gap-3">
+          <SettingsRow entry={danger} danger />
+        </ul>
+      </section>
     </div>
+  );
+}
+
+function SettingsGroup({ title, entries }: { title: string; entries: Entry[] }) {
+  return (
+    <section aria-label={title} className="flex flex-col gap-3">
+      <h2 className="px-1 text-xs font-bold tracking-wider text-ink-500 uppercase">{title}</h2>
+      <ul className="flex flex-col gap-3">
+        {entries.map((entry) => (
+          <SettingsRow key={entry.href} entry={entry} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function SettingsRow({ entry, danger = false }: { entry: Entry; danger?: boolean }) {
+  const Icon = entry.icon;
+  return (
+    <li>
+      <Link
+        href={entry.href}
+        className={`flex items-center gap-3 rounded-2xl border bg-white p-4 transition-colors ${
+          danger ? 'border-red-200 hover:border-red-500' : 'border-brand-100 hover:border-brand-600'
+        }`}
+      >
+        <span
+          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+            danger ? 'bg-red-50 text-red-700' : 'bg-brand-50 text-brand-700'
+          }`}
+        >
+          <Icon aria-hidden="true" className="h-5 w-5" strokeWidth={ICON_STROKE_WIDTH} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className={`block font-semibold ${danger ? 'text-red-800' : 'text-ink-900'}`}>
+            {entry.title}
+          </span>
+          <span className="block text-sm text-ink-600">{entry.description}</span>
+        </span>
+        <ChevronRight
+          aria-hidden="true"
+          className={`h-5 w-5 shrink-0 ${danger ? 'text-red-700' : 'text-ink-400'}`}
+          strokeWidth={ICON_STROKE_WIDTH}
+        />
+      </Link>
+    </li>
   );
 }

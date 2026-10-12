@@ -36,10 +36,10 @@ interface AppShellProps {
  * from the current address, so neither the layout nor the pages need to know
  * which of the two they are.
  *
- * Sign-out deliberately does not live here. It is the one action a member never
- * needs in a hurry, and keeping it out of a bar every page shares means it
- * cannot be hit by a stray tap on the way to something else. It lives on the
- * profile page instead, next to the account it ends.
+ * Sign-out deliberately does not live here in the bar. It sits one level in,
+ * inside the account menu, where it belongs to the account it ends and is a
+ * deliberate choice rather than a stray tap on the way to something else. Keeping
+ * it out of the bar every page shares is what makes that distinction possible.
  *
  * The header is sticky rather than fixed, so it occupies layout space and never
  * covers the first line of a heading. The tab row for a phone is a sibling rather

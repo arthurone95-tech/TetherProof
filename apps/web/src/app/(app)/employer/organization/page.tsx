@@ -4,7 +4,7 @@ import type { EmployerApprovalResponse } from '@tetherproof/shared';
 import { Banner } from '@/components/ui/Banner';
 import { Card } from '@/components/ui/Card';
 import { apiServer, currentProfile } from '@/lib/server/api';
-import { ProfileForm } from '../ProfileForm';
+import { OrganizationForm } from './OrganizationForm';
 
 export const metadata: Metadata = {
   title: 'Organization — TetherProof',
@@ -20,9 +20,10 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
  * The employer's organization profile: the details candidates see on an
  * invitation, and the details an administrator reviews.
  *
- * The verification banner is the same fact the dashboard summarises, shown here
- * with its reason and date because this is the page where a declined employer can
- * read what to fix.
+ * The verification state leads, because whether an invitation can be sent is
+ * the one fact this page has to make obvious, and doing so needs the decision,
+ * its date, and — when declined — the reason. Below it sit the two fields that
+ * decision is based on, edited on request rather than always open.
  */
 export default async function EmployerOrganizationPage() {
   const user = await currentProfile();
@@ -33,15 +34,15 @@ export default async function EmployerOrganizationPage() {
   const approval = await apiServer<EmployerApprovalResponse>('/employers/approval');
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5">
       <VerificationNotice approval={approval} />
 
-      <Card title="Organization details">
+      <Card title="Organization">
         <p className="text-sm text-ink-600">
-          This is what candidates see on an invitation, and what an administrator reviews before
-          approving your organization.
+          Candidates see your organization name on an invitation. Distance in search results is
+          measured from your location, which is optional.
         </p>
-        <ProfileForm organizationName={user.organizationName} locationGps={user.locationGps} />
+        <OrganizationForm organizationName={user.organizationName} locationGps={user.locationGps} />
       </Card>
     </div>
   );

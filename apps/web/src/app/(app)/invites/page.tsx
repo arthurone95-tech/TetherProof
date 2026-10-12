@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import type { ReceivedOffersResponse } from '@tetherproof/shared';
-import { apiServer, currentProfile } from '@/lib/server/api';
+import { currentProfile } from '@/lib/server/api';
+import { getInvitationInbox } from '@/lib/server/shell-data';
 import { Card } from '@/components/ui/Card';
 import { RespondForm } from './RespondForm';
 
@@ -22,7 +22,7 @@ export default async function InvitesPage() {
   if (!user) redirect('/login');
   if (user.role !== 'worker') redirect(user.role === 'employer' ? '/employer' : '/pending');
 
-  const inbox = await apiServer<ReceivedOffersResponse>('/invites/offers');
+  const inbox = await getInvitationInbox();
 
   const offers = inbox.offers;
   const waiting = offers.filter((offer) => offer.status === 'pending');

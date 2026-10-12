@@ -7,12 +7,14 @@ import {
   CircleHelp,
   FileText,
   Info,
+  LogOut,
   ShieldCheck,
   SlidersHorizontal,
   User,
   type LucideIcon,
 } from 'lucide-react';
 import { ACCOUNT_MENU, type MenuIcon } from '@/lib/navigation';
+import { signOut } from '@/lib/actions';
 import { Avatar } from '@/components/ui/Avatar';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 
@@ -172,6 +174,32 @@ export function AccountMenu({ account }: { account: AccountSummary }) {
                 })}
               </div>
             ))}
+
+            {/*
+              Sign out sits in the header menu rather than as a section on the
+              Profile page. It belongs to the account, which the menu already
+              speaks for, and it is then one tap away on every screen instead of
+              a card on one screen. The row is a normal menu row — full label,
+              44px target — but it submits rather than navigating: ending the
+              session is a decision, not a destination.
+            */}
+            <div role="group" className="border-t border-brand-100 p-2">
+              <form action={signOut}>
+                <button
+                  type="submit"
+                  role="menuitem"
+                  tabIndex={-1}
+                  className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium text-ink-900 transition-colors hover:bg-brand-50 focus-visible:bg-brand-50 focus-visible:outline-none"
+                >
+                  <LogOut
+                    aria-hidden="true"
+                    className="h-5 w-5 shrink-0 text-ink-600"
+                    strokeWidth={ICON_STROKE_WIDTH}
+                  />
+                  Sign out
+                </button>
+              </form>
+            </div>
           </div>
         </div>
       ) : null}

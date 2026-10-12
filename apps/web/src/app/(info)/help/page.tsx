@@ -15,12 +15,12 @@ const sections = [
     body: 'Tap “Use my location” and the app asks the browser for your position, then names the area for you through the coordinates it got. Your browser must allow location access. If the GPS cannot get a fix, the app says so and you can type the coordinates yourself instead — that stays a fallback, never the main act.',
   },
   {
-    title: 'Send the confirmation link',
-    body: 'Every log makes one link that lets the person you worked with confirm it. Give them a phone number and the link is sent to them; leave it out and you get the link to share yourself, by WhatsApp, SMS, or any other way. The link works once and stops working after seven days.',
+    title: 'Share the confirmation link',
+    body: 'Every log makes one link that lets the person you worked with confirm it. We never ask for their number and never message them for you — the link is yours to pass on however you already talk to them. On a phone, tap “Share verification link” and choose WhatsApp, Messages, email, or any other app you have; on a computer, or in a browser with no sharing, “Copy link” does the same job and you paste it wherever you need it. Nothing is sent until you send it, and the person you send it to does not need a TetherProof account. The link works once and stops working after seven days.',
   },
   {
     title: 'Edit or fix a log',
-    body: 'Open the log from your Logs tab. While nothing has been sent out for confirmation yet, you can change the description, the skill, or the location. Once a confirmation link has actually been sent — or the log has been confirmed — the entry is fixed. Media can never be replaced: it was scrubbed and stored once, on purpose.',
+    body: 'Open the log from your Logs tab. While no confirmation link is open for it, you can change the description, the skill, or the location. As soon as a link is live — and permanently once the log has been answered — the entry is fixed, so the person reading it sees exactly what you wrote. If a link runs out unanswered, the log becomes editable again and you can raise a fresh one, which stops the old link working straight away. Media can never be replaced: it was scrubbed and stored once, on purpose.',
   },
   {
     title: 'Invitations',
