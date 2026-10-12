@@ -18,8 +18,9 @@ import type {
 } from '@tetherproof/shared';
 import type { NotificationKind } from '@tetherproof/shared';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
-import { markNotificationsRead } from '@/lib/actions';
-import { apiServer, currentProfile } from '@/lib/server/api';
+import { markNotificationsRead, openNotification } from '@/lib/actions';
+import { currentProfile } from '@/lib/server/api';
+import { getNotifications } from '@/lib/server/shell-data';
 
 export const metadata: Metadata = {
   title: 'Notifications — TetherProof',
@@ -48,7 +49,7 @@ export default async function NotificationsPage() {
 
   let feed: NotificationsResponse | null = null;
   try {
-    feed = await apiServer<NotificationsResponse>('/notifications');
+    feed = await getNotifications();
   } catch {
     feed = null;
   }
@@ -167,12 +168,23 @@ function NotificationRow({ item }: { item: NotificationItem }) {
           {DATE_FORMATTER.format(new Date(item.createdAt))}
         </p>
         {item.link ? (
-          <Link
-            href={item.link}
-            className="mt-2 inline-flex text-sm font-semibold text-brand-700 hover:text-brand-800"
-          >
-            View
-          </Link>
+          /*
+            A form rather than a link, because opening the notification is also what
+            marks it read. A plain link would navigate without touching `readAt`,
+            which is exactly the bug this replaced: the reader arrived at the log
+            and the count never moved. The endpoint is idempotent, so tapping an
+            already-read notification costs one write that changes nothing.
+          */
+          <form action={openNotification} className="mt-2">
+            <input type="hidden" name="notificationId" value={item.id} />
+            <input type="hidden" name="link" value={item.link} />
+            <button
+              type="submit"
+              className="text-sm font-semibold text-brand-700 hover:text-brand-800"
+            >
+              View
+            </button>
+          </form>
         ) : null}
       </div>
     </article>

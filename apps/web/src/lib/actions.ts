@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { passwordProblems } from '@tetherproof/shared';
+import { PROOF_REVIEW_OUTCOMES, passwordProblems } from '@tetherproof/shared';
 import type {
   AccountDeletionResult,
   AuthResponse,
@@ -15,7 +15,14 @@ import type {
   VerificationResendResponse,
 } from '@tetherproof/shared';
 import { ApiRequestError, isCredentialRefusal } from './api-error';
-import type { AuthCallbackResult, FormState, ProofEditState, ProofFormState } from './form-state';
+import type {
+  AuthCallbackResult,
+  AppealState,
+  FormState,
+  ProofEditState,
+  ProofFormState,
+  ReviewState,
+} from './form-state';
 import { formErrorFor } from './form-state';
 import { homeFor } from './navigation';
 import { apiPublic, apiServer, apiServerForm, currentProfile } from './server/api';
@@ -359,46 +366,53 @@ export async function deleteAccount(): Promise<void> {
  * the organisation, and the origin their searches measure from.
  */
 export async function saveProfile(_previous: FormState, formData: FormData): Promise<FormState> {
-  const organizationName = String(formData.get('organizationName') ?? '').trim();
-  const latitude = String(formData.get('latitude') ?? '').trim();
-  const longitude = String(formData.get('longitude') ?? '').trim();
-
   const body: Record<string, unknown> = {};
 
-  // Sent only when the form actually has the input. The employer's details card
-  // does not ask for a person's name, and a missing field has to mean "leave it
-  // alone" rather than "clear it" — the API refuses an empty name instead of
-  // accepting one, so a form that never sent it would be refused for a value it
-  // never chose.
+  // Each field is sent only when the form actually carries it. A form that
+  // omitted a field means "leave it alone", never "clear it": the employer's
+  // personal card does not ask for the organization name or a search location,
+  // and sending an empty value from a form that never showed the input would
+  // silently wipe what another screen set. A field the form does carry is
+  // handled, including an explicit clear of the location.
   if (formData.has('fullName')) {
     const fullName = String(formData.get('fullName') ?? '').trim();
     if (!fullName) return { error: 'Enter your name.', field: 'fullName' };
     body.fullName = fullName;
   }
 
-  if (formData.has('organizationName') && organizationName) {
+  if (formData.has('organizationName')) {
+    const organizationName = String(formData.get('organizationName') ?? '').trim();
+    if (!organizationName) return { error: 'Enter your organization name.', field: 'organizationName' };
     body.organizationName = organizationName;
   }
 
-  // An empty pair means "no location", which is a real choice: searches then run
-  // without a distance filter instead of from a stale point. One coordinate alone
-  // is not a location and is refused rather than silently filled in from the other.
-  let locationGps: string | null;
-  if (latitude === '' && longitude === '') {
-    locationGps = null;
-  } else if (latitude === '' || longitude === '') {
-    return { error: 'Enter both a latitude and a longitude, or clear both.' };
-  } else {
-    const parsed = parseCoordinatePair(latitude, longitude);
-    if (!parsed) return { error: 'That is not a valid location. Use decimal degrees.' };
-    locationGps = parsed;
+  if (formData.has('latitude') || formData.has('longitude')) {
+    const latitude = String(formData.get('latitude') ?? '').trim();
+    const longitude = String(formData.get('longitude') ?? '').trim();
+
+    // An empty pair means "no location", which is a real choice: searches then
+    // run without a distance filter instead of from a stale point. One
+    // coordinate alone is refused rather than filled in from the other.
+    if (!latitude && !longitude) {
+      body.locationGps = null;
+    } else if (!latitude || !longitude) {
+      return { error: 'Enter both latitude and longitude, or clear both.', field: 'latitude' };
+    } else {
+      const locationGps = parseCoordinatePair(latitude, longitude);
+      if (!locationGps) {
+        return { error: 'Enter valid coordinates, for example 5.6037 and -0.1870.', field: 'latitude' };
+      }
+      body.locationGps = locationGps;
+    }
   }
-  body.locationGps = locationGps;
 
   try {
-    await apiServer('/auth/profile', { method: 'PATCH', body });
+    if (Object.keys(body).length > 0) {
+      await apiServer('/auth/profile', { method: 'PATCH', body });
+    }
     revalidatePath('/profile');
     revalidatePath('/employer');
+    revalidatePath('/employer/organization');
     return { done: true };
   } catch (error) {
     return formErrorFor(error, 'We could not save that. Please try again.');
@@ -620,7 +634,6 @@ const PROOF_FIELD_FOR_PATH: Record<string, NonNullable<ProofFormState['field']>>
   description: 'description',
   skillTag: 'skillTag',
   submissionGps: 'submissionGps',
-  verifierPhone: 'verifierPhone',
 };
 
 /** The same mapping for the edit form, which has no verifier-phone field. */
@@ -701,14 +714,6 @@ export async function submitProof(
     };
   }
 
-  const verifierPhone = String(formData.get('verifierPhone') ?? '').trim();
-  if (verifierPhone && !/^\+?[0-9]{7,15}$/.test(verifierPhone)) {
-    return {
-      error: 'Enter a phone number with country code, such as +233241234567.',
-      field: 'verifierPhone',
-    };
-  }
-
   const submissionGps = String(formData.get('submissionGps') ?? '').trim();
   if (submissionGps && !/^-?\d{1,3}(\.\d+)?,-?\d{1,3}(\.\d+)?$/.test(submissionGps)) {
     return {
@@ -725,7 +730,7 @@ export async function submitProof(
     }
   }
 
-  for (const key of ['submissionGps', 'verifierPhone']) {
+  for (const key of ['submissionGps']) {
     const value = String(formData.get(key) ?? '').trim();
     if (value) formData.set(key, value);
     else formData.delete(key);
@@ -856,20 +861,23 @@ export async function updateProof(
  * API accepts, so the card cannot drift from what the API enforces — and what
  * it enforces at the layers that matter, not merely displays.
  *
- * A checkbox in HTML submits nothing when it is off and the whole string "on"
- * when it is on, so absence is the false case and presence is true. That makes
- * the two booleans deliberately asymmetric in the code: they are read with
- * `!== null`, the only honest way to tell "the member set this" from "the form
- * does not even carry this page's controls".
+ * A checkbox submits nothing when it is off and "on" when it is on, so a
+ * checkbox alone cannot say whether "off" was chosen or the control was never
+ * on the page. The form pairs each one with a hidden "off" submitted first, so
+ * the pair always carries the answer and the value read is the checkbox's — the
+ * last, present only when it was ticked. A caller that sends neither field still
+ * means "leave it alone", which the read below preserves.
  */
 export async function savePrivacySetting(_previous: FormState, formData: FormData): Promise<FormState> {
-  const discoverable = formData.get('discoverable');
-  const publicProfile = formData.get('publicProfile');
+  const discoverable = readCheckbox(formData, 'discoverable');
+  const showNameOnVerificationLink = readCheckbox(formData, 'showNameOnVerificationLink');
+  const publicProfile = readCheckbox(formData, 'publicProfile');
   const invitationPreference = String(formData.get('invitationPreference') ?? '');
 
   const body: Record<string, unknown> = {};
-  if (discoverable !== null) body.discoverable = discoverable === 'on';
-  if (publicProfile !== null) body.publicProfile = publicProfile === 'on';
+  if (discoverable !== null) body.discoverable = discoverable;
+  if (showNameOnVerificationLink !== null) body.showNameOnVerificationLink = showNameOnVerificationLink;
+  if (publicProfile !== null) body.publicProfile = publicProfile;
   if (invitationPreference) {
     if (invitationPreference !== 'all' && invitationPreference !== 'approved_only') {
       return { error: 'Choose who may invite you.' };
@@ -889,6 +897,20 @@ export async function savePrivacySetting(_previous: FormState, formData: FormDat
   } catch (error) {
     return formErrorFor(error, 'We could not save your privacy choices. Please try again.');
   }
+}
+
+/**
+ * A checkbox in a form that always carries the control.
+ *
+ * The form's hidden "off" comes first and the checkbox's "on" only exists while
+ * it is ticked, so the last value is the member's real choice. When neither
+ * arrived the control is not part of the submitted form, and `null` leaves the
+ * stored value untouched.
+ */
+function readCheckbox(formData: FormData, name: string): boolean | null {
+  const values = formData.getAll(name);
+  if (values.length === 0) return null;
+  return values[values.length - 1] === 'on';
 }
 
 /**
@@ -947,11 +969,54 @@ export async function resendVerification(
 }
 
 /**
+ * Opens one notification: marks it read, then goes where it points.
+ *
+ * The mark and the navigation are one action because opening a notification *is*
+ * the read. Splitting them would need client state to sequence, and any gap
+ * between the two is a state where the count says unread while the reader is
+ * already looking at the thing it counts.
+ *
+ * The navigation is a redirect rather than a returned link so that the tap
+ * behaves the way a link behaves: a form post answers with a redirect the browser
+ * follows, so the reader lands on the log or the offer either way, and the
+ * notifications page behind them is already revalidated when they come back.
+ *
+ * A failure to mark still navigates. The reader asked to see something; refusing
+ * to show it because a convenience write failed would be a worse answer than
+ * showing it with the count one higher than it should be.
+ */
+export async function openNotification(formData: FormData): Promise<void> {
+  const notificationId = String(formData.get('notificationId') ?? '');
+  const link = String(formData.get('link') ?? '');
+
+  // Only same-site paths. The link is stored by the API, but a redirect to
+  // somewhere off-origin would turn a tap in the feed into an outbound hop, and
+  // `redirect()` accepts an absolute URL without complaint.
+  const isInternal = link.startsWith('/') && !link.startsWith('//');
+  const destination = isInternal ? link : '/notifications';
+
+  if (notificationId) {
+    try {
+      await apiServer(`/notifications/${encodeURIComponent(notificationId)}/read`, {
+        method: 'POST',
+        body: {},
+      });
+    } catch {
+      // As above: the navigation still happens.
+    }
+  }
+
+  revalidatePath('/notifications');
+  redirect(destination);
+}
+
+/**
  * Marks every unread notification as read.
  *
- * Reading the feed is the read action; a failure here is a convenience that
- * did not happen and is not worth an error screen, so it degrades to a plain
- * revalidation rather than a reported failure.
+ * Kept as an explicit bulk action. It used to double as the side effect of
+ * reading the feed; it no longer is, so this is the one way to clear everything
+ * at once, and a failure here is a convenience that did not happen rather than an
+ * error worth a screen.
  */
 export async function markNotificationsRead(): Promise<void> {
   try {
@@ -960,6 +1025,77 @@ export async function markNotificationsRead(): Promise<void> {
     // Marking read is a convenience; a failure is not worth an error screen.
   }
   revalidatePath('/notifications');
+}
+
+/**
+ * Records a reviewer's decision on a record the engine withheld.
+ *
+ * The two buttons are not opposites. `upheld` is the only route to
+ * `fraud_blocked` in the whole system and `overturned` the only route back to
+ * `verified`, so the copy on each has to say what it costs and what it returns
+ * rather than reading as approve/reject.
+ *
+ * No free text. The decision is already attributable — the API stores the admin's
+ * own id and the time — and a note field on a screen where the wrong click is
+ * irreversible would suggest the decision is negotiable afterwards. It is not.
+ */
+export async function decideProofReview(
+  _previous: ReviewState,
+  formData: FormData,
+): Promise<ReviewState> {
+  const proofId = String(formData.get('proofId') ?? '');
+  const outcome = String(formData.get('outcome') ?? '');
+  if (!proofId || !PROOF_REVIEW_OUTCOMES.includes(outcome as never)) {
+    return { error: 'That decision could not be read. Please try again.' };
+  }
+
+  try {
+    const res = await apiServer<{ proofId: string; verificationStatus: string }>(
+      `/admin/proof-review/${encodeURIComponent(proofId)}`,
+      { method: 'POST', body: { outcome } },
+    );
+    revalidatePath('/admin');
+    return { done: true, outcome, verificationStatus: res.verificationStatus };
+  } catch (error) {
+    return {
+      error: messageFor(
+        error,
+        'That decision was not recorded. Nothing has changed — please try again.',
+      ),
+    };
+  }
+}
+
+/**
+ * Asks for a record the platform withheld to be looked at again.
+ *
+ * Takes no free text. The reviewer needs the evidence and the recorded signals,
+ * both of which are already on the record, and a worker's most likely reason for
+ * writing anything here would be a single "please" that adds nothing to either.
+ *
+ * Returns rather than throws, because the failure is a line under a button on the
+ * page the worker is already looking at — the same page an error screen would
+ * replace with something less useful.
+ */
+export async function appealProof(
+  _previous: AppealState,
+  formData: FormData,
+): Promise<AppealState> {
+  const proofId = String(formData.get('proofId') ?? '');
+  if (!proofId) return { error: 'That log could not be found.' };
+
+  try {
+    const res = await apiServer<{ proofId: string; reviewStatus: string }>(
+      `/workers/proofs/${encodeURIComponent(proofId)}/appeal`,
+      { method: 'POST', body: {} },
+    );
+    revalidatePath(`/logs/${proofId}`);
+    return { done: true, reviewStatus: res.reviewStatus };
+  } catch (error) {
+    return {
+      error: messageFor(error, 'We could not send that request. Please try again in a moment.'),
+    };
+  }
 }
 
 /**
