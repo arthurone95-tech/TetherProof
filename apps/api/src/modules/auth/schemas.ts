@@ -138,6 +138,7 @@ export const updateProfileSchema = z
      * consumer reads an employer's `discoverable`.
      */
     discoverable: z.boolean().optional(),
+    showNameOnVerificationLink: z.boolean().optional(),
     publicProfile: z.boolean().optional(),
     invitationPreference: z.enum(['all', 'approved_only']).optional(),
   })

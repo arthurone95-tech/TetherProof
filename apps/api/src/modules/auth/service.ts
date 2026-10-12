@@ -545,6 +545,7 @@ export async function getProfile(userId: string): Promise<ProfileResponse> {
       organizationName: profiles.organizationName,
       avatarUrl: profiles.avatarUrl,
       discoverable: profiles.discoverable,
+      showNameOnVerificationLink: profiles.showNameOnVerificationLink,
       publicProfile: profiles.publicProfile,
       publicSlug: profiles.publicSlug,
       invitationPreference: profiles.invitationPreference,
@@ -563,6 +564,7 @@ export async function getProfile(userId: string): Promise<ProfileResponse> {
   return {
     ...row,
     discoverable: row.discoverable ?? true,
+    showNameOnVerificationLink: row.showNameOnVerificationLink ?? true,
     publicProfile: row.publicProfile ?? false,
     publicSlug: row.publicSlug ?? null,
     invitationPreference: row.invitationPreference ?? 'all',
@@ -600,6 +602,9 @@ export async function updateProfile(userId: string, input: UpdateProfileInput) {
   if (input.locationGps !== undefined) patch.locationGps = input.locationGps;
   if (input.organizationName !== undefined) patch.organizationName = input.organizationName;
   if (input.discoverable !== undefined) patch.discoverable = input.discoverable;
+  if (input.showNameOnVerificationLink !== undefined) {
+    patch.showNameOnVerificationLink = input.showNameOnVerificationLink;
+  }
   if (input.invitationPreference !== undefined) {
     patch.invitationPreference = input.invitationPreference;
   }
@@ -634,6 +639,7 @@ export async function updateProfile(userId: string, input: UpdateProfileInput) {
       organizationName: profiles.organizationName,
       avatarUrl: profiles.avatarUrl,
       discoverable: profiles.discoverable,
+      showNameOnVerificationLink: profiles.showNameOnVerificationLink,
       publicProfile: profiles.publicProfile,
       publicSlug: profiles.publicSlug,
       invitationPreference: profiles.invitationPreference,
@@ -649,6 +655,7 @@ export async function updateProfile(userId: string, input: UpdateProfileInput) {
   return {
     ...row,
     discoverable: row.discoverable ?? true,
+    showNameOnVerificationLink: row.showNameOnVerificationLink ?? true,
     publicProfile: row.publicProfile ?? false,
     publicSlug: row.publicSlug ?? null,
     invitationPreference: row.invitationPreference ?? 'all',

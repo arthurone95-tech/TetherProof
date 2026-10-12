@@ -33,6 +33,7 @@ export default async function PrivacyPage() {
       <Card title="Privacy & sharing">
         <PrivacyForm
           discoverable={profile.discoverable}
+          showNameOnVerificationLink={profile.showNameOnVerificationLink}
           publicProfile={profile.publicProfile}
           publicSlug={profile.publicSlug}
           invitationPreference={profile.invitationPreference}

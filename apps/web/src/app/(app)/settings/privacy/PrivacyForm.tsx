@@ -11,6 +11,7 @@ import { SubmitButton } from '@/components/ui/SubmitButton';
 
 interface PrivacyFormProps {
   discoverable: boolean;
+  showNameOnVerificationLink: boolean;
   publicProfile: boolean;
   publicSlug: string | null;
   invitationPreference: InvitationPreference;
@@ -37,12 +38,13 @@ const INVITATION_OPTIONS: Array<{
 /**
  * The worker's three privacy choices, saved in one form.
  *
- * A checkbox submits "on" or nothing at all, so the two visibility toggles are
- * read as "present means true" — which is also why each keeps its `defaultChecked`
- * from the API rather than doing anything clever: the form always says what the
- * account already holds until the member changes it. The invitation preference
- * is radio-empty-proof, so it is the only control whose absence is checked
- * before the whole form is refused with "nothing to change".
+ * A checkbox alone submits "on" when ticked and nothing at all when unticked,
+ * which cannot distinguish "off was chosen" from "the control was never on the
+ * form". Each visibility toggle is therefore paired with a hidden "off" posted
+ * first, and the save reads the last value it receives; the written answer is
+ * always the member's real choice, and the stored value is left alone only when
+ * neither arrived. Each control also keeps its `defaultChecked` from the API, so
+ * the form always shows what the account already holds until it is changed.
  *
  * Enabling the public page shows its address right away, built the same way the
  * profile card builds it — from the browser's own origin, because the server
@@ -50,6 +52,7 @@ const INVITATION_OPTIONS: Array<{
  */
 export function PrivacyForm({
   discoverable,
+  showNameOnVerificationLink,
   publicProfile,
   publicSlug,
   invitationPreference,
@@ -75,9 +78,11 @@ export function PrivacyForm({
       <fieldset className="rounded-xl border border-brand-100 p-4">
         <legend className="px-1 text-sm font-medium text-ink-900">Found in searches</legend>
         <label className="flex cursor-pointer items-start gap-3">
+          <input type="hidden" name="discoverable" value="off" />
           <input
             type="checkbox"
             name="discoverable"
+            value="on"
             defaultChecked={discoverable}
             className="mt-1 h-4 w-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
           />
@@ -86,6 +91,35 @@ export function PrivacyForm({
             <span className="mt-0.5 block text-sm text-ink-600">
               When on, you appear in employer search results and can match their specs. Turning it
               off stops new matches — invitations and offers already sent stay where they are.
+            </span>
+          </span>
+        </label>
+      </fieldset>
+
+      {/*
+        Separate from "Found in searches" on purpose. Search exposure and
+        verification-link exposure are different audiences — an employer searching
+        a skill, versus whoever ends up holding a link that is forwardable — so one
+        switch cannot honestly stand for both, and a worker who wants to be findable
+        may still not want their name on a link that travels.
+      */}
+      <fieldset className="rounded-xl border border-brand-100 p-4">
+        <legend className="px-1 text-sm font-medium text-ink-900">Confirmation links</legend>
+        <label className="flex cursor-pointer items-start gap-3">
+          <input type="hidden" name="showNameOnVerificationLink" value="off" />
+          <input
+            type="checkbox"
+            name="showNameOnVerificationLink"
+            value="on"
+            defaultChecked={showNameOnVerificationLink}
+            className="mt-1 h-4 w-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
+          />
+          <span className="min-w-0">
+            <span className="block font-medium text-ink-900">Show my name on links I send out</span>
+            <span className="mt-0.5 block text-sm text-ink-600">
+              When on, the confirmation page names you beside the work so the person you worked for
+              knows who they are answering. Turning it off leaves your name off that page. The work
+              and its evidence are still shown either way, and nothing else about you is.
             </span>
           </span>
         </label>
@@ -115,9 +149,11 @@ export function PrivacyForm({
       <fieldset className="rounded-xl border border-brand-100 p-4">
         <legend className="px-1 text-sm font-medium text-ink-900">Public capability page</legend>
         <label className="flex cursor-pointer items-start gap-3">
+          <input type="hidden" name="publicProfile" value="off" />
           <input
             type="checkbox"
             name="publicProfile"
+            value="on"
             defaultChecked={publicProfile}
             className="mt-1 h-4 w-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
           />
