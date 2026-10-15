@@ -152,6 +152,24 @@ export default async function LogDetailPage({
           </p>
           <p className="mt-3 whitespace-pre-wrap text-ink-700">{proof.transcript}</p>
         </div>
+      ) : proof.mediaKind === 'audio' ? (
+        /*
+          Said rather than left as a gap. Transcription is optional and returns
+          nothing when no provider is configured, when the provider refuses, or
+          when it answers with no usable text, so a recording with no transcript is
+          an ordinary outcome — and a silent one reads as a missing feature or a
+          failed upload rather than as a convenience that was never available.
+        */
+        <div className="rounded-2xl border border-brand-100 bg-white p-5">
+          <h2 className="text-sm font-semibold tracking-wide text-ink-900 uppercase">
+            Voice recording transcript
+          </h2>
+          <p className="mt-2 text-sm text-ink-600">
+            No text version was produced for this recording. Transcribing a voice note is a
+            convenience that depends on a provider being available, and it is skipped when one is
+            not. The recording above is unaffected and is what gets kept and verified.
+          </p>
+        </div>
       ) : null}
 
       {proof.submissionGps ? (
@@ -168,6 +186,16 @@ export default async function LogDetailPage({
           <h2 className="text-sm font-semibold tracking-wide text-amber-900 uppercase">
             Confirmation
           </h2>
+          {/*
+            Said once for both branches rather than in each. The platform holds no
+            phone number and sends nothing, so a worker reading "raise a fresh
+            link" could reasonably wait for a message that will never arrive —
+            the link is theirs to pass on by hand.
+          */}
+          <p className="mt-2 text-sm text-amber-800">
+            Nothing is sent automatically. Whoever needs to answer has to receive this link from
+            you.
+          </p>
           {confirmationExpired ? (
             <>
               <p className="mt-2 text-sm font-medium text-amber-900">

@@ -73,7 +73,6 @@ export function ProofListItemView({
 
 function Thumbnail({ item, className }: { item: ProofListItem; className: string }) {
   if (item.mediaKind === 'image' && item.mediaUrl) {
-    // eslint-disable-next-line @next/next/no-img-element
     return (
       // eslint-disable-next-line jsx-a11y/alt-text
       <img

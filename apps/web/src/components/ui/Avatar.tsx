@@ -43,7 +43,14 @@ export function Avatar({ name, src, size = 'md' }: AvatarProps) {
         aria-hidden="true"
         className={`inline-flex shrink-0 overflow-hidden rounded-full border border-brand-100 bg-brand-50 ${dims.box}`}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {/*
+          `onError` below is a load-failure hook rather than a user interaction, and
+          the image is decorative — the name beside it carries the meaning — so the
+          non-interactive-element rule is silenced for this one element rather than
+          for the file. The img-element rule is off in the lint config, because
+          every image here is a short-lived signed URL that must not be proxied.
+        */}
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
         <img
           ref={(node) => {
             // An image that failed before React attached `onError` (server-rendered

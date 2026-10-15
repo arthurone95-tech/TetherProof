@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { Mic, X } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -412,15 +412,7 @@ function Evidence({
   }
 
   if (summary.mediaKind === 'audio') {
-    return (
-      <div className="mt-2">
-        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-        <audio controls src={summary.mediaUrl} preload="metadata" className="w-full" onError={onReload} />
-        <p className="mt-2 text-xs text-ink-600">
-          This is the voice note they recorded. Listen if you need to.
-        </p>
-      </div>
-    );
+    return <AudioEvidence summary={summary} onReload={onReload} />;
   }
 
   return (
@@ -439,6 +431,12 @@ function Evidence({
         aria-label={`View ${summary.skillTag ?? 'the work'} photo full size`}
         className="block w-full cursor-zoom-in overflow-hidden rounded-2xl border border-brand-100 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand-600"
       >
+        {/*
+          `onError` is a load-failure hook, not a user interaction, and the
+          interactivity here belongs to the surrounding button — this element is
+          simply its content. Silenced for that reason rather than rule-wide.
+        */}
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
         <img
           src={summary.mediaUrl}
           alt={`Photo of the ${summary.skillTag ?? 'work'} they say they completed`}
@@ -451,6 +449,47 @@ function Evidence({
           className="max-h-80 w-full object-cover"
         />
       </button>
+    </div>
+  );
+}
+
+/**
+ * A voice note, as a recording rather than as a picture.
+ *
+ * Built for its own medium instead of borrowing the photo's presentation. A
+ * recording has no single frame to enlarge, so there is no full-screen view to
+ * open and nothing here pretends otherwise: what it has instead is somewhere to
+ * start, somewhere to scrub, and a control large enough to hit on a phone with
+ * one hand — the native player, given room to breathe.
+ *
+ * The same short-lived signed URL serves it. Nothing is fetched twice and no
+ * storage path or credential is exposed, and the error handler mints a fresh one
+ * rather than leaving the reader with a dead control.
+ */
+function AudioEvidence({
+  summary,
+  onReload,
+}: {
+  summary: VerificationSummary;
+  onReload: () => void;
+}) {
+  return (
+    <div className="mt-2 rounded-2xl border border-brand-100 bg-brand-50/40 p-4">
+      <div className="flex items-center gap-2">
+        <Mic aria-hidden="true" className="h-4 w-4 text-brand-700" strokeWidth={ICON_STROKE_WIDTH} />
+        <p className="text-sm font-semibold text-ink-900">Voice note</p>
+      </div>
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <audio
+        controls
+        preload="metadata"
+        src={summary.mediaUrl ?? undefined}
+        onError={onReload}
+        className="mt-3 w-full"
+      />
+      <p className="mt-3 text-xs text-ink-600">
+        The recording is the evidence. Play it as much as you need before you answer.
+      </p>
     </div>
   );
 }
