@@ -23,6 +23,22 @@ export const specIdParamSchema = z.object({
   specId: z.string().uuid('That capability spec is not valid.'),
 });
 
+/**
+ * Saving a worker.
+ *
+ * Carries a candidate handle, never a worker id. The client is never given the
+ * id, so it cannot put one here even by accident or by tampering — the only way
+ * to name a worker is with a handle this employer was issued.
+ */
+export const saveWorkerSchema = z.object({
+  candidateHandle: z.string().min(20, 'That candidate could not be read.'),
+  skillTag: skillTagSchema,
+});
+
+export const savedWorkerIdParamSchema = z.object({
+  savedId: z.string().uuid('That saved worker is not valid.'),
+});
+
 export const createSpecSchema = z.object({
   requiredSkill: skillTagSchema,
   minProofThreshold: z

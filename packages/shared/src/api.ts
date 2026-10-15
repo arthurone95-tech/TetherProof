@@ -120,6 +120,15 @@ export interface CandidateCard {
   displayName: string | null;
   /** A photo the worker chose to upload. Null is ordinary and needs no substitute upload. */
   avatarUrl: string | null;
+  /**
+   * The saved-worker row for this card, or null when the employer has not saved
+   * them.
+   *
+   * Present so a star on a search result shows what is actually stored rather
+   * than resetting on every reload. It is an opaque row id used only to unsave,
+   * and reveals nothing the card does not already carry.
+   */
+  savedId: string | null;
   /** Count of proofs for this skill confirmed by a client. Never includes blocked ones. */
   verifiedProofs: number;
   /**
@@ -203,6 +212,27 @@ export interface SpecsResponse {
 
 export interface SearchResponse {
   candidates: CandidateCard[];
+}
+
+/**
+ * A worker an employer has saved.
+ *
+ * The same shape as a search card plus `savedId` and `savedAt`, because this list
+ * is the employer's own record of their own intentions rather than a live
+ * ranking. `savedId` is an opaque row id used to unsave; it is not a worker id
+ * and reveals nothing about the worker.
+ *
+ * A worker who has since become undiscoverable, deleted their account, or no
+ * longer has verified proof for the skill simply does not appear here, so the
+ * list cannot be used to keep reaching someone who has opted out.
+ */
+export interface SavedWorker extends CandidateCard {
+  savedId: string;
+  savedAt: string;
+}
+
+export interface SavedWorkersResponse {
+  workers: SavedWorker[];
 }
 
 export interface SentOffersResponse {

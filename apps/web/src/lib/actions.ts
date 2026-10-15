@@ -524,6 +524,43 @@ export async function createSpec(_previous: FormState, formData: FormData): Prom
   }
 }
 
+/**
+ * Saves a worker from a search card.
+ *
+ * Throws rather than returning state because the caller is an optimistic toggle
+ * that has already moved the star: it needs to know the write failed so it can
+ * put the star back, and a returned error object would have to be checked in a
+ * way a thrown error cannot be forgotten by.
+ *
+ * Addressed by candidate handle, never by worker id, because the id was never
+ * given to the browser.
+ */
+export async function saveSavedWorker(candidateHandle: string, skillTag: string): Promise<void> {
+  if (!candidateHandle) throw new Error('Run the search again before saving.');
+  try {
+    await apiServer('/employers/saved-workers', {
+      method: 'POST',
+      body: { candidateHandle, skillTag },
+    });
+    revalidatePath('/employer/search');
+  } catch (error) {
+    throw new Error(messageFor(error, 'That worker could not be saved. Please try again.'));
+  }
+}
+
+/** Removes a saved worker. Same optimistic contract as `saveSavedWorker`. */
+export async function unsaveSavedWorker(savedId: string): Promise<void> {
+  if (!savedId) throw new Error('That saved worker could not be found.');
+  try {
+    await apiServer(`/employers/saved-workers/${encodeURIComponent(savedId)}`, {
+      method: 'DELETE',
+    });
+    revalidatePath('/employer/search');
+  } catch (error) {
+    throw new Error(messageFor(error, 'That worker could not be removed. Please try again.'));
+  }
+}
+
 /** Pauses or resumes a spec, or removes one that was a mistake. */
 export async function changeSpec(formData: FormData): Promise<void> {
   const specId = String(formData.get('specId') ?? '');
@@ -533,6 +570,29 @@ export async function changeSpec(formData: FormData): Promise<void> {
   try {
     if (intent === 'delete') {
       await apiServer(path, { method: 'DELETE' });
+    } else if (intent === 'edit') {
+      /*
+       * Only the fields the edit form actually carries are sent, and each is
+       * dropped when it is blank rather than sent as an empty string. An empty
+       * value is a validation failure at the API for the skill, and for the two
+       * numbers it would narrow the spec to nothing — so "left alone" has to be
+       * expressed by absence, which is what the schema's optional fields mean.
+       */
+      const body: Record<string, unknown> = {};
+      const skill = String(formData.get('requiredSkill') ?? '').trim();
+      if (skill) body.requiredSkill = skill;
+
+      const proofs = String(formData.get('minProofThreshold') ?? '').trim();
+      if (proofs) body.minProofThreshold = asPositiveInt(proofs, 1);
+
+      const radius = String(formData.get('maxDistanceKm') ?? '').trim();
+      if (radius) body.maxDistanceKm = asPositiveInt(radius, 25);
+
+      if (Object.keys(body).length === 0) {
+        redirect(`/employer/search?error=${encodeURIComponent('Nothing was changed.')}`);
+      }
+
+      await apiServer(path, { method: 'PATCH', body });
     } else {
       await apiServer(path, { method: 'PATCH', body: { isActive: intent === 'activate' } });
     }

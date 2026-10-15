@@ -24,6 +24,8 @@ import {
   employerIdParamSchema,
   offerIdParamSchema,
   respondOfferSchema,
+  savedWorkerIdParamSchema,
+  saveWorkerSchema,
   searchSchema,
   specIdParamSchema,
   updateSpecSchema,
@@ -46,6 +48,7 @@ import {
   setApprovalStatus,
   updateSpec,
 } from './service.js';
+import { listSavedWorkers, saveWorker, unsaveWorker } from './saved-workers.js';
 
 /**
  * Wraps an async handler so a rejected promise reaches the error middleware.
@@ -202,6 +205,53 @@ employerRouter.get(
     const auth = account(req);
     const offers: SentOffer[] = await listSentOffers(auth.userId);
     res.json({ offers });
+  }),
+);
+
+/**
+ * The workers this employer has saved.
+ *
+ * Re-gated on `discoverable` when read, not only when saved, so a worker who
+ * opts out afterwards stops appearing rather than lingering in a list their
+ * choice should have removed them from.
+ */
+employerRouter.get(
+  '/saved-workers',
+  asyncHandler(async (req, res) => {
+    const auth = account(req);
+    res.json({ workers: await listSavedWorkers(auth.userId) });
+  }),
+);
+
+/**
+ * Saves a worker from a search card.
+ *
+ * Addressed by handle for the same reason invitations are: the request has no
+ * field for a worker id, so the masking survives a client that is modified or
+ * simply wrong.
+ */
+employerRouter.post(
+  '/saved-workers',
+  validateBody(saveWorkerSchema),
+  asyncHandler(async (req, res) => {
+    const auth = account(req);
+    res.status(201).json(await saveWorker(auth.userId, req.body));
+  }),
+);
+
+/**
+ * Removes a saved worker.
+ *
+ * Scoped to the caller in the service, so another employer's id matches nothing
+ * and is indistinguishable from one that never existed.
+ */
+employerRouter.delete(
+  '/saved-workers/:savedId',
+  asyncHandler(async (req, res) => {
+    const auth = account(req);
+    const { savedId } = savedWorkerIdParamSchema.parse(req.params);
+    await unsaveWorker(auth.userId, savedId);
+    res.status(204).end();
   }),
 );
 

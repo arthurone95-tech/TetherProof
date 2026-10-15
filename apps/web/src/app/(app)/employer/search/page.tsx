@@ -6,6 +6,8 @@ import type {
   CandidateCard,
   CapabilitySpec,
   EmployerApprovalResponse,
+  SavedWorker,
+  SavedWorkersResponse,
   SearchResponse,
   SpecsResponse,
 } from '@tetherproof/shared';
@@ -68,14 +70,18 @@ export default async function EmployerSearchPage({
   const params = await searchParams;
   const skill = params.skill?.trim() ?? '';
 
-  const [approval, specsResponse] = await Promise.all([
+  const [approval, specsResponse, savedWorkersResponse] = await Promise.all([
     apiServer<EmployerApprovalResponse>('/employers/approval').catch(() => null),
     apiServer<SpecsResponse>('/employers/specs').catch(() => null),
+    apiServer<SavedWorkersResponse>('/employers/saved-workers').catch(() => null),
   ]);
 
   const sendingBlocked =
     approval?.sending.eligibility === 'blocked' ? approval.sending.reason : undefined;
   const specs = specsResponse?.specs ?? null;
+  // Null means the list could not be read, which is different from an empty list
+  // and is rendered as its own message rather than as "you have saved nobody".
+  const savedWorkers = savedWorkersResponse?.workers ?? null;
 
   let candidates: CandidateCard[] | null = null;
   let searchError: string | null = null;
@@ -140,7 +146,61 @@ export default async function EmployerSearchPage({
           Search by a skill to see workers with verified proof of it.
         </p>
       ) : null}
+
+      {savedWorkers ? <SavedWorkerList workers={savedWorkers} /> : null}
     </div>
+  );
+}
+
+/**
+ * The workers this employer has saved.
+ *
+ * Shown whether or not a search is running, because the list is the answer to
+ * "who did I keep" and that question does not depend on having just searched.
+ * Each entry carries the same figures a search card would, taken from the same
+ * aggregation, so a saved worker cannot quietly look better or worse than they
+ * did in the results.
+ */
+function SavedWorkerList({ workers }: { workers: SavedWorker[] }) {
+  return (
+    <section aria-labelledby="saved-workers-heading" className="flex flex-col gap-3">
+      <h2 id="saved-workers-heading" className="text-base font-semibold text-ink-900">
+        {workers.length === 1 ? '1 saved worker' : `${workers.length} saved workers`}
+      </h2>
+
+      {workers.length === 0 ? (
+        <div className="rounded-xl bg-brand-50 p-4 text-sm text-ink-600">
+          <p className="font-medium text-ink-900">Nobody saved yet</p>
+          <p className="mt-1">
+            Tap the star on a search result to keep someone here while you think about it. Only you
+            can see this list.
+          </p>
+        </div>
+      ) : (
+        <ul className="divide-y divide-brand-100 overflow-hidden rounded-2xl border border-brand-100 bg-white">
+          {workers.map((worker) => (
+            <li key={worker.savedId} className="flex items-center gap-3 p-4">
+              <Avatar name={worker.displayName} src={worker.avatarUrl} size="md" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold text-ink-900">
+                  {worker.displayName ?? worker.skillTag}
+                </p>
+                <p className="truncate text-sm text-ink-600">
+                  {worker.skillTag} · {worker.verifiedProofs} verified proof
+                  {worker.verifiedProofs === 1 ? '' : 's'}
+                </p>
+              </div>
+              <BookmarkButton
+                label={worker.displayName ?? worker.skillTag}
+                skillTag={worker.skillTag}
+                savedId={worker.savedId}
+                initiallySaved
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -190,7 +250,8 @@ function SearchResults({
             Workers appear if they have verified proof in the skill, allow discovery, and meet your distance filter.
           </p>
           <p className="mt-1">
-            To find more, broaden the skill, lower the proof threshold, or widen the distance.Your approval status only affects invitations.
+            To find more, broaden the skill, lower the proof threshold, or widen the distance. Your
+            approval status only affects invitations.
           </p>
         </div>
       </section>
@@ -299,7 +360,13 @@ function CandidateRow({
       </details>
 
       <div className="absolute top-[1.1rem] right-1.5">
-        <BookmarkButton label={candidate.skillTag} />
+        <BookmarkButton
+          label={candidate.displayName ?? candidate.skillTag}
+          candidateHandle={candidate.candidateHandle}
+          skillTag={candidate.skillTag}
+          savedId={candidate.savedId ?? undefined}
+          initiallySaved={candidate.savedId !== null}
+        />
       </div>
     </li>
   );
@@ -348,6 +415,57 @@ function SpecRow({ spec }: { spec: CapabilitySpec }) {
         >
           Run this search
         </Link>
+        {/*
+          A native `<details>`, like the candidate rows above, so editing needs no
+          client state and works before JavaScript arrives. The inputs are
+          pre-filled with what the spec already holds, so the employer sees what
+          they are about to change rather than a blank form they would have to
+          remember the old values for.
+        */}
+        <details className="group">
+          <summary className="inline-flex min-h-11 cursor-pointer list-none items-center rounded-xl border border-brand-100 px-4 text-sm font-semibold text-ink-600 transition-colors hover:border-brand-600 hover:text-brand-700 [&::-webkit-details-marker]:hidden">
+            Edit
+          </summary>
+          <form action={changeSpec} className="mt-3 flex flex-col gap-3 rounded-xl bg-brand-50/60 p-4">
+            <input type="hidden" name="specId" value={spec.id} />
+            <input type="hidden" name="intent" value="edit" />
+            <label className="flex flex-col gap-1.5 text-sm font-medium text-ink-900">
+              Skill
+              <input
+                type="text"
+                name="requiredSkill"
+                defaultValue={spec.requiredSkill}
+                maxLength={160}
+                className="min-h-11 rounded-xl border border-brand-100 bg-white px-3 text-base text-ink-900"
+              />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-ink-900">
+                Minimum verified proofs
+                <input
+                  type="number"
+                  name="minProofThreshold"
+                  defaultValue={spec.minProofThreshold}
+                  min={1}
+                  className="min-h-11 rounded-xl border border-brand-100 bg-white px-3 text-base text-ink-900"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-ink-900">
+                Distance (km)
+                <input
+                  type="number"
+                  name="maxDistanceKm"
+                  defaultValue={spec.maxDistanceKm}
+                  min={1}
+                  className="min-h-11 rounded-xl border border-brand-100 bg-white px-3 text-base text-ink-900"
+                />
+              </label>
+            </div>
+            <div>
+              <SubmitButton className="min-h-11 w-auto px-4 text-sm">Save changes</SubmitButton>
+            </div>
+          </form>
+        </details>
         <form action={changeSpec}>
           <input type="hidden" name="specId" value={spec.id} />
           <input type="hidden" name="intent" value={spec.isActive ? 'pause' : 'activate'} />

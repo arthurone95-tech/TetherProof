@@ -30,6 +30,7 @@ import {
   purgeExpiredHandles,
   resolveCandidateHandle,
 } from '../../lib/handles.js';
+import { savedWorkersForSkill } from './saved-workers.js';
 import { gpsSchema, parseCoordinate, type Coordinate } from '../../lib/geo.js';
 import {
   aggregateCandidateMetrics,
@@ -370,6 +371,10 @@ export async function searchCandidates(
   const metrics = await aggregateCandidateMetrics(requiredSkill, minProofThreshold);
   if (metrics.length === 0) return [];
 
+  // Read once for the whole result set rather than per card, so the saved state
+  // on every star costs a single indexed query.
+  const savedBySkill = await savedWorkersForSkill(employerId, requiredSkill);
+
   const reference = input.referenceGps ? parseCoordinate(input.referenceGps) : null;
   if (input.referenceGps && reference === null) {
     throw new AppError({
@@ -405,6 +410,9 @@ export async function searchCandidates(
       // otherwise identical on paper needs to be able to tell them apart.
       displayName: metric.displayName,
       avatarUrl: metric.avatarUrl,
+      // Whether this employer has already saved this worker for this skill, so the
+      // star on the card reflects what is stored rather than resetting on reload.
+      savedId: savedBySkill.get(metric.workerId) ?? null,
       // Only the verified count reaches an employer, and it already excludes
       // withheld records — `flagged` and `fraud_blocked` are not added in.
       //

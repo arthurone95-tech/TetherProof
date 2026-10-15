@@ -459,6 +459,39 @@ export const candidateHandles = pgTable(
 );
 
 /**
+ * A worker an employer has chosen to keep.
+ *
+ * The one place in the product where a durable row records that a particular
+ * employer was interested in a particular worker. Search is deliberately
+ * stateless so that no such record accumulates, and this accepts that in a
+ * narrow and deliberate form: the row belongs to the employer who wrote it, is
+ * never surfaced to the worker, and is never returned to anyone else.
+ *
+ * `workerId` is the identifier search refuses to emit, and that stays true — the
+ * API resolves a candidate handle to a worker when saving and hands back a
+ * freshly issued handle when reading, so the id stays server-side.
+ */
+export const employerSavedWorkers = pgTable(
+  'employer_saved_workers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    employerId: uuid('employer_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    workerId: uuid('worker_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    skillTag: varchar('skill_tag', { length: 160 }).notNull(),
+    createdAt,
+  },
+  (table) => [
+    uniqueIndex('employer_saved_workers_unique').on(table.employerId, table.workerId, table.skillTag),
+    index('employer_saved_workers_employer_idx').on(table.employerId, table.createdAt),
+    index('employer_saved_workers_worker_idx').on(table.workerId),
+  ],
+);
+
+/**
  * One event in a member's notification feed.
  *
  * Kinds cover both sides of the loop: a worker sees an invitation arrive
