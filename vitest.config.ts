@@ -20,10 +20,13 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['apps/**/*.test.ts', 'packages/**/*.test.ts'],
+    // Runs before any module is imported. The API validates its entire
+    // configuration the moment `config/env` loads, and several modules under test
+    // reach it through an import chain, so without these placeholders importing a
+    // pure function fails on a runner that has no `.env`. See the file for why the
+    // values cannot do anything even if something did try to use them.
+    setupFiles: ['apps/api/test/setup-env.ts'],
     environment: 'node',
-    // A unit test that needs the network or a database has stopped being one.
-    // Failing loudly here is the point.
-    environmentMatchGlobs: [],
     reporters: 'default',
   },
 });
