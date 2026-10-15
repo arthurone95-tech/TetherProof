@@ -2,7 +2,7 @@
 
 Living record of defects and unresolved risks found during implementation. Every entry states what went wrong, what it affects, and how it will be closed. An entry is only marked **Resolved** once the fix is verified against the live Supabase project, not merely written.
 
-**Status values:** `Open` (known, not fixed) · `In Progress` (fix started) · `Resolved` (fixed and verified) · `Accepted` (risk consciously kept)
+**Status values:** `Open` (known, not fixed) Ã‚Â· `In Progress` (fix started) Ã‚Â· `Resolved` (fixed and verified) Ã‚Â· `Accepted` (risk consciously kept)
 
 ---
 
@@ -117,7 +117,7 @@ The harness now refuses to run if the port is occupied, asserts the spawned proc
 
 ## E-007: Registration creates unconfirmed accounts with no way to confirm them
 
-* **Status:** Resolved — implemented 2026-10-04 (Phase 2)
+* **Status:** Resolved Ã¢â‚¬â€ implemented 2026-10-04 (Phase 2)
 * **Found:** 2026-10-04, live registration testing.
 
 ### Description
@@ -207,7 +207,7 @@ Location metadata is now removed from proof media, and the documentation no long
 `apps/api/src/lib/media-scrub.ts` removes metadata in memory before any byte is uploaded, and `uploadWorkProofMedia` calls it internally rather than exposing it as a step a caller could skip. The only route to the bucket runs through it, which is what makes the guarantee in `doc/08` a property of the system rather than of one code path.
 
 * **Images are re-encoded** with sharp, which drops EXIF, ICC, and embedded GPS by construction rather than by trying to enumerate every tag that might carry a location. This is why re-encoding was chosen over surgical segment removal: a re-encode cannot miss a tag format nobody thought of. EXIF orientation is applied and then discarded, so photos stay upright without retaining the value describing the device's orientation.
-* **Audio tag containers are cut out:** ID3v2 and ID3v1 from MP3, and the `udta`/`meta` atoms, including the `©xyz` location atom, from MP4-family containers.
+* **Audio tag containers are cut out:** ID3v2 and ID3v1 from MP3, and the `udta`/`meta` atoms, including the `Ã‚Â©xyz` location atom, from MP4-family containers.
 * **The declared content type is never trusted.** It selects the scrubber, and each scrubber confirms the bytes really are the container that type claims. A file cannot be smuggled past the allow-list by mislabelling itself.
 * **`submissionGps` is the only trusted location** for a proof, which is exactly why the file's own location data is removed. Coordinates are range-checked at the boundary, so `999,999` is rejected rather than stored to poison later proximity checks.
 * **`metadata_status` is always written as `pending`.** Scrubbing removes location data; it does not assess authenticity. Claiming `valid` would assert work that has not been done, so the honest status is recorded until the anti-fraud engine exists.
@@ -229,7 +229,7 @@ End-to-end against the live project, in the smoke suite: a GPS-tagged JPEG is up
   * The honest answer is unchanged: **there is no AI-generation detection, and no such claim is made.** What Phase 3 added is three consistency booleans derived before the metadata is destroyed.
 * **Audio was verified structurally, not by playback.** The MP4 assertions prove the container is intact and the offsets are correct, but no decoder was run to confirm audio output. A real m4a from a phone should be tested when one is available.
 * **HEIC is re-encoded as AV1-compressed HEIC**, which changes the file substantially to remove only metadata. The prebuilt sharp binary supports it and the round-trip was exercised, but if preserving HEIC exactly matters more than stripping metadata, that tradeoff should be revisited.
-* ~~**Verification links are not dispatched.**~~ **Superseded by Phase 3.** Dispatch is now implemented behind a `MessageProvider` interface with a Twilio adapter and a log adapter, and the dispatch outcome is recorded on the verification row. The link is still not dispatched anywhere real, because no Twilio account exists — the Twilio adapter itself is unexercised. See `doc/09` §4.1.
+* ~~**Verification links are not dispatched.**~~ **Superseded by Phase 3.** Dispatch is now implemented behind a `MessageProvider` interface with a Twilio adapter and a log adapter, and the dispatch outcome is recorded on the verification row. The link is still not dispatched anywhere real, because no Twilio account exists Ã¢â‚¬â€ the Twilio adapter itself is unexercised. See `doc/09` Ã‚Â§4.1.
 
 The assertion counts in the Verification section above were current when E-008 was written and are
 preserved as the historical record. The current counts are in *Verification coverage achieved on
@@ -239,11 +239,11 @@ preserved as the historical record. The current counts are in *Verification cove
 
 ## E-009: `users_update_own` policy would allow self-promotion if write access were ever granted
 
-* **Status:** Open — not currently exploitable
+* **Status:** Open Ã¢â‚¬â€ not currently exploitable
 * **Found:** 2026-10-04, RLS policy review against the live project.
 
 ### Description
-The `users_update_own` policy is `USING (auth.uid() = id)` with **no** `WITH CHECK` clause, and `role` is a normal updatable column. It is currently harmless because `anon` and `authenticated` hold no `INSERT`/`UPDATE`/`DELETE` grant on any `public` table — verified live: the browser receives `permission denied for table users`.
+The `users_update_own` policy is `USING (auth.uid() = id)` with **no** `WITH CHECK` clause, and `role` is a normal updatable column. It is currently harmless because `anon` and `authenticated` hold no `INSERT`/`UPDATE`/`DELETE` grant on any `public` table Ã¢â‚¬â€ verified live: the browser receives `permission denied for table users`.
 
 ### Impact
 Latent privilege escalation. The day anyone adds a table-level grant for client writes, or switches a write path to direct PostgREST access, a user could set their own `role` to `admin`.
@@ -255,7 +255,7 @@ Before any Phase 2 endpoint introduces client-side database writes, either drop 
 
 ## E-010: No lint configuration, and no automated test framework
 
-* **Status:** Partially resolved — smoke test added 2026-10-04; ESLint and unit tests still open
+* **Status:** Partially resolved Ã¢â‚¬â€ smoke test added 2026-10-04; ESLint and unit tests still open
 * **Found:** 2026-10-04, verification phase.
 
 ### Description
@@ -296,7 +296,7 @@ Deleted on 2026-10-04 with approval. Supabase is now the single documented envir
 
 ## E-012: Response envelope is inconsistent
 
-* **Status:** Open — low severity
+* **Status:** Open Ã¢â‚¬â€ low severity
 * **Found:** 2026-10-04, live API testing.
 
 ### Description
@@ -352,7 +352,7 @@ contained only because the deployment host injects these variables directly.
 Confirmed on 2026-10-04 with no variables set in the child environment:
 `next dev` reached `Ready` without the configuration error, `GET /` returned `200` (previously
 `404`), `GET /verify/<unknown-token>` returned `200` through the server-side Supabase client, and the
-server log contains no `⨯` entries. `next build` completed and prerendered all 4 routes including
+server log contains no `Ã¢Â¨Â¯` entries. `next build` completed and prerendered all 4 routes including
 `/_not-found`, so E-005 did not return and the build no longer needs `NODE_ENV` pinned externally.
 `npm run typecheck` passes in all three workspaces.
 
@@ -364,7 +364,7 @@ exercise the documented developer commands rather than inheriting a fully popula
 
 ## E-014: A malformed JSON body is answered with 500 instead of 400
 
-* **Status:** Open — low severity, pre-existing
+* **Status:** Open Ã¢â‚¬â€ low severity, pre-existing
 * **Found:** 2026-10-04, while probing the new confirmation endpoints.
 
 ### Description
@@ -393,7 +393,7 @@ client error and stops polluting the error log. Add a smoke check for it.
 
 ## E-015: `doc/logo-data.txt` and `doc/others/` are untracked working files
 
-* **Status:** Open — needs a decision
+* **Status:** Open Ã¢â‚¬â€ needs a decision
 * **Found:** 2026-10-04, during the Phase 1 commit.
 
 ### Description
@@ -492,7 +492,7 @@ documented contract for `verifyOtp` with a numeric `token`.
 ### Description
 Every `POST /api/v1/workers/proofs` returned
 `500 {"code":"INTERNAL_ERROR","message":"The file could not be stored."}`. The underlying provider
-error was `new row violates row-level security policy` (`AccessDenied`, `statusCode: 403`) — yet the
+error was `new row violates row-level security policy` (`AccessDenied`, `statusCode: 403`) Ã¢â‚¬â€ yet the
 same bytes, path shape, bucket, and service-role key all uploaded successfully from a standalone
 script, and `service_role` was confirmed to hold `rolbypassrls`, so RLS could not have been the
 blocker for that role.
@@ -546,7 +546,7 @@ three-step diagnosis.
 
 ## E-019: Feature 2.4's "AI-fake detector" requires metadata that Phase 2 destroys
 
-* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-04, verified against the live project
 * **Found:** 2026-10-04, while implementing Phase 3.
 * **Related:** E-008.
 
@@ -563,7 +563,7 @@ signatures from a file that no longer has any.
 Not a coding defect. The specification was written as though scrubbing and detection were
 independent features, when one is defined as the destruction of the other's input. Nothing
 in the codebase claimed this worked, and `metadata_status` was honestly left at `pending`,
-so no user was misled — but `doc/01` and `doc/02` described a capability that cannot exist as
+so no user was misled Ã¢â‚¬â€ but `doc/01` and `doc/02` described a capability that cannot exist as
 specified.
 
 ### Resolution
@@ -574,7 +574,7 @@ conclusions leave it. Three booleans are persisted on `public.work_proof_logs`:
 | --- | --- | --- |
 | `media_has_camera_signature` | the discarded EXIF named a capture device (Make **and** Model, or a lens tag, body serial, or vendor maker note) | the make, model, lens, or serial |
 | `media_timestamp_plausible` | the discarded capture time was internally consistent with the submission | the capture time |
-| `media_encoder_known` | the container is structurally what its declared type claims | — |
+| `media_encoder_known` | the container is structurally what its declared type claims | Ã¢â‚¬â€ |
 
 A `NULL` in any of the three means "not applicable or not determinable", which is honest for
 audio: an MP3 carries no camera and no capture time, so reporting `false` would assert that
@@ -603,7 +603,7 @@ unusual files would block honest workers whose cameras behave differently.
 detection gap is real and stays documented rather than papered over.
 
 ### Verification
-`npm run scrub-check` — **51/51**, including a hand-built EXIF block with `DateTimeOriginal`
+`npm run scrub-check` Ã¢â‚¬â€ **51/51**, including a hand-built EXIF block with `DateTimeOriginal`
 in the Exif sub-IFD (the tag a parser that only walks IFD0 silently misses), a make-without-model
 block, epoch and pre-2005 timestamps, a future timestamp, a legitimate photo from the previous
 week, and assertions that the make, model, and timestamp are absent from the output bytes.
@@ -615,7 +615,7 @@ never blocks a worker.
 
 ## E-020: The confirm endpoint accepted out-of-range coordinates
 
-* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-04, verified against the live project
 * **Found:** 2026-10-04, while implementing Phase 3.
 * **Related:** made exploitable by E-019's proximity check.
 
@@ -630,7 +630,7 @@ the submission side had a range check; the copy on the confirmation side checked
 
 This was harmless while the value was stored and never read. Proximity scoring is the first
 consumer, and a nonsense coordinate fed into a haversine calculation yields a confident,
-wrong distance rather than an error — so the laxer endpoint was a live data-integrity defect
+wrong distance rather than an error Ã¢â‚¬â€ so the laxer endpoint was a live data-integrity defect
 the moment Phase 3 landed.
 
 ### Resolution
@@ -638,8 +638,8 @@ Both schemas now import `gpsSchema` from `src/lib/geo.ts`, so there is one defin
 `geo.ts` also centralises parsing and haversine distance for the same reason.
 
 ### Verification
-`npm run fraud-check` — 91/91, asserting `999,999` is rejected, that the rejection message
-names the range, that latitude ±90 and longitude ±180 are accepted as boundaries while
+`npm run fraud-check` Ã¢â‚¬â€ 91/91, asserting `999,999` is rejected, that the rejection message
+names the range, that latitude Ã‚Â±90 and longitude Ã‚Â±180 are accepted as boundaries while
 `90.1` is refused, and that `parseCoordinate` returns `null` rather than throwing for every
 malformed shape. One live smoke check confirms the confirm endpoint refuses it.
 
@@ -647,20 +647,20 @@ malformed shape. One live smoke check confirms the confirm endpoint refuses it.
 
 ## E-021: A missing location could be used to defeat the trust engine
 
-* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-04, verified against the live project
 * **Found:** 2026-10-04, while designing the scoring.
 
 ### Description
 The engine's inputs are a worker's recorded position, the client's position when they tap,
 the endorsement graph, and media provenance. Three of the four are client- or
-worker-controlled, and one of them — the client's location — is trivially withheld.
+worker-controlled, and one of them Ã¢â‚¬â€ the client's location Ã¢â‚¬â€ is trivially withheld.
 
 Treating "no location supplied" as either a pass or a failure makes the check a toggle: a
 worker who omits `submissionGps` converts a hard proximity signal into an absent one.
 
 ### Resolution
 `unavailable` is a first-class `proximity_status` value, distinct from `within`, and scores
-**exactly 0.5** — the neutral midpoint. The same holds for every other unavailable signal: an
+**exactly 0.5** Ã¢â‚¬â€ the neutral midpoint. The same holds for every other unavailable signal: an
 unidentified verifier scores neutral, and an audio file's null provenance signals score
 neutral.
 
@@ -671,7 +671,7 @@ alternative hands a motivated party a switch that disables the check.
 
 The other half is that absence may not be free either. A confirmed endorsement with nothing
 behind it scores ~0.5, which is above the 0.25 block threshold, so the engine does not
-punish — but it also cannot be gamed into a pass, because a *real* on-site confirmation with
+punish Ã¢â‚¬â€ but it also cannot be gamed into a pass, because a *real* on-site confirmation with
 a clean history scores ~0.75.
 
 ### Verification
@@ -686,7 +686,7 @@ every signal as withheld does not get a worker blocked. Two live smoke checks co
 
 ## E-022: `verifier_phone` stored client phone numbers in plaintext
 
-* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-04, verified against the live project
 * **Found:** 2026-10-04, while implementing the collusion filter.
 * **Related:** contradicts the retention promise in `doc/08`.
 
@@ -699,14 +699,14 @@ the database in the clear.
 
 ### Root cause
 Phase 2 added the column for SMS dispatch, which was never wired up. A dormant column
-collecting a value nothing consumes is the worst kind — it looks like a feature and carries
+collecting a value nothing consumes is the worst kind Ã¢â‚¬â€ it looks like a feature and carries
 pure risk.
 
 ### Resolution
 The column is dropped. What replaces it is `verifier_phone_hash`: a salted SHA-256 of the
 normalised number, held in memory only long enough to dispatch the message.
 
-The salt comes from `VERIFIER_PHONE_SALT`, required in production. This is not ceremony —
+The salt comes from `VERIFIER_PHONE_SALT`, required in production. This is not ceremony Ã¢â‚¬â€
 phone numbers have very little entropy, so an unsalted digest is reversible by brute force
 over the reachable number space in minutes. A default salt would be a published salt, which is
 why the schema has none and a missing value outside production generates a random per-process
@@ -714,13 +714,13 @@ salt with a warning.
 
 `normalizePhone` strips separators and reduces a `00` international prefix, because the same
 number reaches the server as `+233241234567`, `0234 123 4567`, and `233-241-234567`, and
-hashing the raw string would treat those as three different people — quietly disabling the
+hashing the raw string would treat those as three different people Ã¢â‚¬â€ quietly disabling the
 collusion filter it exists to serve.
 
 ### Deliberate non-backfill
 Pre-existing rows lose the number rather than having it converted. A correct backfill needs
 the operator's salt, which does not belong in a migration, and hashing without it would write
-a weak digest into a column named `_hash` — worse than the plaintext it replaces, because it
+a weak digest into a column named `_hash` Ã¢â‚¬â€ worse than the plaintext it replaces, because it
 would look protected. The rows are read as identity-unknown, which scores neutral. The table
 held no non-test data.
 
@@ -736,7 +736,7 @@ to a single hash input while two different numbers stay distinct.
 
 ## E-023: The `--web` smoke run leaked an account on every invocation
 
-* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-04, verified against the live project
 * **Found:** 2026-10-04, while extending the smoke suite for Phase 3.
 * **Related:** a repeat of the cleanup scoping issue already noted against the web checks.
 
@@ -747,7 +747,7 @@ rows. The API-only path was clean, so the leak was invisible unless the web chec
 The symptom was a single warning in the cleanup output:
 
 ```
-warning: could not delete fb7d82c4-…: Database error deleting user
+warning: could not delete fb7d82c4-Ã¢â‚¬Â¦: Database error deleting user
 FAIL  test accounts removed from auth.users  (1 rows)
 ```
 
@@ -755,7 +755,7 @@ FAIL  test accounts removed from auth.users  (1 rows)
 Two defects, and the second is the one that mattered.
 
 **Cleanup deleted application rows for one worker only.** The deletes were scoped to
-`worker_id = workerId` — the worker registered in the API section. The `--web` path registers
+`worker_id = workerId` Ã¢â‚¬â€ the worker registered in the API section. The `--web` path registers
 a *second* account and inserts its own capability block, proof, and verification directly. Those
 rows were never deleted.
 
@@ -781,7 +781,7 @@ data-cleanup gap.
   of ids this run happened to track: a row counts as a leak only if its owner no longer exists
   in `auth.users`. A real member's rows always have a live owner, so they are never counted, and
   a fixture inserted through an untracked path is caught regardless. Combined with the
-  test-pattern check this is complete — an undeleted account is caught by pattern, and a deleted
+  test-pattern check this is complete Ã¢â‚¬â€ an undeleted account is caught by pattern, and a deleted
   account whose rows survive is caught as an orphan.
 
 The general lesson is recorded deliberately: **a verification scoped the same way as the
@@ -803,15 +803,15 @@ conflict, so the web section's fixtures were never created and the leak never ra
 For context on what is confirmed working, recorded outside the error log:
 
 * 4 migrations applied to the live project (PostgreSQL 17.11).
-* 7 tables with RLS enabled; `FORCE ROW LEVEL SECURITY` on `work_proof_logs` and `verifications`; 19 policies; `users_id_auth_fkey` → `auth.users(id)`; both role triggers present.
+* 7 tables with RLS enabled; `FORCE ROW LEVEL SECURITY` on `work_proof_logs` and `verifications`; 19 policies; `users_id_auth_fkey` Ã¢â€ â€™ `auth.users(id)`; both role triggers present.
 * **114/114 automated live API checks** (`npm run smoke -- --live`), and **128/128** with the client confirmation page and browser CORS path (`--live --web`): health, registration, duplicate rejection, the confirmation challenge, request-code anti-enumeration, code validation, **the full confirmation success path** (a real token exchanged for a session, replay refused, password sign-in afterwards), confirmation gating, login, `/auth/me`, **bucket configuration** (private, size cap and MIME allow-list recorded, and both an out-of-list type and an oversized object refused), **proof submission with live metadata scrubbing** (GPS detected and reported, the stored object read back out of the bucket to confirm no EXIF survives, token-hash-only storage, and refusal of WebM, mislabelled files, missing files, out-of-range coordinates, short descriptions, unauthenticated calls, and another worker's capability reference), verification view, single-use confirmation, replay refusal, input validation, and RLS posture. The confirmation success path uses `admin.generateLink`, so it needs no mail provider and no inbox.
-* **Cleanup is verified, not assumed.** Zero test accounts, zero application rows, zero orphans, zero bucket objects — with the orphan checks scoped by *predicate* (a row whose owner no longer exists in `auth.users`) rather than by the list of ids the run tracked, so they catch a fixture inserted through an untracked path. See E-023 for the leak this replaced and why the previous check proved nothing.
-* **Web checks: 14 assertions** on the confirmation page — SSR of `/verify/{token}`, `no-referrer`, `noindex`, unknown tokens still rendering the page shell, CORS preflight and headers for the configured web origin, submission without GPS, persistence into the live database, revisiting an answered link, and refusal of an unknown origin. The web server must run on a port the API trusts, since the suite derives it from `CORS_ORIGINS` and deliberately exercises the *configured* origin rather than an invented host; override that variable if the port is busy.
-* **31/31 trust-engine checks run live against the real project**, driving the whole loop through the public API rather than writing rows directly. Five endorsements by one verifier are submitted and confirmed to build a genuine graph history; a sixth from another continent is then confirmed and the engine independently arrives at `proximity_status = outside`, 5104 km, the concentration finding, a score of 0.125, and `verification_status = fraud_blocked` — while still telling the client their response was recorded. A client who shares no location is recorded `unavailable` with a null distance and the proof still reaches `verified`; a rejection is never scored and never blocked. Provenance booleans are asserted on the row, and the verifier's number is shown absent from a 1149-byte `row_to_json()` of the stored verification.
+* **Cleanup is verified, not assumed.** Zero test accounts, zero application rows, zero orphans, zero bucket objects Ã¢â‚¬â€ with the orphan checks scoped by *predicate* (a row whose owner no longer exists in `auth.users`) rather than by the list of ids the run tracked, so they catch a fixture inserted through an untracked path. See E-023 for the leak this replaced and why the previous check proved nothing.
+* **Web checks: 14 assertions** on the confirmation page Ã¢â‚¬â€ SSR of `/verify/{token}`, `no-referrer`, `noindex`, unknown tokens still rendering the page shell, CORS preflight and headers for the configured web origin, submission without GPS, persistence into the live database, revisiting an answered link, and refusal of an unknown origin. The web server must run on a port the API trusts, since the suite derives it from `CORS_ORIGINS` and deliberately exercises the *configured* origin rather than an invented host; override that variable if the port is busy.
+* **31/31 trust-engine checks run live against the real project**, driving the whole loop through the public API rather than writing rows directly. Five endorsements by one verifier are submitted and confirmed to build a genuine graph history; a sixth from another continent is then confirmed and the engine independently arrives at `proximity_status = outside`, 5104 km, the concentration finding, a score of 0.125, and `verification_status = fraud_blocked` Ã¢â‚¬â€ while still telling the client their response was recorded. A client who shares no location is recorded `unavailable` with a null distance and the proof still reaches `verified`; a rejection is never scored and never blocked. Provenance booleans are asserted on the row, and the verifier's number is shown absent from a 1149-byte `row_to_json()` of the stored verification.
 * **51/51 media-scrubbing assertions** in `scripts/scrub-check.ts`, run against constructed fixtures rather than mocks, including a hand-built GPS EXIF block, an MP4 laid out so that sample-offset repointing is genuinely required, and a hand-built EXIF block carrying `DateTimeOriginal` in the Exif sub-IFD to exercise the provenance parser.
 * **91/91 trust-engine unit assertions** in `scripts/fraud-check.ts`, covering coordinate validation, haversine distance, the three proximity outcomes, collusion weighting including the concentration and mutual-endorsement cases, media sub-scoring, the reject-never-blocks rule, and phone normalisation.
 * A private `work-proofs` Storage bucket now exists **with its size cap and MIME allow-list applied and confirmed enforced** (E-017). The management API silently discards both values, so `npm run storage:ensure-bucket` writes them directly to `storage.buckets` and verifies them. Six smoke checks guard this on every run.
-* Not covered: real browser execution of the confirmation page, a genuinely delivered 6-digit OTP, and a real outbound SMS. No headless browser is available in this environment, so the page was verified through SSR output and browser-equivalent HTTP calls with an `Origin` header, not by clicking the button. A delivered code needs a working provider and a real inbox. The Twilio adapter is unverified against Twilio's live API — it is exercised only through the provider interface with the log adapter active, because no account exists yet.
+* Not covered: real browser execution of the confirmation page, a genuinely delivered 6-digit OTP, and a real outbound SMS. No headless browser is available in this environment, so the page was verified through SSR output and browser-equivalent HTTP calls with an `Origin` header, not by clicking the button. A delivered code needs a working provider and a real inbox. The Twilio adapter is unverified against Twilio's live API Ã¢â‚¬â€ it is exercised only through the provider interface with the log adapter active, because no account exists yet.
 * Reproduce with `npm run smoke -- --live --web` after `npm run build`. All API checks are automated in `scripts/smoke.mjs`; the scrubbing and trust-engine unit assertions run with `npm run scrub-check` and `npm run fraud-check`, neither of which needs a server, a database, or a live project.
 * **The smoke suite runs `apps/api/dist/index.js`, not the TypeScript source.** A change to `src` is not under test until `npm run build` has been run. This was discovered the hard way: a full run reported 20 failures against code that typechecked cleanly, and every one of them was the compiled output being stale.
 
@@ -819,7 +819,7 @@ For context on what is confirmed working, recorded outside the error log:
 
 ## E-017: The proof bucket silently ignores its size and MIME-type limits
 
-* **Status:** Resolved — 2026-10-04, verified against the live project
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-04, verified against the live project
 * **Found:** 2026-10-04, while implementing E-008.
 * **Related:** sub-finding of E-008.
 
@@ -854,11 +854,11 @@ Against the live project on 2026-10-04, after applying the limits:
 | Attempt | Result |
 | --- | --- |
 | `image/jpeg` within the cap | accepted |
-| `text/plain` | refused — `mime type text/plain is not supported` |
-| `application/pdf` | refused — `mime type application/pdf is not supported` |
-| `audio/webm` | refused — `mime type audio/webm is not supported` |
-| `image/jpeg` over the cap | refused — `The object exceeded the maximum allowed size` |
-| `image/png` over the cap | refused — `The object exceeded the maximum allowed size` |
+| `text/plain` | refused Ã¢â‚¬â€ `mime type text/plain is not supported` |
+| `application/pdf` | refused Ã¢â‚¬â€ `mime type application/pdf is not supported` |
+| `audio/webm` | refused Ã¢â‚¬â€ `mime type audio/webm is not supported` |
+| `image/jpeg` over the cap | refused Ã¢â‚¬â€ `The object exceeded the maximum allowed size` |
+| `image/png` over the cap | refused Ã¢â‚¬â€ `The object exceeded the maximum allowed size` |
 
 All probe objects were removed afterwards. Six smoke checks now assert this on every run, so a
 bucket that loses its configuration cannot go unnoticed: privacy, the presence of a size limit,
@@ -873,7 +873,7 @@ If a format is added to one it must be added to the other.
 
 ## E-024: Anyone could self-register as an administrator
 
-* **Status:** Resolved — 2026-10-05, verified live against the running project
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-05, verified live against the running project
 * **Severity:** Privilege escalation from no credentials to full administrator.
 * **Found:** 2026-10-05, while building the employer approval flow.
 * **Related:** makes E-009's latent policy weakness reachable in practice.
@@ -886,7 +886,7 @@ caller could mint themselves an administrator account** with one unauthenticated
 
 This was not theoretical. Verified live end to end: an anonymous caller registered as `admin`,
 called the approval endpoint to approve a third party's employer account, received `200`, and
-that employer was then reported as `sending: {"eligibility":"eligible"}` — a fully escalated
+that employer was then reported as `sending: {"eligibility":"eligible"}` Ã¢â‚¬â€ a fully escalated
 path from no credentials to approving strangers and sending invitations to workers.
 
 It also invalidated the design of the whole approval gate. The gate exists so a human decides
@@ -920,15 +920,15 @@ also asserts the three legitimately self-registerable roles still succeed, so th
 
 ## E-025: `ON DELETE restrict` makes any worker who has logged work impossible to delete
 
-* **Status:** Resolved — 2026-10-05, by E-029. The restriction itself is removed there.
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-05, by E-029. The restriction itself is removed there.
 * **Found:** 2026-10-05, while tearing down browser walkthrough fixtures.
 * **Related:** `doc/08` data retention; migration `0000_luxuriant_pyro.sql`; resolved by `0005`.
 
 ### Description
 Two foreign keys from migration 0000 are declared `ON DELETE restrict`:
 
-* `capability_blocks.worker_id → users.id`
-* `work_proof_logs.worker_id → users.id`
+* `capability_blocks.worker_id Ã¢â€ â€™ users.id`
+* `work_proof_logs.worker_id Ã¢â€ â€™ users.id`
 
 A restricted foreign key blocks deletion of the referenced parent row. Because `public.users`
 itself cascades from `auth.users`, deleting a worker who has ever logged a job aborts the whole
@@ -939,7 +939,7 @@ AuthRetryableFetchError: Database error deleting user
 ```
 
 The message names neither the table nor the constraint, and its name claims the error is
-*retryable* when it is in fact permanent — four retries failed identically. An account that has
+*retryable* when it is in fact permanent Ã¢â‚¬â€ four retries failed identically. An account that has
 logged work therefore **cannot be deleted at all**, by any route.
 
 This surfaced through ordinary operations rather than an audit. The walkthrough teardown could
@@ -955,7 +955,7 @@ retention workflows: the rows that make deletion impossible are exactly the proo
 
 ### Root cause
 A deliberate choice to restrict deletion on proof history, made when nothing required the
-opposite — and never revisited when account deletion became an operation something actually
+opposite Ã¢â‚¬â€ and never revisited when account deletion became an operation something actually
 performs. Restricting is defensible for audit records; it is not defensible as the *only*
 outcome, because the combination with the `auth.users` cascade turns "keep the proof history"
 into "keep the account forever".
@@ -966,7 +966,7 @@ Fixing it means a migration, which needed authorisation, and the correct fix was
 * Cascading would delete verified work history, which may be what a data-retention obligation
   actually requires an employer or regulator to keep.
 * Cascading with an anonymising trigger would preserve aggregate proof counts while severing the
-  link to a person — arguably the correct outcome, and a schema change plus new code.
+  link to a person Ã¢â‚¬â€ arguably the correct outcome, and a schema change plus new code.
 * Leaving it restricted, and documenting that deletion requires an administrator running an
   explicit retention script, is honest but leaves the generic error in place for the next person.
 
@@ -991,12 +991,12 @@ The actual PostgreSQL error, read directly rather than through the admin API's o
 ```
 23503 update or delete on table "users" violates foreign key constraint
       "capability_blocks_worker_id_users_id_fk" on table "capability_blocks"
-detail: Key (id)=(…) is still referenced from table "capability_blocks".
+detail: Key (id)=(Ã¢â‚¬Â¦) is still referenced from table "capability_blocks".
 ```
 
 Supabase reports this as `AuthRetryableFetchError: Database error deleting user`, which names
 neither the table nor the constraint and whose class name asserts retryability that does not
-exist — four consecutive retries failed identically.
+exist Ã¢â‚¬â€ four consecutive retries failed identically.
 
 ### Diagnostic caution worth recording
 Two false conclusions were reached before the real one, and both came from the same mistake:
@@ -1037,13 +1037,13 @@ because it explains why the resolution is not "just cascade".
 * **Why not leave it restricted.** It is the current state, and it means a member who asks to
   be removed gets a generic error and stays. That is the worst of the three options because it
   is both unhelpful and, on a retention question, non-compliant.
-* **Why anonymisation.** The aggregate — "this skill has N verified proofs, mean trust score S"
-  — is what employers consume, and none of it identifies anyone. What identifies the person is
+* **Why anonymisation.** The aggregate Ã¢â‚¬â€ "this skill has N verified proofs, mean trust score S"
+  Ã¢â‚¬â€ is what employers consume, and none of it identifies anyone. What identifies the person is
   the foreign key and the free-text description. Severing those two, and keeping the row,
   satisfies a deletion request without falsifying a count.
 
-Making the smoke suite's pre-flight resilient to an interrupted predecessor run — removing
-restricted rows in order rather than calling `deleteUser` and swallowing the failure — is a
+Making the smoke suite's pre-flight resilient to an interrupted predecessor run Ã¢â‚¬â€ removing
+restricted rows in order rather than calling `deleteUser` and swallowing the failure Ã¢â‚¬â€ is a
 follow-up that belongs with the migration.
 
 **That follow-up is no longer needed, and the migration resolved it rather than needing it.** With
@@ -1055,14 +1055,14 @@ refuses to count anonymised rows as orphans, both of which E-029 introduced.
 
 ## E-026: Accounts provisioned outside registration had no profile row
 
-* **Status:** Resolved — 2026-10-05, verified live
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-05, verified live
 * **Found:** 2026-10-05, while building `PATCH /auth/profile`.
 
 ### Description
 `updateProfile` issued an `UPDATE public.profiles SET ... WHERE user_id = ?`. The `profiles`
 row is created by a trigger on `auth.users`, which only fires for accounts that pass through
-`/auth/register`. Accounts created by a service-role `createUser` — an administrator
-provisioning a colleague, or the smoke suite minting an elevated role — never fire it.
+`/auth/register`. Accounts created by a service-role `createUser` Ã¢â‚¬â€ an administrator
+provisioning a colleague, or the smoke suite minting an elevated role Ã¢â‚¬â€ never fire it.
 
 For those accounts the update matched zero rows, which the service reported as 404. Reading the
 profile 404'd for the same reason. The result was that a perfectly real, authenticated user got
@@ -1071,11 +1071,11 @@ anyone not created through the public endpoint.
 
 ### Root cause
 `UPDATE` was chosen on the assumption that the row always exists, which held for the only account
-creation path that had been exercised. The assumption was never wrong about the data model —
+creation path that had been exercised. The assumption was never wrong about the data model Ã¢â‚¬â€
 it was wrong about who creates accounts.
 
 ### Resolution
-Converted to `insert … onConflictDoUpdate`, keyed on the existing `profiles_user_id_unique`
+Converted to `insert Ã¢â‚¬Â¦ onConflictDoUpdate`, keyed on the existing `profiles_user_id_unique`
 index. No schema change was needed; the unique constraint that makes the upsert safe was
 already there.
 
@@ -1091,7 +1091,7 @@ its own profile.
 
 ## E-027: `profiles.location_city` is a column no code path writes
 
-* **Status:** Open — resolving it needs an authorisation decision, not code
+* **Status:** Open Ã¢â‚¬â€ resolving it needs an authorisation decision, not code
 * **Found:** 2026-10-05, while building the employer profile form.
 
 ### Description
@@ -1101,8 +1101,8 @@ user's location, which made the UI assert something the database does not contai
 
 ### Why it was not simply filled in
 A city name cannot be derived from a latitude and longitude without reverse geocoding, which
-means either a third-party lookup — a new dependency, an outbound call, and a privacy
-question about sending a user's position to a geocoder — or a bundled gazetteer large enough to
+means either a third-party lookup Ã¢â‚¬â€ a new dependency, an outbound call, and a privacy
+question about sending a user's position to a geocoder Ã¢â‚¬â€ or a bundled gazetteer large enough to
 matter. Both are decisions to make deliberately, not defaults to pick.
 
 The alternative was to derive it on read from `location_gps` and present that as a fact. A
@@ -1123,11 +1123,11 @@ honest, but the field is dead weight that the next developer will trip over.
 
 ## E-028: A profile refresh could not be persisted during a render
 
-* **Status:** Resolved as hardening — the underlying 500 is unexplained and still unreproduced
+* **Status:** Resolved as hardening Ã¢â‚¬â€ the underlying 500 is unexplained and still unreproduced
 * **Found:** 2026-10-05, during the employer dashboard browser walkthrough.
 
 ### Description
-`readAccessToken()` runs on every server render that calls the API — including `/login`, which
+`readAccessToken()` runs on every server render that calls the API Ã¢â‚¬â€ including `/login`, which
 calls `currentProfile()`. When the stored access token had expired, it refreshed through
 Supabase and then called `writeSession()` to persist the renewed token.
 
@@ -1144,14 +1144,14 @@ server logged:
 ```
 
 one per failed request, all in the sign-out-then-navigate sequence. **This was not reproduced.**
-Roughly sixty subsequent requests were made — with no cookie, with a valid session, and with a
-crafted session stamped as expired — and every one returned 200 with no new errors. Both 500
+Roughly sixty subsequent requests were made Ã¢â‚¬â€ with no cookie, with a valid session, and with a
+crafted session stamped as expired Ã¢â‚¬â€ and every one returned 200 with no new errors. Both 500
 tabs recovered on reload. The built output was inspected to rule out a misconfigured Supabase
 client, and both the middleware and `session.ts` have correctly inlined URLs.
 
 **Second occurrence, 2026-10-06:** the identical signature appeared once during a proof-form
 submission, with `page: /_error`, `statusCode: 500` and `handleAction` in the stack
-(`app-page.runtime.dev.js`) — the server-action path rather than the render path. Again
+(`app-page.runtime.dev.js`) Ã¢â‚¬â€ the server-action path rather than the render path. Again
 unreproduced: roughly forty further submissions, including every refusal branch and both media
 kinds, produced no further 500 and no console errors. The two occurrences sit in different paths
 (one a render during sign-out, one a server action during a signed-in submission), so no single
@@ -1178,7 +1178,7 @@ adding infrastructure for a defect that has not reproduced in sixty attempts is 
 
 ## E-029: Account deletion had no mechanism that a trigger could complete
 
-* **Status:** Resolved — 2026-10-05, verified live against the running project
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-05, verified live against the running project
 * **Found:** 2026-10-05, while implementing the E-025 resolution.
 * **Related:** implements E-025; `doc/08` data retention; migration `0005`.
 
@@ -1189,13 +1189,13 @@ worker's proof records from the worker; it cannot delete the file the worker upl
 That file matters more than it looks. The object path is
 `<user_id>/<YYYY-MM-DD>/<uuid>.<ext>`, so the **path prefix is the worker's own user id**. Nulling
 `media_url` removes the pointer but leaves an object in the bucket that still identifies the person
-who has just asked to be removed — to anyone able to list the bucket.
+who has just asked to be removed Ã¢â‚¬â€ to anyone able to list the bucket.
 
 The obvious implementation is a trigger that deletes the object. It cannot work, and this was
 established empirically rather than assumed:
 
 ```
-delete from storage.objects where bucket_id = 'work-proofs' and …
+delete from storage.objects where bucket_id = 'work-proofs' and Ã¢â‚¬Â¦
   42501  Direct deletion from storage tables is not allowed. Use the Storage API instead.
          raised by storage.protect_delete()
 ```
@@ -1212,7 +1212,7 @@ nothing in SQL can close that gap.
    stamps `anonymised_at` on both proof tables. `BEFORE` because a referential action fires as an
    `AFTER` trigger on the parent, so this runs before the new `ON DELETE set null` empties the
    column it has to search on. It fires for rows deleted by the cascade from `auth.users` too, which
-   is the path Supabase's `deleteUser` takes — verified, not assumed.
+   is the path Supabase's `deleteUser` takes Ã¢â‚¬â€ verified, not assumed.
 2. **Record what SQL cannot delete.** `public.orphaned_proof_media` receives the bucket and path of
    every object still stored at deletion time, read back from `storage.objects` rather than
    assumed so it stays correct if the bucket is ever renamed. This turns an invisible leak into an
@@ -1223,7 +1223,7 @@ nothing in SQL can close that gap.
 The deleting role should not need `UPDATE` on the proof tables in order to scrub them, so the
 function is `SECURITY DEFINER` with a pinned `search_path`. It is a *trigger* function, which
 PostgreSQL will not let you call directly from SQL, so unlike a helper function it cannot be
-granted to anything by mistake — which is why no `GRANT` accompanies the revoke.
+granted to anything by mistake Ã¢â‚¬â€ which is why no `GRANT` accompanies the revoke.
 
 ### `verifier_phone_hash` is deliberately retained
 It is a salted hash of a **third party's** number, not the worker's, and it is what lets the
@@ -1238,7 +1238,7 @@ such argument and is nulled.
   one worker's anonymised rows removes only their own contribution.
 * `loadEndorsementHistory` feeds the collusion graph, which keys on worker identity. A null there
   would collapse **every deleted worker into one node**, making a verifier look more diverse than
-  they are — the filter would fail open on exactly the rings it exists to catch. Excluded.
+  they are Ã¢â‚¬â€ the filter would fail open on exactly the rings it exists to catch. Excluded.
 
 The known limit of that second choice: a verifier who built their apparent reach through workers
 who have since deleted their accounts now looks narrower than they are. Correcting for it needs
@@ -1259,8 +1259,8 @@ where not exists (select 1 from auth.users u where u.id = t.worker_id)
 ```
 
 A null `worker_id` satisfies that predicate **by construction**, so every deliberately retained
-record would have been counted as a leak — and then, by being ignored, the check would have stopped
-meaning anything. The fix is `t.worker_id is not null and not exists (…)`.
+record would have been counted as a leak Ã¢â‚¬â€ and then, by being ignored, the check would have stopped
+meaning anything. The fix is `t.worker_id is not null and not exists (Ã¢â‚¬Â¦)`.
 
 This is the third time in this project that an absence has been read as a measurement. E-025 itself
 was misdiagnosed twice from a `head: true` count that returned `null` and was guarded as if it were
@@ -1271,7 +1271,7 @@ to ask a question whose answer cannot be null.**
 ### Verification
 `npm run smoke -- --live --web`, two new sections against the live database.
 
-`ACCOUNT DELETION BY ANONYMISATION` — 22 assertions. It provisions a worker carrying a profile, a
+`ACCOUNT DELETION BY ANONYMISATION` Ã¢â‚¬â€ 22 assertions. It provisions a worker carrying a profile, a
 capability block, a verified proof with stored media, and a confirmation, then issues `DELETE
 /auth/account` as that member. It asserts the delete succeeds and reports `mediaRemoved: 1,
 mediaPending: 0`; the auth user, `public.users` row, and profile are gone; the proof, capability
@@ -1282,15 +1282,15 @@ is refused; and `orphaned_proof_media` is drained to zero rows. The retained row
 by id afterwards, since they carry a null `worker_id` and the owner-scoped cleanup cannot see
 them.
 
-`SELF-SERVICE ACCOUNT DELETION` — 4 assertions on the refusal path: no session is `401`, a forged
+`SELF-SERVICE ACCOUNT DELETION` Ã¢â‚¬â€ 4 assertions on the refusal path: no session is `401`, a forged
 token is `401`, and `DELETE /auth/account/someone-elses-id` is `404` because no such route exists
-— asserted through a refusal rather than by reading the source.
+Ã¢â‚¬â€ asserted through a refusal rather than by reading the source.
 
 Suite total: **243 passed, 0 failed**, bucket at **0 objects**. Separately verified in a real
 browser: a worker with a logged proof signed in through the form, read `/settings/account`,
 confirmed the form holds the button with no nested form and no link inside it, deleted, landed on
 `/?deleted=1` with the plain-language confirmation, and was redirected to `/login` when returning
-to `/settings/account` — so the session really was gone rather than the page merely having moved.
+to `/settings/account` Ã¢â‚¬â€ so the session really was gone rather than the page merely having moved.
 Post-walkthrough probe: account, `public.users`, and profile all zero rows; proof retained with
 `worker_id` null and `anonymised_at` set; block retained with its skill tag; **0 objects stored
 under the account**; signed URL refused; 0 queue rows; and the retained proof still counted in
@@ -1305,16 +1305,16 @@ those rows wait to be drained by hand. The endpoint closes the gap only on the p
 
 ## E-030: Registration refused passwords with a message that never said why
 
-* **Status:** Resolved — 2026-10-05, verified live against the running project
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-05, verified live against the running project
 * **Found:** 2026-10-05, from a report that creating an account in the UI failed with
   `Request body failed validation`.
-* **Related:** E-007 (registration and confirmation); `doc/07` §3.A; `doc/10` creating an account.
+* **Related:** E-007 (registration and confirmation); `doc/07` Ã‚Â§3.A; `doc/10` creating an account.
 
 ### Description
 The API was right and the web app threw the answer away.
 
-`registerSchema` enforces a password policy — at least twelve characters, an uppercase letter, a
-lowercase letter, a number — and answered a refusal precisely:
+`registerSchema` enforces a password policy Ã¢â‚¬â€ at least twelve characters, an uppercase letter, a
+lowercase letter, a number Ã¢â‚¬â€ and answered a refusal precisely:
 
 ```json
 {"error":{"code":"VALIDATION_ERROR","message":"Request body failed validation.","status":400,
@@ -1332,7 +1332,7 @@ Three layers then discarded everything after the second sentence:
    form-level message, so even a message naming a field would not have been shown beside it.
 
 The result: a person whose password was one character short, or had no digit, or was otherwise
-wrong, was told `Request body failed validation.` — a sentence that describes the request rather than
+wrong, was told `Request body failed validation.` Ã¢â‚¬â€ a sentence that describes the request rather than
 the mistake, and that no reader can act on. Six distinct failures produced one indistinguishable
 message.
 
@@ -1344,14 +1344,14 @@ picks a password the policy dislikes.
 * **One policy, one definition.** `passwordProblems()` now lives in `@tetherproof/shared` and returns
   every reason a password is unacceptable. `registerSchema` reports those reasons through
   `.superRefine`, and `registerAccount` checks the same list before sending anything. Two hand-written
-  copies of a rule set drift apart, and they drift in the direction nobody tests — the copy with
-  fewer rules — which is exactly how the frontend ended up checking nothing.
+  copies of a rule set drift apart, and they drift in the direction nobody tests Ã¢â‚¬â€ the copy with
+  fewer rules Ã¢â‚¬â€ which is exactly how the frontend ended up checking nothing.
 * **The field-level details survive the trip.** `ApiRequestError` now carries `issues`, read
   defensively from `details` by `readFieldIssues`, which ignores anything malformed rather than
   throwing while handling a failure.
 * **`formErrorFor` maps path to input,** preferring the field-level reason and falling back to the
-  request-level message. Paths with no matching input — `phoneNumber` on a form that only asks for an
-  email, `role` on a select that can only hold an accepted value — deliberately stay form-level, since
+  request-level message. Paths with no matching input Ã¢â‚¬â€ `phoneNumber` on a form that only asks for an
+  email, `role` on a select that can only hold an accepted value Ã¢â‚¬â€ deliberately stay form-level, since
   pointing at a field that did not cause the failure sends the reader to fix the wrong thing.
 * **The register panel no longer repeats itself.** Its form-level message is now guarded on
   `!registerState.field`, the way the sign-in panel already was, so a field-level reason appears once.
@@ -1361,15 +1361,15 @@ to ten attempts per fifteen minutes and the limiter runs *before* validation, so
 still spent an attempt. Failing locally costs nothing; failing remotely eventually costs the person
 the ability to try at all.
 
-`.superRefine` rather than `.refine` because a password failing three rules must report all three —
+`.superRefine` rather than `.refine` because a password failing three rules must report all three Ã¢â‚¬â€
 which is what the previous chain of `.min()` and `.regex()` calls did, and what someone fixing their
 password needs. The one wording change is the length ceiling, which now reads `Password must be at
 most 200 characters.` instead of Zod's default `Password must contain at most 200 character(s).`
 
 ### Verification
 A probe asserting that `registerSchema`'s password issues equal `passwordProblems` output, case by
-case — compliant, too short, no uppercase, no number, no lowercase, several failures at once, over
-the maximum — plus every payload shape accepted before the change (worker, employer, training
+case Ã¢â‚¬â€ compliant, too short, no uppercase, no number, no lowercase, several failures at once, over
+the maximum Ã¢â‚¬â€ plus every payload shape accepted before the change (worker, employer, training
 provider, no `fullName`, an extra unknown key, an omitted `role` defaulting to `worker`, and no
 identifier at all). Login is asserted unchanged: it must not impose the policy on a password, because
 enforcing password rules at sign-in locks people out rather than helping them. **16 of 16 passed.**
@@ -1385,9 +1385,9 @@ profiles.
 clean across all workspaces; shared and API builds clean.
 
 ### Known limit
-React 19 resets an uncontrolled `<form action={…}>` after the action completes, so a failed
+React 19 resets an uncontrolled `<form action={Ã¢â‚¬Â¦}>` after the action completes, so a failed
 registration still clears the name and email the person typed, and they are retyped along with the
-corrected password. That is pre-existing — it happened before this fix too, with the worse message —
+corrected password. That is pre-existing Ã¢â‚¬â€ it happened before this fix too, with the worse message Ã¢â‚¬â€
 and fixing it means carrying the submitted values back as `defaultValue`. Not done here, because it
 is a separate concern from the validation contract and changes what the user sees after a failure.
 
@@ -1406,17 +1406,17 @@ is correct. Reported, not changed.
 **Since corrected** as part of the registration-flow rework (2026-10-05). The label was a default
 value on the shared `PanelSwitch` component, right for one panel and wrong for the other, so the
 default was removed and each panel now states its own: the sign-in panel reads **"I don't have an
-account"** and opens registration — which is also the visible entry point that was missing — and the
+account"** and opens registration Ã¢â‚¬â€ which is also the visible entry point that was missing Ã¢â‚¬â€ and the
 register panel keeps **"I already have an account"** and opens sign-in.
 
 ---
 
 ## E-031: The confirmation link went to a port nobody was listening on
 
-* **Status:** Resolved — 2026-10-05, verified live against the running project
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-05, verified live against the running project
 * **Found:** 2026-10-05, from a report that clicking the link in a confirmation email failed with a
   connection-refused error.
-* **Related:** E-007 (registration and confirmation); `doc/07` §3.A, §3.B, §3.H; `doc/10` confirming
+* **Related:** E-007 (registration and confirmation); `doc/07` Ã‚Â§3.A, Ã‚Â§3.B, Ã‚Â§3.H; `doc/10` confirming
   an account.
 
 ### Description
@@ -1426,8 +1426,8 @@ Two things were missing, and either alone would have been enough to break the cl
 back to a URL the application supplies. Nothing at `/auth/callback` existed, so even a link pointing
 at the right machine had nowhere to land.
 
-**The port was written down in the wrong place.** The redirect came from Supabase's Site URL —
-`http://localhost:3000` — because nothing asked for anything else. The application was running on
+**The port was written down in the wrong place.** The redirect came from Supabase's Site URL Ã¢â‚¬â€
+`http://localhost:3000` Ã¢â‚¬â€ because nothing asked for anything else. The application was running on
 3001, and 3000 on that machine serves a completely different project. The link did not merely land
 on the wrong page; it landed on someone else's server, and a reader arriving from a real inbox saw a
 refused connection or an unrelated site.
@@ -1436,27 +1436,27 @@ The shape of the response is worth recording, because it decides where the fix h
 answers the confirmation request with a redirect carrying the session in the **fragment**:
 
 ```
-303 → http://localhost:3001/auth/callback#access_token=…&refresh_token=…
+303 Ã¢â€ â€™ http://localhost:3001/auth/callback#access_token=Ã¢â‚¬Â¦&refresh_token=Ã¢â‚¬Â¦
 ```
 
 A fragment is never transmitted to a server. No server-side code, no route handler, no middleware can
-read it — so a callback that only exists as a server component would render a page and never see the
+read it Ã¢â‚¬â€ so a callback that only exists as a server component would render a page and never see the
 credentials. Whatever completes the sign-in has to run in the browser.
 
 The one thing that must not happen is treating that fragment as proof. The credentials are only worth
-something because Supabase issued them, so they are sent to the server and **exchanged** — GoTrue's
+something because Supabase issued them, so they are sent to the server and **exchanged** Ã¢â‚¬â€ GoTrue's
 answer is the session, and a token the client merely asserts is worth nothing.
 
 ### The fix, and why the origin is derived rather than written down
 * **`/auth/callback` exists** as a page with a client component that reads `window.location.hash`,
   clears the credentials out of the address bar with `history.replaceState` before any network call,
-  and hands the refresh token to a server action. A `?code=` query — the PKCE shape, which is what
-  this application's own Supabase clients speak — is handled on the same page through
+  and hands the refresh token to a server action. A `?code=` query Ã¢â‚¬â€ the PKCE shape, which is what
+  this application's own Supabase clients speak Ã¢â‚¬â€ is handled on the same page through
   `exchangeCodeForSession`.
 * **The session comes from an exchange, never from the link.** `refreshSession()` sends the refresh
   token to GoTrue and stores only what comes back; the custom `tp_session` cookie is then written.
   The role is read from `GET /auth/me` rather than from the token, because the API is what will
-  authorize every page opened next — and if the API will not recognize the account, the cookie is
+  authorize every page opened next Ã¢â‚¬â€ and if the API will not recognize the account, the cookie is
   cleared rather than left to fail one click later.
 * **The redirect origin is supplied by the caller, per request.** The web app sends `redirectOrigin`
   on `/auth/register` and `/auth/confirm/request`, resolved in this order: a configured
@@ -1466,7 +1466,7 @@ answer is the session, and a token the client merely asserts is worth nothing.
 * **The API refuses an origin it did not agree to.** `redirectOriginSchema` trims, validates, and
   reduces the value to `new URL(v).origin`, then checks it against the allow-list: `NEXT_PUBLIC_SITE_URL`,
   `WEB_BASE_URL`, and `CORS_ORIGINS`, plus loopback and private addresses outside production. A
-  non-permitted origin is a **400 with `details` naming `redirectOrigin`** — not a silent fallback.
+  non-permitted origin is a **400 with `details` naming `redirectOrigin`** Ã¢â‚¬â€ not a silent fallback.
   Silence is how this bug survived: a redirect quietly substituted for the requested one looks exactly
   like success until somebody clicks it.
 
@@ -1490,20 +1490,20 @@ links."* The same call with `http://localhost:3001` returned **201**, as did a r
 Real-browser proof that the origin is derived and not written down: registering from
 `http://desktop-ch0mrbt:3001` was **refused in the form with that same message**, while registering
 from `http://localhost:3001` succeeded. A hardcoded `http://localhost:3000` is an allowed origin, so
-a hardcoded value would have been accepted on that host — the refusal is only possible if the web app
+a hardcoded value would have been accepted on that host Ã¢â‚¬â€ the refusal is only possible if the web app
 read the request's own host and sent it.
 
 Real-browser end-to-end, run against the shipped code: registered through the real form on 3001,
 minted the confirmation link with `redirect_to=http://localhost:3001/auth/callback`, and opened it.
 The link landed on `/auth/callback` with no connection refused, the credentials were stripped from the
 address bar, the exchange succeeded, and the reader was sent to `/invites` and rendered the signed-in
-page — *"Signed in as Final Callback Probe."* — with the session surviving a full page load.
+page Ã¢â‚¬â€ *"Signed in as Final Callback Probe."* Ã¢â‚¬â€ with the session surviving a full page load.
 
 `npm run smoke -- --live`: **232 passed, 0 failed**. Typecheck clean across all workspaces; API build
 clean.
 
 ### Known limit
-Reaching the development server by the machine's own name — `http://DESKTOP-CH0MRBT:3001` — is
+Reaching the development server by the machine's own name Ã¢â‚¬â€ `http://DESKTOP-CH0MRBT:3001` Ã¢â‚¬â€ is
 refused, because a name is not an address and deciding which hostnames count as "this machine" would
 mean resolving them inside a validation path. The message says so plainly and the fix is to set
 `NEXT_PUBLIC_SITE_URL`, which states the answer explicitly rather than guessing it.
@@ -1512,13 +1512,13 @@ The `?code=` path only completes when the code was produced by this application'
 client, because PKCE pairs a code with the verifier that requested it. A code minted elsewhere is
 refused, which is correct: accepting it would defeat the pairing.
 
-Nothing here reaches an inbox, so the link was minted with `admin.generateLink` — the same technique
-used to verify E-016 — rather than by reading the email. What that does not cover is whether a
+Nothing here reaches an inbox, so the link was minted with `admin.generateLink` Ã¢â‚¬â€ the same technique
+used to verify E-016 Ã¢â‚¬â€ rather than by reading the email. What that does not cover is whether a
 delivered message renders its link intact; the redirect is Supabase's, not the mail client's.
 
 ## E-032: The verification link rendered as `[object Promise]/verify/...`
 
-* **Status:** Resolved — 2026-10-06, verified in a real browser against the running app
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-06, verified in a real browser against the running app
 * **Found:** 2026-10-06, walking the proof-upload success path for the first time end to end.
 
 ### Description
@@ -1528,7 +1528,7 @@ delivered message renders its link intact; the redirect is Supabase's, not the m
 verificationUrl: `${currentOrigin()}/verify/${result.verificationToken}`
 ```
 
-`currentOrigin()` is `async` — it awaits `headers()` — so the template string interpolated a
+`currentOrigin()` is `async` Ã¢â‚¬â€ it awaits `headers()` Ã¢â‚¬â€ so the template string interpolated a
 Promise. Every successful submission therefore displayed and copied
 `[object Promise]/verify/<token>`: a link that looks complete, passes a casual read, and resolves
 to a 404 when tapped. Nothing else in the flow caught it, because the API returns the token
@@ -1550,17 +1550,17 @@ base64url and untouched. A second submission produced a second distinct link.
 
 ## E-033: The location box was hidden while the copy told people to type into it
 
-* **Status:** Resolved — 2026-10-06, verified in a real browser at a mobile viewport
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-06, verified in a real browser at a mobile viewport
 * **Found:** 2026-10-06, auditing the log form at a 579px viewport.
 
 ### Description
-The proof form's location input was `<input type="hidden" name="submissionGps">` — 0×0, absent from
+The proof form's location input was `<input type="hidden" name="submissionGps">` Ã¢â‚¬â€ 0Ãƒâ€”0, absent from
 the tab order, absent from the accessibility tree. The only way to set a location was the "Use my
 location" button.
 
 Two sentences around it said otherwise:
 
-* the fieldset's own copy — *"this box is the only record of place there is"* — pointed at a box that
+* the fieldset's own copy Ã¢â‚¬â€ *"this box is the only record of place there is"* Ã¢â‚¬â€ pointed at a box that
   could not be seen or focused;
 * both geolocation refusal messages end *"You can type the coordinates instead"* (`use-geolocation.ts`),
   whose docblock in turn asserts *"Every location field in the app is typeable by hand"*.
@@ -1579,7 +1579,7 @@ Replaced with a visible, labelled text field inside the same fieldset: `id`/`htm
 keyboard is now a peer rather than a claim. The duplicate read-only span that echoed the value was
 removed, since the input itself now shows it.
 
-`submitProof` gained the matching client-side check — shape first, then `|lat| ≤ 90`, `|lon| ≤ 180` —
+`submitProof` gained the matching client-side check Ã¢â‚¬â€ shape first, then `|lat| Ã¢â€°Â¤ 90`, `|lon| Ã¢â€°Â¤ 180` Ã¢â‚¬â€
 for the same reason the other checks are duplicated: `/workers/proofs` sits behind a media rate
 limiter, and discovering a nonsense coordinate after the file has already uploaded spends one of a
 worker's few uploads per minute on a refusal that was knowable beforehand.
@@ -1587,11 +1587,11 @@ worker's few uploads per minute on a refusal that was knowable beforehand.
 ### Verification
 Real browser at `innerWidth: 579` (below the `md:` breakpoint):
 
-* the field measures 449×48, is labelled "Coordinates", and its hint reads *"Latitude, longitude. The
+* the field measures 449Ãƒâ€”48, is labelled "Coordinates", and its hint reads *"Latitude, longitude. The
   button fills this in, or type it: 5.6037,-0.1870"*;
-* typing `not-a-coordinate` and submitting returns *"Enter coordinates as latitude, longitude — for
+* typing `not-a-coordinate` and submitting returns *"Enter coordinates as latitude, longitude Ã¢â‚¬â€ for
   example 5.6037,-0.1870."* with `aria-invalid="true"` and `aria-describedby="submissionGps-error
-  submissionGps-hint"` — and **without** spending an upload, since the file attached to that attempt
+  submissionGps-hint"` Ã¢â‚¬â€ and **without** spending an upload, since the file attached to that attempt
   was never sent;
 * typing `999,999` returns *"Location coordinates are out of range."* with the text and the attached
   file both retained;
@@ -1602,13 +1602,13 @@ not shared. You can type the coordinates instead."*, and the box it refers to is
 
 ## E-034: React emptied the log form after every attempt, including a refused one
 
-* **Status:** Resolved — 2026-10-06, verified in a real browser with a DOM probe
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-06, verified in a real browser with a DOM probe
 * **Found:** 2026-10-06, while re-testing the refusal path of the proof-upload form.
 
 ### Description
 `useActionState` calls `form.reset()` once its action settles. That is correct for a form whose
 submission succeeded and is now gone, and wrong for one that came back with a refusal: the worker
-was about to correct one line and try again, and the reset took the rest with it — the description
+was about to correct one line and try again, and the reset took the rest with it Ã¢â‚¬â€ the description
 they had written, the photo or recording they had chosen, and any location already set. Every
 rejection cost them the whole submission.
 
@@ -1627,10 +1627,10 @@ Probed directly before committing to a fix. React calls `form.reset()` from with
 on that path the synthetic event never reaches the component's `onReset` prop. Measured on the live
 form:
 
-* `form.reset` wrapped to count calls → **`resets: 1`**, so React did call it;
-* `onReset={(e) => e.preventDefault()}` on the `<form>` → **`preventedAtForm: false`**;
-* a `preventDefault` at `document` → **`preventedAtDoc: false`**;
-* the same prop, when a page script called `form.reset()` directly → **prevented**.
+* `form.reset` wrapped to count calls Ã¢â€ â€™ **`resets: 1`**, so React did call it;
+* `onReset={(e) => e.preventDefault()}` on the `<form>` Ã¢â€ â€™ **`preventedAtForm: false`**;
+* a `preventDefault` at `document` Ã¢â€ â€™ **`preventedAtDoc: false`**;
+* the same prop, when a page script called `form.reset()` directly Ã¢â€ â€™ **prevented**.
 
 So the prop looks like it should stop the reset and does not, which is worse than having no hook at
 all: it invites the next reader to trust it.
@@ -1638,7 +1638,7 @@ all: it invites the next reader to trust it.
 ### Resolution
 One mechanism, on the element: a native `reset` listener installed through `formRef` in a
 `useEffect`. `reset` is cancelable and the listener is on the target, so it runs before the browser
-acts on it. The `onReset` prop was removed rather than left beside it — a second, inert version of
+acts on it. The `onReset` prop was removed rather than left beside it Ã¢â‚¬â€ a second, inert version of
 the same intent is a trap.
 
 `Field`'s now-unused `value?: string` prop was reverted out with it, so the component is back to
@@ -1649,24 +1649,24 @@ DOM probe on the live form, instrumenting `form.reset` and listening for `reset`
 
 | | |
 | --- | --- |
-| `resets` | 1 — React called it, exactly as it does in production |
-| `prevented` | `true` — the native listener cancelled it |
-| skill text after refusal | `Reset Prevention Probe` — retained |
-| description after refusal | 75 characters — retained |
-| file after refusal | `probe.jpg`, `fileCount: 1` — **retained**, which the reset destroyed most reliably |
+| `resets` | 1 Ã¢â‚¬â€ React called it, exactly as it does in production |
+| `prevented` | `true` Ã¢â‚¬â€ the native listener cancelled it |
+| skill text after refusal | `Reset Prevention Probe` Ã¢â‚¬â€ retained |
+| description after refusal | 75 characters Ã¢â‚¬â€ retained |
+| file after refusal | `probe.jpg`, `fileCount: 1` Ã¢â‚¬â€ **retained**, which the reset destroyed most reliably |
 | refusal itself | `Location coordinates are out of range.` still rendered as `role="alert"` |
 
 Stable on a second poll after the action had fully settled, so the values survive the re-render and
 not merely the first frame. A full submission afterwards still produced the success panel, and
 "Log another job" still produced a genuinely clean form (`skill` empty, `description` 0 characters,
-`fileCount: 0`, empty location) — the clean sheet comes from the remount, which is the only place
+`fileCount: 0`, empty location) Ã¢â‚¬â€ the clean sheet comes from the remount, which is the only place
 it is wanted.
 
 ## E-035: The browser's own origin was missing from the API's CORS list, so the verification page could not load
 
-* **Status:** Resolved — 2026-10-06, verified against the running API with an origin matrix and in a real browser
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-06, verified against the running API with an origin matrix and in a real browser
 * **Found:** 2026-10-06, opening a verification link during the Phase 5 security review.
-* **Related:** E-031 (confirmation links, the same port drift); `doc/11` §4; `apps/api/src/app.ts`, `apps/api/src/lib/origin.ts`.
+* **Related:** E-031 (confirmation links, the same port drift); `doc/11` Ã‚Â§4; `apps/api/src/app.ts`, `apps/api/src/lib/origin.ts`.
 
 ### Description
 The page a verifier is sent to is the only screen in the product that calls the API from the
@@ -1685,20 +1685,20 @@ We could not load this request. Please try again.
 with, in the console,
 
 ```
-Access to fetch at 'http://localhost:4000/api/v1/verifications/…' from origin
+Access to fetch at 'http://localhost:4000/api/v1/verifications/Ã¢â‚¬Â¦' from origin
 'http://localhost:3001' has been blocked by CORS policy
 ```
 
 No amount of retrying helps, because nothing about the page can change a header the API decides. The
-link itself was valid — the API answered the same token correctly over plain HTTP.
+link itself was valid Ã¢â‚¬â€ the API answered the same token correctly over plain HTTP.
 
 The same drift had already broken confirmation links once (E-031), which is what makes this a
 repeated failure rather than a first one: two independent rules in the codebase had to keep agreeing
 with a port number nobody wrote down.
 
 ### Why adding the port to configuration was not the answer
-It would fix today's port and nothing else — a development server takes the next free port the same
-way next time — and the value lives in `.env`, which is not the code's to edit. It also only
+It would fix today's port and nothing else Ã¢â‚¬â€ a development server takes the next free port the same
+way next time Ã¢â‚¬â€ and the value lives in `.env`, which is not the code's to edit. It also only
 describes the symptom. What is really being judged is *"is this origin the machine the browser is
 running on"*, and the codebase already had a rule for exactly that question, written for
 confirmation links: `isLocalAddress` in `redirect.ts`.
@@ -1707,11 +1707,11 @@ confirmation links: `isLocalAddress` in `redirect.ts`.
 The rule became shared, in `apps/api/src/lib/origin.ts`, and `createApp` now decides the CORS origin
 with it:
 
-* an origin in `CORS_ORIGINS` → allowed, exactly as before;
-* outside production, an origin on loopback or a private range → allowed, the same "this machine or
+* an origin in `CORS_ORIGINS` Ã¢â€ â€™ allowed, exactly as before;
+* outside production, an origin on loopback or a private range Ã¢â€ â€™ allowed, the same "this machine or
   this network" reading `redirectOriginProblem` already uses;
-* anything else → refused, which withholds the CORS headers entirely rather than blanking one;
-* no `Origin` at all — curl, the smoke suite, server-to-server → untouched, as before.
+* anything else Ã¢â€ â€™ refused, which withholds the CORS headers entirely rather than blanking one;
+* no `Origin` at all Ã¢â‚¬â€ curl, the smoke suite, server-to-server Ã¢â€ â€™ untouched, as before.
 
 Production is unchanged: `env.isProduction` gates the local allowance, so a deployed API still
 accepts only what the operator named. Two definitions of "local" would be two chances for them to
@@ -1733,8 +1733,8 @@ Preflight from the app's origin answers `204` with methods and credentials.
 
 In the browser: the verification page that previously failed now renders the question, the skill and
 the description with **zero console errors**, and pressing the button recorded the answer
-(*"Thank you — Your confirmation has been recorded."*), after which a reload reported the link
-already answered. Full path walked live: a worker submits a proof → the link is opened → confirmed →
+(*"Thank you Ã¢â‚¬â€ Your confirmation has been recorded."*), after which a reload reported the link
+already answered. Full path walked live: a worker submits a proof Ã¢â€ â€™ the link is opened Ã¢â€ â€™ confirmed Ã¢â€ â€™
 revisited.
 
 End to end in the suite as well: `npm run smoke -- --live --yes --web` reports **246 passed, 0
@@ -1745,7 +1745,7 @@ failed**, including `preflight allows the web origin (ACAO=http://localhost:3105
 
 ## E-036: The API offered a form for a proof that could never be answered
 
-* **Status:** Resolved — 2026-10-06, verified against the running API and in a real browser
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-06, verified against the running API and in a real browser
 * **Found:** 2026-10-06, while completing the verification flow after the E-035 fix.
 * **Related:** E-025/E-029 (account deletion); `apps/api/src/modules/verifications/service.ts`; `doc/08` data retention.
 
@@ -1762,7 +1762,7 @@ be released from them. The refusal is a `409`: *"This verification link is no lo
 
 1. the verifier opens a link whose worker has since left the platform;
 2. the page shows the question and both buttons, as though the answer would count;
-3. the verifier chooses and presses — and is told the link is no longer active;
+3. the verifier chooses and presses Ã¢â‚¬â€ and is told the link is no longer active;
 4. "Try again" re-reads, gets `200`, and returns the identical form, so the loop only ends when the
    tab is closed.
 
@@ -1773,7 +1773,7 @@ question the product has already decided cannot be answered.
 ### Why GET did not simply reuse `assertUsable`
 It must not. Two of that function's three refusals are wrong for a read:
 
-* a **spent** link must stay readable — the outcome is what the reader came for, and the suite
+* a **spent** link must stay readable Ã¢â‚¬â€ the outcome is what the reader came for, and the suite
   asserts that revisiting shows it;
 * an **expired** link can be recognised from `expiresAt`, and refusing it at read time would hide a
   summary the spent case deliberately shows.
@@ -1785,20 +1785,20 @@ the spent link's sentence.
 ### Resolution
 `getVerificationSummary` now refuses an anonymised proof with the identical code and wording that
 `assertUsable` uses on submission. One rule, decided once, reported the same way whichever endpoint
-is asked — and the form is never rendered for it.
+is asked Ã¢â‚¬â€ and the form is never rendered for it.
 
 ### Verification
 Against the running API, on the link for a proof whose worker account had been deleted:
 
 | | before | after |
 | --- | --- | --- |
-| `GET /verifications/{token}` | `200`, `awaiting_response`, form rendered | `409 VERIFICATION_TOKEN_CONSUMED` — *"This verification link is no longer active."* |
+| `GET /verifications/{token}` | `200`, `awaiting_response`, form rendered | `409 VERIFICATION_TOKEN_CONSUMED` Ã¢â‚¬â€ *"This verification link is no longer active."* |
 | unknown token | `404` | `404` (unchanged) |
 | live link | `200` | `200` (unchanged) |
 | answered link | `200`, outcome | `200`, outcome (unchanged) |
 
-The browser then walked a fresh proof end to end — question → confirm → *"Thank you"* → reload
-reporting *"already answered on 10/6/2026"* — with no console errors, and the suite's
+The browser then walked a fresh proof end to end Ã¢â‚¬â€ question Ã¢â€ â€™ confirm Ã¢â€ â€™ *"Thank you"* Ã¢â€ â€™ reload
+reporting *"already answered on 10/6/2026"* Ã¢â‚¬â€ with no console errors, and the suite's
 `--web` section (`browser GET returns the summary`, `revisiting the link shows it was answered`)
 passes: **246 passed, 0 failed**.
 
@@ -1806,9 +1806,9 @@ passes: **246 passed, 0 failed**.
 
 ## E-037: Running the production build stopped the dev server dead, with 500s on every route
 
-* **Status:** Resolved — 2026-10-06, by restarting the dev server; the trap is documented rather than patched, because it is Next's build layout rather than this project's code
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-06, by restarting the dev server; the trap is documented rather than patched, because it is Next's build layout rather than this project's code
 * **Found:** 2026-10-06, when `/login` and `/dashboard` both answered `500 Internal Server Error` while the API stayed healthy.
-* **Related:** `doc/11` §4.
+* **Related:** `doc/11` Ã‚Â§4.
 
 ### Description
 `npm run build` and `next dev` both write to `apps/web/.next`. Running the build while the dev
@@ -1822,7 +1822,7 @@ What made this cost time is how it presents. Three things said everything was fi
 * `robots.txt` returned `200`, because it is a static file served outside the compile path;
 * a browser tab that was already open kept rendering its page from the previous successful load.
 
-So the evidence pointed away from the build and towards a stale session cookie or a broken route —
+So the evidence pointed away from the build and towards a stale session cookie or a broken route Ã¢â‚¬â€
 which is where it was chased for a while before the dev server's own output was read.
 
 ### Resolution
@@ -1830,19 +1830,19 @@ Stop the dev server before building, and restart it afterwards. The running proc
 going to be coherent again, so it is restarted rather than coaxed.
 
 ### Prevention
-`doc/11` §4 now states the constraint alongside the build and smoke steps, including the three false
+`doc/11` Ã‚Â§4 now states the constraint alongside the build and smoke steps, including the three false
 symptoms above, so the next person reads the dev server's output instead of the network tab.
 
 ## E-038: A misconfigured messaging provider started anyway, exactly as the docs promised it would not
 
-* **Status:** Resolved — 2026-10-06, verified by starting the production build with and without the misconfiguration
-* **Found:** 2026-10-06, while checking the production-startup rules `doc/09` §4.1 states.
-* **Related:** `doc/09` §4.1 and §5; `apps/api/src/lib/messaging/index.ts`; `apps/api/src/index.ts`.
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-06, verified by starting the production build with and without the misconfiguration
+* **Found:** 2026-10-06, while checking the production-startup rules `doc/09` Ã‚Â§4.1 states.
+* **Related:** `doc/09` Ã‚Â§4.1 and Ã‚Â§5; `apps/api/src/lib/messaging/index.ts`; `apps/api/src/index.ts`.
 
 ### Description
 Three separate documents said the same thing, and none of them was true.
 
-`doc/09` §4.1:
+`doc/09` Ã‚Â§4.1:
 
 > Setting `MESSAGING_PROVIDER=twilio` without all three **refuses to start**, rather than looking
 > healthy while quietly never sending.
@@ -1870,13 +1870,13 @@ $ curl /api/v1/health
 Healthy, listening, and doomed. The health check does not mention the messaging provider at all,
 so nothing about the deployment's state was visible; the first sign of trouble would have been the
 first worker to submit a proof, and even that arrives as a caught exception inside
-`sendVerificationLink` — a log line, in a feature whose whole purpose is to reach a client. The
+`sendVerificationLink` Ã¢â‚¬â€ a log line, in a feature whose whole purpose is to reach a client. The
 failure mode both documents named as unacceptable was the actual behaviour.
 
 ### Resolution
 `index.ts` now resolves the provider before the socket opens, so `resolve()` runs at startup and
-its refusal is a startup failure. Constructing the provider does no I/O — `TwilioProvider`'s
-constructor stores configuration and `isConfigured()` checks that it is present — so the check
+its refusal is a startup failure. Constructing the provider does no I/O Ã¢â‚¬â€ `TwilioProvider`'s
+constructor stores configuration and `isConfigured()` checks that it is present Ã¢â‚¬â€ so the check
 costs nothing at boot. The module comment was corrected to describe what the code now does: it
 refuses to start, rather than being "caught by the health check", which it never was.
 
@@ -1885,8 +1885,8 @@ Production build, run four ways:
 
 | configuration | result |
 | --- | --- |
-| `VERIFIER_PHONE_SALT` missing | refuses to start: `VERIFIER_PHONE_SALT: required in production, at least 16 characters` (pre-existing, matches `doc/09` §4.1) |
-| `MESSAGING_PROVIDER=twilio`, credentials empty | **refuses to start**: `MESSAGING_PROVIDER is "twilio" but TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER are not all set.` — previously started |
+| `VERIFIER_PHONE_SALT` missing | refuses to start: `VERIFIER_PHONE_SALT: required in production, at least 16 characters` (pre-existing, matches `doc/09` Ã‚Â§4.1) |
+| `MESSAGING_PROVIDER=twilio`, credentials empty | **refuses to start**: `MESSAGING_PROVIDER is "twilio" but TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER are not all set.` Ã¢â‚¬â€ previously started |
 | `MESSAGING_PROVIDER=log` (the default) | starts, `/api/v1/health` returns `200 {"status":"ok","database":"up"}` |
 | development (`.env`, provider `log`) | unaffected; the development server runs normally |
 
@@ -1896,13 +1896,13 @@ Production build, run four ways:
 
 ## E-039: The client rendered every form in the product with none of the security headers the API carries
 
-* **Status:** Resolved — 2026-10-06, verified by header capture, a same-origin frame probe and Lighthouse
-* **Found:** 2026-10-06, during the Phase 5 security audit — the API was checked first and came back
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-06, verified by header capture, a same-origin frame probe and Lighthouse
+* **Found:** 2026-10-06, during the Phase 5 security audit Ã¢â‚¬â€ the API was checked first and came back
   clean, which is what made the asymmetry visible.
-* **Related:** `doc/08` §2; `apps/web/next.config.ts`; `apps/api/src/app.ts` (`helmet`).
+* **Related:** `doc/08` Ã‚Â§2; `apps/web/next.config.ts`; `apps/api/src/app.ts` (`helmet`).
 
 ### Description
-The API has carried a full `helmet` set since Phase 1 — CSP, HSTS, `nosniff`, frame options,
+The API has carried a full `helmet` set since Phase 1 Ã¢â‚¬â€ CSP, HSTS, `nosniff`, frame options,
 referrer policy, `x-powered-by` disabled. The web app, which is the half that actually renders the
 forms and holds the session cookie, shipped with none of them:
 
@@ -1921,21 +1921,21 @@ CSP. Two consequences with a person behind them:
   work performed, so a forged submission is not a nuisance, it is the fraud the platform exists to
   prevent.
 * **A token in a referer.** A verification link carries a bearer token in its path. Without a
-  referrer policy, following any link from that page — or from any page the reader reached after it
-  — could disclose the token to a third party.
+  referrer policy, following any link from that page Ã¢â‚¬â€ or from any page the reader reached after it
+  Ã¢â‚¬â€ could disclose the token to a third party.
 
 ### Why these values
 * `X-Frame-Options: SAMEORIGIN` rather than `DENY`, matching the API: a same-origin frame is how the
   layout is inspected at a desktop width when no wide viewport is available, and `DENY` closes that
   without protecting anything `frame-ancestors 'self'` does not.
-* `Referrer-Policy: no-referrer` — the verify page had already asked for this with a meta tag;
+* `Referrer-Policy: no-referrer` Ã¢â‚¬â€ the verify page had already asked for this with a meta tag;
   nothing in the product needs to tell another site where a reader came from, and a verification
   token in a path is never a thing to leak.
 * `Permissions-Policy` grants only what the app uses, to this origin: geolocation (is the work at
   the site it claims), microphone (voice note), camera (the photo picker on a phone).
 * CSP asserts `frame-ancestors`, `base-uri`, `form-action` and `object-src`, and **deliberately not
   `script-src`**: Next bootstraps hydration from inline scripts, so a strict script policy needs a
-  per-request nonce threaded through middleware — a change that breaks pages in ways a header check
+  per-request nonce threaded through middleware Ã¢â‚¬â€ a change that breaks pages in ways a header check
   cannot see. The directives are independent, so a browser applies the ones it is given and leaves
   the rest alone. A nonce is the right next step and belongs in its own change.
 * `Strict-Transport-Security` is stated unconditionally: it is only honoured over HTTPS, so it is
@@ -1960,14 +1960,14 @@ browser rather than assumed:
 
 * a **same-origin 1000px frame** still renders the dashboard under `SAMEORIGIN`, and the desktop
   navigation bar is the variant visible inside it;
-* a **server-action form** still submits under `form-action 'self'` — a full sign-in completed with
+* a **server-action form** still submits under `form-action 'self'` Ã¢â‚¬â€ a full sign-in completed with
   no console errors and no CSP violation;
 * the verification page still loads its data cross-origin (the CORS path from E-035);
 * **Lighthouse** on `/` and `/dashboard`: accessibility 1.0, best practices 1.0, SEO 1.0, zero
   failures.
 
 `npm run typecheck` and `npm run build` pass. These headers are now asserted by the smoke suite
-itself — five on the API's health response, six on the client's `/login` — because a response
+itself Ã¢â‚¬â€ five on the API's health response, six on the client's `/login` Ã¢â‚¬â€ because a response
 header is invisible to typechecking and easy to lose in a middleware reorder, and a check the suite
 makes is one that survives me leaving. Full run after the assertions were added: **257 passed, 0
 failed** (246 before, so all eleven passed first time).
@@ -1976,9 +1976,9 @@ failed** (246 before, so all eleven passed first time).
 
 ## E-040: The smoke suite printed FAIL and still exited 0
 
-* **Status:** Resolved — 2026-10-06, verified by forcing the same failure and asserting exit 1, then a full run asserting exit 0
-* **Found:** 2026-10-06, while re-running the gate after the Vercel build fix — the API failed to boot on one run, the suite printed `FAIL`, and the shell recorded `EXIT=0`.
-* **Related:** `scripts/smoke.mjs`; `doc/11` §4.
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-06, verified by forcing the same failure and asserting exit 1, then a full run asserting exit 0
+* **Found:** 2026-10-06, while re-running the gate after the Vercel build fix Ã¢â‚¬â€ the API failed to boot on one run, the suite printed `FAIL`, and the shell recorded `EXIT=0`.
+* **Related:** `scripts/smoke.mjs`; `doc/11` Ã‚Â§4.
 
 ### Description
 The gate is worth exactly what its exit code says, and this one could lie.
@@ -1995,7 +1995,7 @@ The API-boot block ended with `if (!up) return;`. That `return` left `main()`
 from inside its `try`, so the `finally` block ran `CLEANUP` and control never
 reached the `RESULT` line and `process.exit(failed === 0 ? 0 : 1)` that sit
 *after* the try/finally. Nothing else was pending in the event loop, so Node
-ended the process with code 0 — the one failure mode that stops the suite
+ended the process with code 0 Ã¢â‚¬â€ the one failure mode that stops the suite
 early was exactly the one the exit code did not report. Runs that printed
 `RESULT: 257 passed, 0 failed` were honest; the hole was only in the
 early-exit path, which is the path every aborted run takes.
@@ -2008,8 +2008,8 @@ Two changes in `scripts/smoke.mjs`:
   `CLEANUP` through the `finally`, and exits 1;
 * a `process.on('exit')` guard makes the rule structural instead of local:
   once any check has run, the process may only exit 0 through the `RESULT`
-  line, which sets a `finished` flag. Any other early exit — a future
-  `return`, a path that swallows a throw — ends in 1 rather than green.
+  line, which sets a `finished` flag. Any other early exit Ã¢â‚¬â€ a future
+  `return`, a path that swallows a throw Ã¢â‚¬â€ ends in 1 rather than green.
 
 ### Verification
 Both directions, with the port free (the original conditions). The failure
@@ -2039,22 +2039,22 @@ booted in 0.7 s on every attempt afterwards, including two full 257-check
 runs. It is treated as transient; what is fixed here is the exit code,
 which had been wrong all along.
 
-## E-041: The Vercel build died on `lightningcss` — the lockfile carried only the Windows native binary
+## E-041: The Vercel build died on `lightningcss` Ã¢â‚¬â€ the lockfile carried only the Windows native binary
 
-* **Status:** Resolved — 2026-10-07, live: the Vercel build of `c8e309b` completed with `✓ Compiled successfully` and 12/12 pages generated
-* **Found:** 2026-10-06, third Vercel build of `aabf2b2` — the Root Directory and Install settings now saved correctly, the build reached `next build`, and webpack failed with `Error: Cannot find module '../lightningcss.linux-x64-gnu.node'` required from `/vercel/path0/node_modules/lightningcss/node/index.js`.
-* **Related:** root `package.json` (`optionalDependencies`), `package-lock.json`, `apps/web` (Tailwind v4), `doc/09` §2.1.
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-07, live: the Vercel build of `c8e309b` completed with `Ã¢Å“â€œ Compiled successfully` and 12/12 pages generated
+* **Found:** 2026-10-06, third Vercel build of `aabf2b2` Ã¢â‚¬â€ the Root Directory and Install settings now saved correctly, the build reached `next build`, and webpack failed with `Error: Cannot find module '../lightningcss.linux-x64-gnu.node'` required from `/vercel/path0/node_modules/lightningcss/node/index.js`.
+* **Related:** root `package.json` (`optionalDependencies`), `package-lock.json`, `apps/web` (Tailwind v4), `doc/09` Ã‚Â§2.1.
 
 ### Description
 
-Tailwind v4's PostCSS chain (`@tailwindcss/postcss` → `@tailwindcss/node` → `lightningcss` +
+Tailwind v4's PostCSS chain (`@tailwindcss/postcss` Ã¢â€ â€™ `@tailwindcss/node` Ã¢â€ â€™ `lightningcss` +
 `@tailwindcss/oxide`) loads its engine from a platform-specific native package. The loader in
 `lightningcss/node/index.js` first tries `require('lightningcss-linux-x64-gnu')` and falls back to
-a relative `../lightningcss.linux-x64-gnu.node` — the exact file Vercel reported missing.
+a relative `../lightningcss.linux-x64-gnu.node` Ã¢â‚¬â€ the exact file Vercel reported missing.
 
 `package-lock.json` recorded **every** platform for `sharp`, `esbuild` and `@next/swc`, but for
 `lightningcss@1.32.0` and `@tailwindcss/oxide@4.3.3` it contained only the `win32-x64-msvc`
-entries — the ones this machine installs — even though both parents list all of their platforms in
+entries Ã¢â‚¬â€ the ones this machine installs Ã¢â‚¬â€ even though both parents list all of their platforms in
 `optionalDependencies`. npm therefore considered the lock complete (`npm ci` passed), so Vercel's
 `npm ci` faithfully installed a tree that cannot start Tailwind's engine on Linux. Local Windows
 builds passed throughout, which is why every local verification had been green.
@@ -2074,10 +2074,10 @@ parent versions (native bindings must match exactly):
 }
 ```
 
-* **Root level, not `apps/web`** — `lightningcss`/`oxide` are hoisted to `/vercel/path0/node_modules`,
+* **Root level, not `apps/web`** Ã¢â‚¬â€ `lightningcss`/`oxide` are hoisted to `/vercel/path0/node_modules`,
   and `require()` from there only walks *up*; a copy nested under `apps/web/node_modules` would
   never be found.
-* **`optionalDependencies`, not `devDependencies`** — both packages declare `os: ["linux"]`; as
+* **`optionalDependencies`, not `devDependencies`** Ã¢â‚¬â€ both packages declare `os: ["linux"]`; as
   optional they are skipped silently on Windows instead of failing `npm install` with
   `EBADPLATFORM`, while still being written to the lock and installed on Linux.
 
@@ -2089,22 +2089,22 @@ and `fsevents` (macOS-only), none of which this build path uses.
 
 ### Verification
 
-* Main repository: `npm install` → exit 0 (Windows skips the Linux optionals silently, no
+* Main repository: `npm install` Ã¢â€ â€™ exit 0 (Windows skips the Linux optionals silently, no
   `EBADPLATFORM`).
 * Clean room: fresh `git clone` of `aabf2b2` + the two changed files (`package.json`,
-  `package-lock.json`) → `npm ci` → `npm run build` in `apps/web` with `NODE_ENV=production`,
+  `package-lock.json`) Ã¢â€ â€™ `npm ci` Ã¢â€ â€™ `npm run build` in `apps/web` with `NODE_ENV=production`,
   `CI=true` and dummy `NEXT_PUBLIC_*` values. The first attempt died inside `npm ci` on a registry
-  `ECONNRESET` storm ending in npm's `Exit handler never called!` — unrelated network flakiness;
+  `ECONNRESET` storm ending in npm's `Exit handler never called!` Ã¢â‚¬â€ unrelated network flakiness;
   retried.
-* Clean-room result (retry): `npm ci` → exit 0, `npm run build` in `apps/web` → **exit 0** —
-  `✓ Compiled successfully`, lint/type checks passed, 12/12 pages generated.
-* Live: pending — the next Vercel deployment is the proof that matters; this entry closes only
+* Clean-room result (retry): `npm ci` Ã¢â€ â€™ exit 0, `npm run build` in `apps/web` Ã¢â€ â€™ **exit 0** Ã¢â‚¬â€
+  `Ã¢Å“â€œ Compiled successfully`, lint/type checks passed, 12/12 pages generated.
+* Live: pending Ã¢â‚¬â€ the next Vercel deployment is the proof that matters; this entry closes only
   then.
 ## E-042: Sign-in said "We could not sign you in" with no hint of the real cause
 
-* **Status:** Open — implemented and verified locally; closes when the next Vercel build deploys it live
-* **Found:** 2026-10-07, signing in at the live site (`https://tetherproof.vercel.app`) — the form showed the generic fallback and a reader could not tell a service outage from a wrong password.
-* **Related:** `apps/web/src/lib/api-error.ts`, `apps/web/src/lib/server/api.ts`, `apps/web/src/lib/api.ts`, `doc/09` §2.1, `doc/13` E-041.
+* **Status:** Open Ã¢â‚¬â€ implemented and verified locally; closes when the next Vercel build deploys it live
+* **Found:** 2026-10-07, signing in at the live site (`https://tetherproof.vercel.app`) Ã¢â‚¬â€ the form showed the generic fallback and a reader could not tell a service outage from a wrong password.
+* **Related:** `apps/web/src/lib/api-error.ts`, `apps/web/src/lib/server/api.ts`, `apps/web/src/lib/api.ts`, `doc/09` Ã‚Â§2.1, `doc/13` E-041.
 
 ### Description
 
@@ -2117,7 +2117,7 @@ deployed site that variable is unset until the API is hosted, so the action fetc
 The failure was then hidden by design: `messageFor()` only forwards `ApiRequestError` messages,
 because an unexpected error's own text may describe the database or the network rather than
 something the reader can act on. A raw `fetch` rejection is exactly that case, so it fell through
-to `We could not sign you in. Please try again.` — truthful, but indistinguishable from a wrong
+to `We could not sign you in. Please try again.` Ã¢â‚¬â€ truthful, but indistinguishable from a wrong
 password, with no log entry on the server to say which it was.
 
 ### Resolution
@@ -2131,7 +2131,7 @@ A single typed failure for "nothing answered at all", distinct from a refusal:
 * `lib/server/api.ts` routes both fetch calls through a `request()` helper that catches the
   rejection, logs the underlying cause (`console.error` with the URL and `cause`, so Vercel
   function logs can diagnose it), and throws `serviceUnreachable()`.
-* `lib/api.ts` (browser client) does the same without the log line — the browser's network log
+* `lib/api.ts` (browser client) does the same without the log line Ã¢â‚¬â€ the browser's network log
   already carries the technical cause.
 
 The API's own refusal for bad credentials (`Incorrect sign-in details.`) still reaches the form
@@ -2139,7 +2139,7 @@ whenever the API is the thing answering, so the two situations now read differen
 
 ### Verification
 
-* `tsc --noEmit` for `apps/web` → exit 0.
+* `tsc --noEmit` for `apps/web` Ã¢â€ â€™ exit 0.
 * Dead API (dev instance with `NEXT_PUBLIC_API_BASE_URL=http://localhost:4999`): submitting the
   login form renders the reach message, and the dev log records
   `[api] could not reach http://localhost:4999/api/v1/auth/login [TypeError: fetch failed] ...
@@ -2155,15 +2155,15 @@ deployment decision is pending; this entry only fixes how the waiting period rea
 
 ## E-043: After "Log this work" the whole page was replaced by "That page did not load"
 
-* **Status:** **Resolved** — 2026-10-07. Fix verified end-to-end on the production build, then
+* **Status:** **Resolved** Ã¢â‚¬â€ 2026-10-07. Fix verified end-to-end on the production build, then
   confirmed live on the deployed site from the reporting device after the automatic deploy.
 * **Found:** 2026-10-07, worker on a phone at the deployed site. After selecting a job, a photo,
   a description, and a phone number, tapping **Log this work** opened a screen reading *"That page
-  did not load — Nothing you entered was lost, and nothing was saved either"* instead of the
+  did not load Ã¢â‚¬â€ Nothing you entered was lost, and nothing was saved either"* instead of the
   submission result.
 * **Related:** `apps/web/src/app/(app)/workspace/LogWorkForm.tsx` (moved here from
   `apps/web/src/app/(app)/dashboard/` in the logbook restructure; the dashboard is now an overview
-  with no sibling fetches on the form's post-submission re-render path — its one fetch is
+  with no sibling fetches on the form's post-submission re-render path Ã¢â‚¬â€ its one fetch is
   try/caught), `apps/web/src/app/(app)/error.tsx`, `doc/13` E-042.
 
 ### Description
@@ -2172,7 +2172,7 @@ The submission is a server action (`submitProof`), and it never throws: every fa
 form state. The error boundary came from a different step. Once a form action settles, Next.js
 re-renders the current route, and the dashboard was a server component that also fetched
 `/invites/offers` (the "Waiting for you" card) and the caller's profile. Either fetch throwing on
-that re-render let `(app)/error.tsx` replace the entire screen — including the "Work logged" panel
+that re-render let `(app)/error.tsx` replace the entire screen Ã¢â‚¬â€ including the "Work logged" panel
 the action had just produced.
 
 The boundary's copy made it worse. "Nothing was saved either" is only true when the crash happened
@@ -2182,8 +2182,8 @@ job twice.
 
 ### Resolution
 
-* Removed the dashboard's only other server-side fetch. The "Waiting for you" card is gone — it
-  duplicated the Invitations tab — so the post-submission re-render now re-executes just the auth
+* Removed the dashboard's only other server-side fetch. The "Waiting for you" card is gone Ã¢â‚¬â€ it
+  duplicated the Invitations tab Ã¢â‚¬â€ so the post-submission re-render now re-executes just the auth
   profile fetch that every signed-in page already depends on.
 * Rewrote the error boundary copy to say *check* instead of promise: if the reader had just logged
   work, confirm whether it saved before submitting again, because a second attempt could record the
@@ -2208,14 +2208,14 @@ job twice.
 
 ## E-044: "Use my location" handed the worker a coordinate box instead of a place
 
-* **Status:** **Resolved** — 2026-10-07. Endpoint confirmed live; placement and fallback flows
+* **Status:** **Resolved** Ã¢â‚¬â€ 2026-10-07. Endpoint confirmed live; placement and fallback flows
   confirmed on the production build and then on-device after the automatic deploy.
 * **Found:** 2026-10-07, worker testing on a phone: tapping **Use my location** filled a large
   text box with `5.6037,-0.1870`. The sensor worked, but the interface presented the outcome as
   numbers to interpret, which is the opposite of how people experience a place.
 * **Related:** `apps/web/src/app/(app)/workspace/LogWorkForm.tsx` (moved here from
   `apps/web/src/app/(app)/dashboard/` in the logbook restructure), `apps/web/src/lib/use-geolocation.ts`,
-  `apps/api/src/modules/locations/*`, `doc/07` §7.
+  `apps/api/src/modules/locations/*`, `doc/07` Ã‚Â§7.
 
 ### Description
 
@@ -2228,7 +2228,7 @@ timeout made a slow GPS fix read as a failure.
 ### Resolution
 
 * New public endpoint `GET /api/v1/locations/reverse?lat=..&lon=..` names a coordinate pair via
-  Nominatim (OpenStreetMap) — keyless, no billing setup, an identifying User-Agent, a 6-second
+  Nominatim (OpenStreetMap) Ã¢â‚¬â€ keyless, no billing setup, an identifying User-Agent, a 6-second
   timeout, and a 60-per-15-minutes per-IP rate limit. The provider address lives only in
   `apps/api/src/modules/locations/service.ts`.
 * The location section in the Workspace now leads with the detected **area name** and shows the
@@ -2256,7 +2256,7 @@ The lookup is now soft on both sides. The API's reverse-geocode retries once wit
 before answering `503`; the web's own name lookup retries once more (500 ms between attempts); and
 the GPS hook retries once on a transient failure before reporting a distinct `failed` state with
 its own message, so a slow fix no longer reads as a refusal. The coordinates are never at risk
-whatever the name lookup does — verified live in the restructure run: typing `5.6037,-0.1870` saved
+whatever the name lookup does Ã¢â‚¬â€ verified live in the restructure run: typing `5.6037,-0.1870` saved
 exactly that pair into the submission, and the log detail rendered `5.6037, -0.1871` after a
 deliberate edit.
 
@@ -2264,7 +2264,7 @@ deliberate edit.
 
 ## E-045: "Send a new code" refused every attempt even with the email filled in
 
-* **Status:** Resolved — 2026-10-07. Fix verified: the code request succeeds.
+* **Status:** Resolved Ã¢â‚¬â€ 2026-10-07. Fix verified: the code request succeeds.
 * **Found:** 2026-10-07 on the sign-in page. The request-code form rendered two `email` inputs and
   the hidden one came first, so `formData.get('email')` always returned the empty hidden input and
   the action answered "Enter your email address." no matter what was typed.
@@ -2309,11 +2309,11 @@ the sign-in page.
 
 ## E-047: The web workspace was not running, and port 3001 belonged to another project
 
-* **Status:** Resolved (workaround) — 2026-10-07. The web dev server ran and the logbook flow was
+* **Status:** Resolved (workaround) Ã¢â‚¬â€ 2026-10-07. The web dev server ran and the logbook flow was
   verified against it; why the watcher's web child had vanished is not yet determined.
 * **Found:** 2026-10-07, before browser-verifying the logbook restructure. The `concurrently` root
   process (`npm run dev`) had only its `api` child alive; no TetherProof `next dev` was listening
-  on any port, and port 3001 — the port the smoke tooling assumes for the web — was serving an
+  on any port, and port 3001 Ã¢â‚¬â€ the port the smoke tooling assumes for the web Ã¢â‚¬â€ was serving an
   unrelated project's `next dev` ("Veben").
 * **Related:** `apps/web`, `scripts/smoke.mjs` (defaults `SMOKE_WEB_PORT` to 3100; the web dev
   default is 3000/3001), the `concurrently` launcher at the repo root.
@@ -2337,11 +2337,11 @@ form, a real submission (media + description + skill + typed coordinates), the "
 shortcut, the logs list, the log detail, an edit that changed the stored description and
 coordinates, and the frozen-entry note after a verification link was marked as sent. All rendered
 and interacted correctly. The one persistent harness quirk (E-046) did not reproduce for the
-login submission this time — the action POST completed and the session was written normally.
+login submission this time Ã¢â‚¬â€ the action POST completed and the session was written normally.
 
 ---
 
-## E-048: Follow-up batch � profile owner view, avatar upload, signed-in info header, header sizing, brand casing
+## E-048: Follow-up batch Ã¯Â¿Â½ profile owner view, avatar upload, signed-in info header, header sizing, brand casing
 
 * **Status:** Resolved
 * **Found:** 2026-10-08, during review of the previously shipped build.
@@ -2351,8 +2351,8 @@ login submission this time — the action POST completed and the session was wri
 Four follow-ups from review of the shipped interface:
 
 1. **Profile page opened straight into an edit form.** A profile visit answers "who am I", not
-   "finish filling this form", so the page now opens read-only � photo, name, organisation,
-   location � and editing starts only from an explicit **Edit profile** action.
+   "finish filling this form", so the page now opens read-only Ã¯Â¿Â½ photo, name, organisation,
+   location Ã¯Â¿Â½ and editing starts only from an explicit **Edit profile** action.
 2. **Info pages signed in showed "Sign in".** A member reaching Help from the more menu was
    told to sign in again. The info header now branches on session state like the app shell: a
    signed-in visitor keeps the more (hamburger) menu and their identity; a signed-out visitor
@@ -2362,7 +2362,7 @@ Four follow-ups from review of the shipped interface:
    (20px ? 24px), on a `min-h-11` (44px) button.
 4. **Brand casing.** Every mark that styled the app name `uppercase` now renders "TetherProof"
    in its true casing (AppShell, info header, marketing page, sign-in/verification interstitials).
-   Marketing section labels and logbook headings keep their deliberate `uppercase` � those are
+   Marketing section labels and logbook headings keep their deliberate `uppercase` Ã¯Â¿Â½ those are
    not the product name.
 
 ### Resolution
@@ -2372,7 +2372,7 @@ Avatar storage was the new capability this batch needed: `POST /auth/avatar` (mu
 Images are scrubbed of metadata (sharp re-encoding), stored as random-UUID objects in a private
 `profile-avatars` bucket (applied by the generalized `storage:ensure-bucket` script), and served
 only through short-lived signed URLs minted at read time. `updateProfileSchema` still accepts no
-caller-supplied `avatarUrl` � a smuggled field is stripped, never applied � and account deletion
+caller-supplied `avatarUrl` Ã¯Â¿Â½ a smuggled field is stripped, never applied Ã¯Â¿Â½ and account deletion
 now also removes the avatar object, counted in `mediaRemoved`. The storage helper
 `deleteProfileAvatar` reports success so deletion counts stay honest.
 
@@ -2384,7 +2384,7 @@ profile PATCH was stripped, remove returned `null`, and deleting the account rem
 object (`mediaRemoved: 1`) with the earlier signed URL dead afterwards. No objects left behind in
 either bucket.
 
-Web (dev server on 3100): signed in as a throwaway worker � dashboard header brand 18px / weight
+Web (dev server on 3100): signed in as a throwaway worker Ã¯Â¿Â½ dashboard header brand 18px / weight
 600 / no uppercase and 24px hamburger on a 44px button; `/profile` opened read-only with
 **Edit profile**, the form appeared only after clicking it; a real file upload showed the photo
 with "Your photo is updated." and an image decoded from storage; **Remove photo** cleared it with
@@ -2559,7 +2559,7 @@ failed upload beside the file picker.
 
 **A refused sign-in wiped what had been typed.** React resets an uncontrolled form once its
 action finishes, whether it succeeded or failed, so the two boxes came back empty. `Field`
-documented the opposite — that an uncontrolled input keeps what the person typed — which is
+documented the opposite Ã¢â‚¬â€ that an uncontrolled input keeps what the person typed Ã¢â‚¬â€ which is
 why this was not caught by reading the component.
 
 The same field-pinning defect was audited across every action. The others were already
@@ -2596,3 +2596,58 @@ at form level. `uploadAvatar` was the one remaining case.
 * Production build of a clean copy of the tree: exit 0, every route generated.
 * Rendered `/login` from that build and confirmed the server-rendered markup carries the
   Lucide icons.
+
+## E-052: The mutual-endorsement collusion signal is documented but can never fire
+
+### Problem
+
+pps/api/src/lib/fraud/collusion.ts computes a mutualEndorsement fact by asking whether a worker id and a verifier key ever appear in the same row of the history, in opposite roles. The two can never be equal: a worker id is a UUID and a verifier key is a 64-character SHA-256 digest of a browser-generated pseudonym. The fact is therefore always false, and the 0.15 weight attached to it is never applied.
+
+This is structural rather than a bug. The check was equally inert when the key was a salted phone hash. It is recorded here because doc/02 and doc/08 both describe the collusion engine as detecting closed-loop rings without qualifying that one of its three signals is unreachable, and a reader of those documents would reasonably assume it works.
+
+### Why it is not being fixed
+
+Making it fire requires joining a verifier pseudonym to an account. There is no other route: the verification page is reached without an account by design, so the only identifier a verifier presents is a per-browser pseudonym that deliberately carries no link back to a user id. Any change that made the two comparable would reintroduce exactly the cross-context identity linkage lib/verifier-key.ts exists to avoid - a stable pseudonym derived from a user id, or a prompt for a phone number.
+
+The signal is also weak evidence at 0.15, below the 0.25 withhold threshold on its own. Paying a real privacy cost to detect something that would not change any outcome on its own is a bad trade, so the deliberate state is a documented gap rather than a silent one.
+
+### What was done
+
+* The reasoning is kept in place at the call site, so the next person to read that comparison is told why it cannot be true rather than left to rediscover it.
+
+* This entry records the limitation where the documentation set is read, which is the only place it was missing.
+
+* The collusion weight floor is unchanged at 0.15 (isolated + concentrated), so no score, threshold or record is affected by this entry.
+
+### Verification
+
+* 
+pm run fraud-check passes, asserting the engine never produces raud_blocked and that the recorded weight floor is unchanged.
+
+* pps/api/src/lib/fraud/collusion.ts still computes the fact; the value is unchanged and no assertion depends on it.
+
+## E-053: No linting and no unit tests (E-010)
+
+### Problem
+
+The repository had no linter and no unit test runner. The CI workflow checked types and produced a build, and both passed on code that contained a shadowed variable leaving a security assertion in the live suite passing unconditionally - a check that could not have failed, whatever the code under test did.
+
+### What was done
+
+* An ESLint flat config at the repository root, scoped to rules that find bugs rather than to style. No formatting rules are enabled, so no existing line was restyled. Every rule switched off, and the two advisory rules for images and media, carries the reason in the file.
+* Vitest, with 29 tests over the three pure functions that decide something: the skill-search term splitter, the verifier-key pseudonym and digests, and the scoring engine's three-way outcome. Each tests the decision at the function, with no database, so an edit to the weights or the threshold cannot pass unnoticed.
+* Both wired into CI ahead of the type-check, since lint is the cheapest check that finds real problems.
+* The linter found four real defects on its first run, all fixed:
+
+  - **A LIKE wildcard could reach the query.** The search term splitter sanitised its split terms but fell back to the raw query when none survived, so a query of % became like '%%%' and returned every worker rather than none. The fallback now draws from the same sanitised runs, and a test pins it.
+  - **A security assertion that could not fail.** A variable was declared twice in the smoke suite, the inner declaration shadowing the outer, so a later read inspected a value nothing ever assigned. The phone-number check was passing unconditionally. Declared once now, and it genuinely runs.
+  - **Two suppression comments that had stopped suppressing**, having drifted off the line they annotated.
+  - **Dead code**: an unused process helper and an assigned-but-never-read variable in the smoke suite, both removed.
+
+### Verification
+
+* 
+pm run lint exits 0 with no warnings.
+* 
+pm run test:unit runs 29 tests across 3 files, all passing.
+* The full live smoke suite still passes, which is what confirms the shadowed-variable fix did not change the outcome of the check it repaired.

@@ -58,8 +58,8 @@ let passed = 0;
 let failed = 0;
 const failures = [];
 
-// Any path that ends the process without reaching the RESULT line — an early
-// return, an abort — must still exit non-zero. The boot failure below used to
+// Any path that ends the process without reaching the RESULT line Ã¢â‚¬â€ an early
+// return, an abort Ã¢â‚¬â€ must still exit non-zero. The boot failure below used to
 // `return` out of main(), which ran the finally block and then skipped the
 // RESULT/exit logic, so Node ended the process with code 0 after printing
 // FAIL: a gate that can go green after failing. Once a check has run, the
@@ -125,16 +125,6 @@ function killTree(child) {
   } catch {
     child.kill();
   }
-}
-
-function runCommand(command, commandArgs, options = {}) {
-  return new Promise((resolvePromise) => {
-    const child = spawn(command, commandArgs, { cwd: ROOT, ...options });
-    let out = '';
-    child.stdout.on('data', (d) => (out += d));
-    child.stderr.on('data', (d) => (out += d));
-    child.on('close', (code) => resolvePromise({ code, out }));
-  });
 }
 
 function resolveNextBin() {
@@ -391,7 +381,7 @@ async function main() {
    *
    * The account-deletion test keeps evidence that a worker who logged work can be
    * deleted without their evidence being destroyed. Those rows survive with a null
-   * `worker_id` by design, so the cleanup below — which is scoped by owner — cannot
+   * `worker_id` by design, so the cleanup below Ã¢â‚¬â€ which is scoped by owner Ã¢â‚¬â€ cannot
    * see them and would leave them behind on every run. They are tracked by id
    * instead and removed explicitly.
    */
@@ -405,7 +395,7 @@ async function main() {
    *
    * The ordering is the point. Stored objects go first because the row deletes
    * below can be refused by a foreign key, and `media_url` is what tells us where
-   * the bytes are — once the row is gone the path is unrecoverable. Then the rows,
+   * the bytes are Ã¢â‚¬â€ once the row is gone the path is unrecoverable. Then the rows,
    * in the order the foreign keys demand, and finally the auth user.
    *
    * Shared by the pre-flight and the end-of-run cleanup rather than duplicated.
@@ -476,7 +466,7 @@ async function main() {
    *
    * Without this the suite cannot return to a clean bucket. An object with no row and
    * no owner is invisible to every owner-scoped teardown, so it would fail the final
-   * bucket check on every future run — and a check that is always red stops being
+   * bucket check on every future run Ã¢â‚¬â€ and a check that is always red stops being
    * read, which is how a real leak would then go unnoticed.
    *
    * Deliberately narrow. An object whose prefix is not a UUID, or whose prefix belongs
@@ -604,7 +594,7 @@ async function main() {
       // `worker_id is not null` is load-bearing since migration 0005 made the
       // column nullable. An anonymised row has a null worker by design, so the
       // absence of a matching `auth.users` row is true of it by construction and
-      // this check would count every deliberately retained record as a leak — and
+      // this check would count every deliberately retained record as a leak Ã¢â‚¬â€ and
       // would then, by being ignored, stop meaning anything.
       for (const t of ['work_proof_logs', 'capability_blocks']) {
         const { rows } = await pool.query(
@@ -653,7 +643,7 @@ async function main() {
       //
       // Counting rows demanded the queue be empty at the end of every run, which is
       // only true for accounts this suite just deleted. A row left by any earlier
-      // run — including one interrupted mid-cleanup — kept failing every subsequent
+      // run Ã¢â‚¬â€ including one interrupted mid-cleanup Ã¢â‚¬â€ kept failing every subsequent
       // run for a reason that had nothing to do with the code under test, and the
       // natural "fix" is to delete the row, which loses the only record that those
       // bytes still exist.
@@ -685,7 +675,7 @@ async function main() {
       );
       if (staleQueueRows > 0) {
         // Reported, never repaired here. A stale row is a genuine operational
-        // finding — its bytes are gone but the record that they existed is not —
+        // finding Ã¢â‚¬â€ its bytes are gone but the record that they existed is not Ã¢â‚¬â€
         // and clearing it is a database write against someone else's leftover, so
         // it needs an operator who has looked, not a test suite.
         console.log(
@@ -696,7 +686,7 @@ async function main() {
 
       // Only this suite's own media may be gone. A blanket "the bucket is empty"
       // would fail the moment a single real worker has pending evidence, which is
-      // the normal state of a live product — and worse, it would invite somebody to
+      // the normal state of a live product Ã¢â‚¬â€ and worse, it would invite somebody to
       // "fix" it by deleting a real worker's photographs.
       //
       // The suite's uploads live under a `smoke.` account, and it records the exact
@@ -745,7 +735,7 @@ async function main() {
     // But deleting the account is the *wrong half* of the teardown on its own. The
     // stored media is removed through the Storage API, never by the anonymisation
     // trigger, so a bare `deleteUser` leaves the objects in the bucket with nothing
-    // pointing at them — and the pre-flight has just destroyed the pointer. The rows
+    // pointing at them Ã¢â‚¬â€ and the pre-flight has just destroyed the pointer. The rows
     // go first, then the account, which is what `purgeOwnedData` is ordered for.
     if (leftovers.length > 0) {
       const staleIds = leftovers.map((u) => u.id);
@@ -1370,14 +1360,11 @@ async function main() {
     // directly. Each submission is confirmed at a real distance, which is what
     // gives the engine a history to weigh the next one against.
 
-    // Declared outside the engine block because the concurrency check at the end
-    // of the run needs the same submission helper once that block is out of
-    // scope, and it has to run late to leave the verification rate-limit budget
-    // intact for everything else.
-    let submitProof = null;
-
-    // Declared outside the engine block because the checks below read it after
-    // that block has closed.
+    // Declared outside the engine block because the privacy check near the end of
+    // the run reads it after that block has closed. Declared *once*, here: an
+    // inner declaration of the same name shadows this one, which leaves the later
+    // read looking at a variable nothing ever assigns Ã¢â‚¬â€ the state in which a
+    // security assertion passes no matter what the code under test does.
     let offsiteRow = null;
 
     if (userId && token) {
@@ -1387,9 +1374,8 @@ async function main() {
       const ACCRA = '5.6037,-0.1870';
       const LONDON = '51.5074,-0.1278';
 
-      // Declared out here because the privacy checks below read it after the
-      // block that fills it in has closed.
-      let offsiteRow = null;
+      // `offsiteRow` is the outer declaration, assigned by the block below and read
+      // again near the end of the run. It is deliberately not re-declared here.
       let dispatchUnexpected = false;
 
       /** Submits a proof and returns the body, or null if it was refused. */
@@ -1407,7 +1393,6 @@ async function main() {
         );
         return result.status === 201 ? unwrap(result.json) : null;
       };
-      submitProof = submit;
 
       // Five confirmations by one verifier, all for one worker, all on site. This
       // is what a site supervisor legitimately looks like, and it is also the
@@ -1470,8 +1455,8 @@ async function main() {
           typeof offsiteRow?.fraud_score === 'number' && offsiteRow.fraud_score <= 0.25,
           String(offsiteRow?.fraud_score),
         );
-        // Withheld, never accused. The engine has produced `flagged` — the record
-        // does not count and a person will look at it — and `fraud_blocked` is now
+        // Withheld, never accused. The engine has produced `flagged` Ã¢â‚¬â€ the record
+        // does not count and a person will look at it Ã¢â‚¬â€ and `fraud_blocked` is now
         // reachable only through the admin review path, which no score can enter.
         check(
           'the proof is withheld from counting as verified',
@@ -1643,7 +1628,7 @@ async function main() {
         // A live link can be replaced, because the worker holds no copy of it to
         // re-share: the API keeps only a hash of the token. Replacing must not
         // leave two answerable requests behind, and the superseded link must stop
-        // working at once — a customer already holding it has to be turned away
+        // working at once Ã¢â‚¬â€ a customer already holding it has to be turned away
         // rather than allowed a second, competing answer.
         const staleToken = replacement.verificationToken;
         const liveResend = await api(
@@ -1803,7 +1788,7 @@ async function main() {
       check('a proof to read the summary from was created', summaryProof !== null, summaryProof ? '' : 'refused');
 
       // The verification page now shows the recipient the evidence, so the summary
-      // must carry a usable signed URL — and must still withhold everything a link
+      // must carry a usable signed URL Ã¢â‚¬â€ and must still withhold everything a link
       // holder is not entitled to. Read with no session at all: the route is public
       // by design and the token is the only credential, which is exactly the
       // property the recipient page depends on.
@@ -1839,7 +1824,7 @@ async function main() {
         // the shape of the code that builds it.
         // The worker is now named on the page, when they have allowed it, so the
         // customer can tell who they are answering. What must never appear is the
-        // worker's id — a link is forwardable, and an id would be something a
+        // worker's id Ã¢â‚¬â€ a link is forwardable, and an id would be something a
         // reader could act on rather than merely read.
         check(
           'the summary names the worker when they allow it',
@@ -1898,7 +1883,7 @@ async function main() {
       //
       // This both proves an accountless decision works and proves the single-
       // decision rule is closed against a *race*, not merely against a sequential
-      // replay — which is the part a read-then-write implementation would get
+      // replay Ã¢â‚¬â€ which is the part a read-then-write implementation would get
       // wrong. It replaces a single confirmation rather than adding requests,
       // because the suite already sits at the edge of the 30-per-minute
       // verification limiter and the 20-per-15-minutes upload limiter, and
@@ -2263,6 +2248,282 @@ async function main() {
           'skill matching is case-insensitive',
           (cased.json?.candidates ?? []).length === 1,
           `${cased.json?.candidates?.length} candidates`,
+        );
+
+        // --- Saved workers --------------------------------------------
+        // The employer keeps a candidate between searches. Driven entirely through
+        // the API against the real table, because the properties worth testing here
+        // are all about what one employer can and cannot reach: the saved list is
+        // scoped, saving is addressed by handle rather than by worker id, and a
+        // worker who opts out stops being reachable through it.
+        const savedCandidate = card;
+
+        const savedBefore = await api('GET', '/employers/saved-workers', { token: employer.token });
+        check(
+          'the saved-worker list starts empty for this employer',
+          savedBefore.status === 200 && (savedBefore.json?.workers ?? []).length === 0,
+          `status ${savedBefore.status} ${(savedBefore.json?.workers ?? []).length} worker(s)`,
+        );
+
+        const saved = await api('POST', '/employers/saved-workers', {
+          token: employer.token,
+          body: { candidateHandle: savedCandidate.candidateHandle, skillTag: MATCH_SKILL },
+        });
+        check(
+          'a candidate from a search result can be saved',
+          saved.status === 201 && typeof saved.json?.savedId === 'string',
+          `status ${saved.status} ${saved.text.slice(0, 140)}`,
+        );
+
+        // Re-saving the same worker under the same skill must be one row, not two.
+        // A double tap is not a second intention.
+        const resave = await api('POST', '/employers/saved-workers', {
+          token: employer.token,
+          body: { candidateHandle: savedCandidate.candidateHandle, skillTag: MATCH_SKILL },
+        });
+        check(
+          'saving the same worker twice is accepted and stays one entry',
+          resave.status === 201 && resave.json?.savedId === saved.json?.savedId,
+          `status ${resave.status} ${resave.json?.savedId} vs ${saved.json?.savedId}`,
+        );
+
+        const savedAfter = await api('GET', '/employers/saved-workers', { token: employer.token });
+        const savedRows = savedAfter.json?.workers ?? [];
+        check(
+          'the saved list reports exactly one worker after two saves',
+          savedAfter.status === 200 && savedRows.length === 1,
+          `status ${savedAfter.status} ${savedRows.length} worker(s)`,
+        );
+
+        const savedRow = savedRows[0];
+        check(
+          'the saved entry carries a fresh candidate handle',
+          typeof savedRow?.candidateHandle === 'string' && savedRow.candidateHandle.length >= 32,
+          String(savedRow?.candidateHandle)?.slice(0, 12),
+        );
+        check(
+          'the saved entry reports the real verified-proof count, not a placeholder',
+          savedRow?.verifiedProofs === 2,
+          `${savedRow?.verifiedProofs} Ã¢â‚¬â€ a saved list showing 0 would read as no verified proof`,
+        );
+        check(
+          'the saved entry names the worker',
+          typeof savedRow?.displayName === 'string' && savedRow.displayName.length > 0,
+          String(savedRow?.displayName),
+        );
+        check(
+          'the saved entry records when it was saved',
+          typeof savedRow?.savedAt === 'string' && !Number.isNaN(Date.parse(savedRow.savedAt)),
+          String(savedRow?.savedAt),
+        );
+
+        // The masking must survive the saved list: it is the same contract as a
+        // search card, so the same assertions apply.
+        const savedJson = JSON.stringify(savedAfter.json);
+        check('the saved list contains no worker id', !savedJson.includes(userId), userId ?? '');
+        check(
+          'the saved list contains no email address',
+          !savedJson.includes('tetherproof.dev'),
+          '',
+        );
+        check(
+          'the saved list exposes no phone number',
+          !/phone/i.test(savedJson),
+          savedJson.slice(0, 200),
+        );
+
+        // --- Isolation between employers -----------------------------
+        const peekerList = await api('GET', '/employers/saved-workers', { token: peeker.token });
+        check(
+          'another employer cannot see the saved entry',
+          peekerList.status === 200 && (peekerList.json?.workers ?? []).length === 0,
+          `${(peekerList.json?.workers ?? []).length} worker(s) visible`,
+        );
+
+        // A handle from another employer's search is not resolvable here. The
+        // service resolves it scoped to the caller, so this must be refused rather
+        // than silently saving the wrong worker.
+        const foreignSave = await api('POST', '/employers/saved-workers', {
+          token: peeker.token,
+          body: { candidateHandle: savedCandidate.candidateHandle, skillTag: MATCH_SKILL },
+        });
+        check(
+          "an employer cannot save a candidate using another employer's handle",
+          foreignSave.status === 404,
+          `status ${foreignSave.status} ${foreignSave.text.slice(0, 120)}`,
+        );
+
+        // Manipulated handles must not resolve, and must not leak whether a worker
+        // exists on the other side of them.
+        for (const [label, handle] of [
+          ['an empty handle', ''],
+          ['a short handle', 'abc'],
+          ['a well-formed but unknown handle', 'z'.repeat(48)],
+        ]) {
+          const attempt = await api('POST', '/employers/saved-workers', {
+            token: employer.token,
+            body: { candidateHandle: handle, skillTag: MATCH_SKILL },
+          });
+          const refused = attempt.status === 400 || attempt.status === 404;
+          check(`${label} is refused`, refused, `status ${attempt.status}`);
+        }
+
+        // A saved id belonging to another employer must change nothing, and must be
+        // indistinguishable from one that never existed.
+        const foreignRemove = await api(
+          'DELETE',
+          `/employers/saved-workers/${saved.json.savedId}`,
+          { token: peeker.token },
+        );
+        check(
+          "another employer cannot remove a saved worker they do not own",
+          foreignRemove.status === 204,
+          `status ${foreignRemove.status}`,
+        );
+        const stillThere = await api('GET', '/employers/saved-workers', { token: employer.token });
+        check(
+          'the entry survives the removal attempt',
+          (stillThere.json?.workers ?? []).length === 1,
+          `${(stillThere.json?.workers ?? []).length} worker(s)`,
+        );
+
+        // No `body` on a GET: the helper would attach one, and a body on a GET is
+        // refused before it reaches a route.
+        const anonList = await api('GET', '/employers/saved-workers');
+        check('the saved list requires a session', anonList.status === 401, `status ${anonList.status}`);
+
+        const anonSave = await api('POST', '/employers/saved-workers', {
+          body: { candidateHandle: savedCandidate.candidateHandle, skillTag: MATCH_SKILL },
+        });
+        check('saving a worker requires a session', anonSave.status === 401, `status ${anonSave.status}`);
+
+        // A worker is not an employer. The route is mounted employer-only, so this
+        // is refused at the boundary rather than by a row count happening to be zero.
+        const workerSaved = await api('POST', '/employers/saved-workers', {
+          token,
+          body: { candidateHandle: savedCandidate.candidateHandle, skillTag: MATCH_SKILL },
+        });
+        check(
+          'a worker cannot use the employer saved-worker endpoint',
+          workerSaved.status === 403,
+          `status ${workerSaved.status}`,
+        );
+
+        // --- Discovery opt-out ----------------------------------------
+        // The point of re-gating on read: a worker who opts out after being saved
+        // must stop being reachable through the list, not merely stop being found.
+        const optedOut = await api('PATCH', '/auth/profile', {
+          token,
+          body: { discoverable: false },
+        });
+        check(
+          'the worker can opt out of discovery',
+          optedOut.status === 200 && optedOut.json?.discoverable === false,
+          `status ${optedOut.status}`,
+        );
+
+        const afterOptOut = await api('GET', '/employers/saved-workers', { token: employer.token });
+        check(
+          'an opted-out worker disappears from the saved list',
+          afterOptOut.status === 200 && (afterOptOut.json?.workers ?? []).length === 0,
+          `${(afterOptOut.json?.workers ?? []).length} worker(s) still listed`,
+        );
+        check(
+          'the saved list names nobody once the worker has opted out',
+          !String(afterOptOut.text ?? '').includes('Smoke Test Worker'),
+          afterOptOut.text.slice(0, 160),
+        );
+
+        // The search card carries the saved state, so a star on a result reflects
+        // what is stored rather than resetting on reload. Asserted while opted out
+        // would be meaningless, so this runs after opting back in.
+        const optedBackIn = await api('PATCH', '/auth/profile', {
+          token,
+          body: { discoverable: true },
+        });
+        check(
+          'the worker can opt back in',
+          optedBackIn.status === 200 && optedBackIn.json?.discoverable === true,
+          `status ${optedBackIn.status}`,
+        );
+
+        const searchAfterSave = await api(
+          'GET',
+          `/employers/search?requiredSkill=${encodeURIComponent(MATCH_SKILL)}&minProofThreshold=2`,
+          { token: employer.token },
+        );
+        const searchCardNow = (searchAfterSave.json?.candidates ?? [])[0];
+        check(
+          'the search card reports the saved entry so the star survives a reload',
+          searchCardNow?.savedId === saved.json.savedId,
+          `card ${searchCardNow?.savedId} vs saved ${saved.json.savedId}`,
+        );
+
+        // --- Removal --------------------------------------------------
+        const removed = await api('DELETE', `/employers/saved-workers/${saved.json.savedId}`, {
+          token: employer.token,
+        });
+        check('the owner can remove a saved worker', removed.status === 204, `status ${removed.status}`);
+
+        const afterRemove = await api('GET', '/employers/saved-workers', { token: employer.token });
+        check(
+          'the saved list is empty again after removal',
+          afterRemove.status === 200 && (afterRemove.json?.workers ?? []).length === 0,
+          `${(afterRemove.json?.workers ?? []).length} worker(s)`,
+        );
+
+        const removedTwice = await api('DELETE', `/employers/saved-workers/${saved.json.savedId}`, {
+          token: employer.token,
+        });
+        // Idempotent, and deliberately so. A removal that reported "no such entry"
+        // the second time would confirm the id had once existed, which is exactly
+        // the oracle the cross-employer refusal above exists to prevent. Asserted
+        // here as the property it is, rather than as the failure I first expected.
+        check(
+          'removing an already-removed entry succeeds rather than confirming it existed',
+          removedTwice.status === 204,
+          `status ${removedTwice.status}`,
+        );
+
+        // The anti-oracle property, stated directly: an id that never existed and
+        // one that existed and was removed are answered identically.
+        const neverExisted = '3f1c9d2e-8b47-4a61-9c05-77e1d4b28a10';
+        const removeGhost = await api('DELETE', `/employers/saved-workers/${neverExisted}`, {
+          token: employer.token,
+        });
+        const removeReal = await api('DELETE', `/employers/saved-workers/${saved.json.savedId}`, {
+          token: employer.token,
+        });
+        check(
+          'removing an id that never existed is answered exactly like removing a real one',
+          removeGhost.status === removeReal.status,
+          `ghost ${removeGhost.status} vs real ${removeReal.status}`,
+        );
+
+        const afterIdempotent = await api('GET', '/employers/saved-workers', { token: employer.token });
+        check(
+          'the repeated removals changed nothing',
+          (afterIdempotent.json?.workers ?? []).length === 0,
+          `${(afterIdempotent.json?.workers ?? []).length} worker(s)`,
+        );
+
+        const badId = await api('DELETE', '/employers/saved-workers/not-a-uuid', {
+          token: employer.token,
+        });
+        check('a malformed saved id is refused', badId.status === 400, `status ${badId.status}`);
+
+        // The row is actually gone from the table, not merely hidden from the list.
+        const rowsLeft = (
+          await pool.query(
+            `select count(*)::int as n from public.employer_saved_workers
+              where employer_id = (select u.id from public.users u join auth.users a on a.id = u.id where a.email = $1)`,
+            [employerEmail],
+          )
+        ).rows[0]?.n;
+        check(
+          'no saved-worker row survives the removal',
+          rowsLeft === 0,
+          `${rowsLeft} row(s) left in the table`,
         );
 
         // --- Profile, and what it makes possible -----------------------
@@ -2971,10 +3232,21 @@ async function main() {
     const readProofs = await anon.from('work_proof_logs').select('*').limit(1);
     check('browser key cannot read work_proof_logs', Boolean(readProofs.error) || (readProofs.data ?? []).length === 0, readProofs.error?.message ?? 'no rows');
 
-    // The Phase 4 tables must be unreachable from a browser key. A handle resolves
+      // The Phase 4 tables must be unreachable from a browser key. A handle resolves
       // to a real worker, so leaking the table would undo the masking that the
       // search endpoint exists to provide.
-      for (const table of ['employer_approvals', 'candidate_handles', 'direct_offers']) {
+      //
+      // `employer_saved_workers` joins that list for a stronger reason: each row
+      // pairs one employer with one worker, so reading the table would map who is
+      // interested in whom across the whole network. The policy is select-only and
+      // scoped to `auth.uid()`, and this asserts the browser key cannot reach the
+      // table at all rather than merely cannot reach another employer's rows.
+      for (const table of [
+        'employer_approvals',
+        'candidate_handles',
+        'direct_offers',
+        'employer_saved_workers',
+      ]) {
         const read = await anon.from(table).select('*').limit(1);
         check(
           `browser key cannot read public.${table}`,
@@ -3114,7 +3386,7 @@ async function main() {
         );
         // Drop it from the cleanup list now that it is gone. Left there, the
         // cleanup retries a delete that now reports "User not found" and prints a
-        // warning on every run — and a suite that always prints a warning is a
+        // warning on every run Ã¢â‚¬â€ and a suite that always prints a warning is a
         // suite whose warnings stop being read.
         if (removed.status === 200) {
           const at = createdUsers.indexOf(subjectId);
@@ -3183,7 +3455,7 @@ async function main() {
         );
 
         // What the trigger could not do, and the endpoint therefore had to. Storage
-        // refuses deletion from SQL — verified rather than assumed — so the trigger
+        // refuses deletion from SQL Ã¢â‚¬â€ verified rather than assumed Ã¢â‚¬â€ so the trigger
         // recorded the path and the object was still stored at that moment. Proving
         // the object really was still there is what makes the endpoint's removal
         // meaningful: without it, an assertion that the endpoint cleaned up would
@@ -3216,7 +3488,7 @@ async function main() {
         );
         // Scoped to this account. Asserting the whole table was empty meant a single
         // row left by any earlier interrupted run failed every later run for a
-        // reason unrelated to the code under test — and the tempting "fix" is to
+        // reason unrelated to the code under test Ã¢â‚¬â€ and the tempting "fix" is to
         // delete the row, which destroys the only record that those bytes exist.
         const leftovers = await pool.query(
           'select count(*)::int n from public.orphaned_proof_media where path like $1',

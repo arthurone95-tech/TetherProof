@@ -65,26 +65,35 @@ export interface CandidateMetric {
  * single word broadens, which is what a person expects from the two. Splitting on
  * non-alphanumerics rather than spaces keeps punctuation out of the terms, which
  * also means no term can contain a `LIKE` wildcard and the pattern needs no
- * escaping.
+ * escaping. That guarantee has to hold on the fallback path too, so the fallback
+ * draws from the same sanitised runs rather than from the raw query.
  *
  * Terms shorter than three characters are dropped. "a", "of" and "in" appear in a
  * large share of real skill tags, so matching on them would return most of the
- * network for a query carrying no intent. A query left with no usable term at all
- * falls back to the whole trimmed string, so it still narrows rather than matching
- * everything.
+ * network for a query carrying no intent.
+ *
+ * When nothing is long enough, a single short word is still used, because "ai" is
+ * a real skill and must remain findable. Several short words are not: there is no
+ * one of them worth matching, so the query is answered with nothing.
  */
 const MIN_SEARCH_TERM_LENGTH = 3;
 
 export function skillSearchTerms(skillTag: string): string[] {
-  const terms = skillTag
+  // Alphanumeric runs only. Every term handed to SQL comes from here, so no term
+  // can carry `%` or `_` and the LIKE pattern never needs escaping.
+  const runs = skillTag
     .toLowerCase()
     .split(/[^a-z0-9]+/i)
-    .filter((term) => term.length >= MIN_SEARCH_TERM_LENGTH);
+    .filter((term) => term.length > 0);
 
-  if (terms.length > 0) return terms;
+  const meaningful = runs.filter((term) => term.length >= MIN_SEARCH_TERM_LENGTH);
+  if (meaningful.length > 0) return meaningful;
 
-  const whole = skillTag.trim().toLowerCase();
-  return whole.length > 0 ? [whole] : [];
+  // Nothing long enough to narrow anything. One short word is still an intent;
+  // several are not, and matching any one of them would return most of the
+  // network for a query that named nothing.
+  const [only] = runs;
+  return runs.length === 1 && only !== undefined ? [only] : [];
 }
 
 /**

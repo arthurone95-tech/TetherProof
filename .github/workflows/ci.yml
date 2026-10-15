@@ -2,21 +2,22 @@
 #
 # Scope is deliberately narrow: this file verifies changes, it does not ship
 # them. There is no deploy job here — staging and production deployment is a
-# separate, explicitly authorised step and is not something CI should be able
-# to do on its own.
+# separate, explicitly authorised step and is not something CI should be able to
+# do on its own.
 #
-# Two of the three checks doc/09 names are not in this file because they do not
-# exist in the repository yet:
+# Two of the three checks doc/09 names did not exist in the repository when this
+# was written, and now do:
 #
-#   * "Linting and code formatting checks" — there is no ESLint or Prettier
-#     configuration in any workspace (logged as doc/13 E-010).
-#   * "Automated unit and integration test suites" — no unit test runner is
-#     configured. The integration coverage that does exist is the live smoke
-#     suite, which creates and deletes real accounts against a real database and
-#     therefore runs as its own opt-in job below rather than on every push.
+#   * "Linting and code formatting checks" — an ESLint flat config at the
+#     repository root (doc/13 E-052). Scoped to rules that catch defects rather
+#     than to formatting, so turning it on restyled nothing.
+#   * "Automated unit test suites" — `vitest`, covering the pure functions that
+#     decide something: the search term splitter, the verifier-key pseudonym, and
+#     the scoring engine's three-way outcome.
 #
-# Both belong here the moment they exist; until then an empty job would be a
-# green tick meaning nothing.
+# The one check still absent is the live integration suite. It creates and deletes
+# real accounts, real proofs and real storage objects against a real database, so
+# it runs as its own opt-in job below rather than on every push.
 
 name: CI
 
@@ -35,9 +36,9 @@ concurrency:
 
 jobs:
   checks:
-    name: Typecheck and build
+    name: Lint, typecheck, unit tests and build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -51,8 +52,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # First, because it is the cheapest check here that finds real problems.
+      # The first version of this step caught a shadowed variable that had been
+      # leaving a security assertion in the live suite passing unconditionally.
+      - name: Lint
+        run: npm run lint
+
       - name: Typecheck every workspace
         run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test:unit
 
       # Produces the API bundle the smoke suite runs, the shared contracts
       # package, and the static client. The client build needs its two public

@@ -19,6 +19,9 @@
     "dev:web": "npm run build:shared && npm run dev --workspace @tetherproof/web",
     "start": "npm run start --workspace @tetherproof/api",
     "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
     "test": "npm run test --workspaces --if-present",
     "db:generate": "npm run db:generate --workspace @tetherproof/api",
     "db:migrate": "npm run db:migrate --workspace @tetherproof/api",
@@ -30,8 +33,15 @@
     "security-check": "tsx scripts/security-check.ts"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@next/eslint-plugin-next": "^15.5.28",
     "concurrently": "^10.0.5",
-    "typescript": "^5.7.2"
+    "eslint": "^9.39.5",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "globals": "^15.15.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.71.2",
+    "vitest": "^3.2.7"
   },
   "optionalDependencies": {
     "@tailwindcss/oxide-linux-x64-gnu": "4.3.3",

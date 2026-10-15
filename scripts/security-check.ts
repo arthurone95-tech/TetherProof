@@ -106,6 +106,10 @@ section('1. Key generation and normalisation');
   const b = normalizeVerifierKey('b'.repeat(48));
   check('distinct keys produce distinct digests', hashVerifierKey(a!) !== hashVerifierKey(b!));
   check('a digest is 64 hex characters', /^[0-9a-f]{64}$/.test(hashVerifierKey(a!)));
+  // Determinism is the property under test, so both sides are the same call on the
+  // same input. `no-self-compare` is silenced for this line alone: the rule exists
+  // to catch `x === x` standing in for a real comparison, and this is not one.
+  // eslint-disable-next-line no-self-compare
   check('the digest is deterministic', hashVerifierKey(a!) === hashVerifierKey(a!));
 }
 
