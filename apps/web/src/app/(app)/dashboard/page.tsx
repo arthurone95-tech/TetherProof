@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import type { WorkerOverviewResponse } from '@tetherproof/shared';
+import type { StudentCredentialsResponse, WorkerOverviewResponse } from '@tetherproof/shared';
 import { ProofListItemView } from '@/components/proofs/ProofListItemView';
 import { apiServer, currentProfile } from '@/lib/server/api';
 
@@ -15,8 +15,14 @@ export default async function WorkerDashboardPage() {
   if (user.role !== 'worker') redirect(user.role === 'employer' ? '/employer' : '/pending');
 
   let overview: WorkerOverviewResponse | null = null;
+  let awaitingCredentials = 0;
   try {
     overview = await apiServer<WorkerOverviewResponse>('/workers/overview');
+    // Read separately and never allowed to take the dashboard down with it. A
+    // failure here means "no prompt", which is the right degradation: the page a
+    // worker came for still renders.
+    const credentials = await apiServer<StudentCredentialsResponse>('/workers/credentials');
+    awaitingCredentials = credentials.awaiting.length;
   } catch {
     overview = null;
   }
@@ -38,7 +44,7 @@ export default async function WorkerDashboardPage() {
 
   return (
     <div className="flex flex-col gap-5 pb-12 pt-1 w-full px-2 sm:px-4">
-      
+
       {/* Top Identity & Status Bar */}
       <div className="flex items-center justify-between px-1">
         <div>
@@ -78,6 +84,29 @@ export default async function WorkerDashboardPage() {
           verified={verifiedLogs} 
           awaiting={awaitingVerificationLogs} 
         />
+      ) : null}
+
+      {/*
+        One line, and only for a worker who has something to answer. Micro-credentials
+        are institutional endorsements rather than customer-verified work, so they
+        get their own page and their own wording; the notification is the primary
+        route there and this is the way back if it is missed. No tab was added,
+        because the tab row holds the four things a worker came for.
+      */}
+      {awaitingCredentials > 0 ? (
+        <Link
+          href="/credentials"
+          className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3 transition-colors hover:border-amber-300"
+        >
+          <span className="text-sm font-semibold text-amber-900">
+            {awaitingCredentials === 1
+              ? 'A training provider is waiting for your answer on a milestone'
+              : `Training providers are waiting for your answer on ${awaitingCredentials} milestones`}
+          </span>
+          <span aria-hidden="true" className="shrink-0 text-sm font-bold text-amber-800">
+            Review →
+          </span>
+        </Link>
       ) : null}
 
       {/* Recent Works Section */}

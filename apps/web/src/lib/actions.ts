@@ -19,6 +19,7 @@ import type {
   AuthCallbackResult,
   AppealState,
   FormState,
+  MilestoneState,
   ProofEditState,
   ProofFormState,
   ReviewState,
@@ -651,6 +652,167 @@ export async function sendOffer(_previous: FormState, formData: FormData): Promi
     return { done: true };
   } catch (error) {
     return { error: messageFor(error, 'We could not send that invitation. Please try again.') };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Training providers (doc/02 Module 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates or rotates the institute's enrolment code.
+ *
+ * The returned code is the last time it exists anywhere — only a digest is kept by
+ * the API — so it is returned rather than redirected with, and the roster page shows
+ * it once with a copy control. Losing it means generating another, which is why
+ * rotation is a normal action rather than a recovery one.
+ */
+export async function generateEnrolmentCode(_previous: MilestoneState): Promise<MilestoneState> {
+  try {
+    const created = await apiServer<{ enrolmentCode: string }>('/trainers/roster/code', {
+      method: 'POST',
+    });
+    revalidatePath('/trainer/roster');
+    return { done: true, enrolmentCode: created.enrolmentCode };
+  } catch (error) {
+    return { error: messageFor(error, 'We could not create an enrolment code. Please try again.') };
+  }
+}
+
+/**
+ * Removes a student from the institute's roster.
+ *
+ * Throws rather than returning state, for the same reason `changeSpec` redirects: a
+ * control with no field to attach a message to needs somewhere to put one. The
+ * student's already-accepted credentials are deliberately left in place.
+ */
+export async function unenrolStudent(formData: FormData): Promise<void> {
+  const enrolmentId = String(formData.get('enrolmentId') ?? '');
+  try {
+    await apiServer(`/trainers/roster/${encodeURIComponent(enrolmentId)}`, { method: 'DELETE' });
+  } catch (error) {
+    redirect(`/trainer/roster?error=${encodeURIComponent(messageFor(error, 'That student could not be removed.'))}`);
+  }
+  revalidatePath('/trainer/roster');
+  revalidatePath('/trainer');
+}
+
+/**
+ * Signs off on a practical for a student.
+ *
+ * The returned credential is `awaiting_student`, and the state says so rather than
+ * reporting a finished credential: the institute has recorded a milestone, and the
+ * student still has to agree to hold it. An instructor who believes the credential is
+ * already theirs would be wrong about the one thing this feature is for.
+ */
+export async function issueMilestone(
+  _previous: MilestoneState,
+  formData: FormData,
+): Promise<MilestoneState> {
+  const enrolmentId = String(formData.get('enrolmentId') ?? '').trim();
+  const skillTag = String(formData.get('skillTag') ?? '').trim();
+  const milestoneTitle = String(formData.get('milestoneTitle') ?? '').trim();
+  const note = String(formData.get('note') ?? '').trim();
+
+  if (!enrolmentId) return { error: 'Choose a student from your roster.', field: 'enrolmentId' };
+  if (!skillTag) return { error: 'Enter the skill this practical covers.', field: 'skillTag' };
+  if (!milestoneTitle) {
+    return { error: 'Name the practical so the record says what was sat.', field: 'milestoneTitle' };
+  }
+
+  const level = asPositiveInt(formData.get('skillLevel'), 1);
+
+  try {
+    const issued = await apiServer<{
+      id: string;
+      studentName: string | null;
+      skillTag: string;
+      milestoneTitle: string;
+    }>('/trainers/credentials', {
+      method: 'POST',
+      body: {
+        enrolmentId,
+        skillTag,
+        milestoneTitle,
+        skillLevel: Math.min(3, level),
+        ...(note ? { note } : {}),
+      },
+    });
+
+    revalidatePath('/trainer/credentials');
+    revalidatePath('/trainer/roster');
+    revalidatePath('/trainer');
+    return { done: true, issued };
+  } catch (error) {
+    return {
+      error: messageFor(error, 'We could not record that milestone. Please try again.'),
+    };
+  }
+}
+
+/**
+ * A student redeeming their institute's enrolment code.
+ *
+ * The code is sent trimmed but otherwise untouched, so the normalisation that makes
+ * a code tolerant of dashes and case happens in one place — the API — rather than
+ * being duplicated here where the two could drift apart.
+ */
+export async function redeemEnrolmentCode(
+  _previous: MilestoneState,
+  formData: FormData,
+): Promise<MilestoneState> {
+  const code = String(formData.get('code') ?? '').trim();
+  if (!code) return { error: 'Enter the code your institute gave you.', field: 'code' };
+
+  try {
+    const result = await apiServer<{ organizationName: string | null }>(
+      '/workers/enrolment',
+      { method: 'POST', body: { code } },
+    );
+    revalidatePath('/credentials');
+    revalidatePath('/dashboard');
+    return {
+      done: true,
+      answered: 'accepted',
+      // Named on success so the student can see which institute they just joined
+      // rather than being told only that it worked.
+      enrolledWith: result.organizationName,
+    };
+  } catch (error) {
+    return { error: messageFor(error, 'That enrolment code could not be used. Please try again.') };
+  }
+}
+
+/**
+ * A student accepting or declining an issued credential.
+ *
+ * The two buttons are the same action with a different intent, so they share one
+ * function and differ only in what was pressed — a second form for each would be two
+ * places to keep in step for no benefit.
+ *
+ * Accepting here means "I agree to hold this on my record". It does not add to the
+ * worker's client-verified proof count, and the page it returns to says so.
+ */
+export async function respondToMilestone(
+  _previous: MilestoneState,
+  formData: FormData,
+): Promise<MilestoneState> {
+  const credentialId = String(formData.get('credentialId') ?? '');
+  const response = String(formData.get('response') ?? '');
+  if (response !== 'accepted' && response !== 'declined') {
+    return { error: 'Choose accept or decline.' };
+  }
+
+  try {
+    await apiServer(`/workers/credentials/${encodeURIComponent(credentialId)}`, {
+      method: 'POST',
+      body: { response },
+    });
+    revalidatePath('/credentials');
+    revalidatePath('/dashboard');
+    return { done: true, answered: response };
+  } catch (error) {
+    return { error: messageFor(error, 'We could not record your answer. Please try again.') };
   }
 }
 

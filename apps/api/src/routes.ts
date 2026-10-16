@@ -12,6 +12,7 @@ import { notificationsRouter } from './modules/notifications/routes.js';
 import { proofRouter } from './modules/proofs/routes.js';
 import { publicRouter } from './modules/public/routes.js';
 import { adminReviewRouter, reviewRouter } from './modules/review/routes.js';
+import { studentCredentialRouter, trainerRouter } from './modules/trainers/routes.js';
 import { verificationRouter } from './modules/verifications/routes.js';
 
 export const apiRouter = Router();
@@ -50,6 +51,16 @@ apiRouter.use('/notifications', notificationsRouter);
 // Telemetry connections (GitHub scaffold). Mounted under `/workers` so the
 // module owns its whole surface: list, start, callback, revoke.
 apiRouter.use('/workers/connections', connectionsRouter);
+
+// A worker's own micro-credentials and enrolment. Under `/workers` for the same
+// reason as the proofs above it: the authenticated party is a worker, and the
+// scoping is inherited rather than re-decided.
+apiRouter.use('/workers', studentCredentialRouter);
+
+// The training provider's workspace: roster, milestone issuer, demand insights.
+// Its own prefix so the elevated surface stays identifiable, and so a role check
+// is one mount rather than something each handler repeats.
+apiRouter.use('/trainers', trainerRouter);
 
 // Public capability profiles behind shareable links. Json, read-only, and
 // gated by the worker's own flag plus an unguessable slug.

@@ -9,7 +9,10 @@ export type NavIcon =
   | 'invitations'
   | 'search'
   | 'candidates'
-  | 'organization';
+  | 'organization'
+  | 'roster'
+  | 'issuer'
+  | 'demand';
 
 export interface NavItem {
   href: string;
@@ -43,9 +46,11 @@ export interface MenuGroup {
  * The page each role treats as home.
  *
  * Workers open on the overview (their dashboard), employers on their dashboard,
- * and administrators on the approval console. The training provider role has no
- * interface yet, and sending it to a page that pretends otherwise would be worse
- * than saying so.
+ * training providers on theirs, and administrators on the approval console.
+ *
+ * The training provider's fallback is still `/pending`, which is the honest page for
+ * an account whose role has no workspace. It is simply no longer where a training
+ * provider lands, because the module behind those four tabs now exists.
  */
 export function homeFor(role: UserRole): string {
   switch (role) {
@@ -53,6 +58,8 @@ export function homeFor(role: UserRole): string {
       return '/employer';
     case 'admin':
       return '/admin';
+    case 'training_provider':
+      return '/trainer';
     case 'worker':
       return '/dashboard';
     default:
@@ -108,6 +115,24 @@ const ADMIN_NAV: NavItem[] = [
   { href: '/profile', label: 'Profile', icon: 'profile' },
 ];
 
+/**
+ * Training providers live in the three places doc/05 §C names, plus a home.
+ *
+ * Roster, issuer, and demand are the module: who is on the books, what an instructor
+ * has signed off, and what the market is short of. The fourth tab is the dashboard
+ * that answers the question an institute opens the app with — how many students,
+ * how many answers outstanding — before it goes to do any of the three.
+ *
+ * The issuer tab is the one an instructor lives in, so it gets the short mobile
+ * label; "Milestone issuer" is unreadable at the width of a thumb-sized tab.
+ */
+const TRAINER_NAV: NavItem[] = [
+  { href: '/trainer', label: 'Dashboard', mobileLabel: 'Home', icon: 'home' },
+  { href: '/trainer/roster', label: 'Student roster', mobileLabel: 'Roster', icon: 'roster' },
+  { href: '/trainer/credentials', label: 'Milestone issuer', mobileLabel: 'Issuer', icon: 'issuer' },
+  { href: '/trainer/demand', label: 'Market demand', mobileLabel: 'Demand', icon: 'demand' },
+];
+
 const PLACEHOLDER_NAV: NavItem[] = [
   { href: '/pending', label: 'Workspace', icon: 'workspace' },
   { href: '/profile', label: 'Profile', icon: 'profile' },
@@ -117,6 +142,7 @@ export function navFor(role: UserRole): NavItem[] {
   if (role === 'worker') return WORKER_NAV;
   if (role === 'employer') return EMPLOYER_NAV;
   if (role === 'admin') return ADMIN_NAV;
+  if (role === 'training_provider') return TRAINER_NAV;
   return PLACEHOLDER_NAV;
 }
 

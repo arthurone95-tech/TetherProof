@@ -49,14 +49,41 @@ export const notificationKind = pgEnum('notification_kind', [
   'offer_declined',
   'verification_confirmed',
   'verification_rejected',
+  // Migration 0011. A student can only answer a credential they know exists, and
+  // this is the only route by which they learn one is waiting.
+  'credential_issued',
   'link_expired',
   'link_expiring',
 ]);
 export const connectionProvider = pgEnum('connection_provider', ['github']);
 export const connectionStatus = pgEnum('connection_status', ['connected', 'revoked']);
 
+/**
+ * Where a micro-credential is in its two-party lifecycle.
+ *
+ * Issuing cannot produce a final credential. See `MICRO_CREDENTIAL_STATUSES` in
+ * `packages/shared/src/enums.ts` for why the student is the second signature and
+ * what would be lost if an institute could mint one on its own.
+ */
+export const microCredentialStatus = pgEnum('micro_credential_status', [
+  'awaiting_student',
+  'accepted',
+  'declined',
+]);
+
 const createdAt = timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 const updatedAt = timestamp('updated_at', { withTimezone: true }).notNull().defaultNow();
+
+/**
+ * When a student joined an institute, and when an institute signed off on them.
+ *
+ * Separate names rather than reusing `createdAt` because the column on the row is
+ * the fact being recorded — the moment a roster entry was made, the moment a
+ * milestone was signed — and a reader of the schema should not have to check
+ * whether `created_at` here means the insert time or something else.
+ */
+const enrolledAt = timestamp('enrolled_at', { withTimezone: true }).notNull().defaultNow();
+const issuedAt = timestamp('issued_at', { withTimezone: true }).notNull().defaultNow();
 
 export const users = pgTable(
   'users',
@@ -615,7 +642,179 @@ export const telemetryConnectionsRelations = relations(telemetryConnections, ({ 
   user: one(users, { fields: [telemetryConnections.userId], references: [users.id] }),
 }));
 
+// The training-provider relations sit with their tables further down this file, not
+// with the others here: a `relations()` call evaluates its table reference
+// immediately, and a `const` table declared below it is still in its temporal dead
+// zone. Moving the tables up instead would have meant relocating a block of
+// documented schema away from the other people-table definitions it mirrors.
+
+// ---------------------------------------------------------------------------
+// Training providers (doc/02 Module 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * A student enrolled with one training provider.
+ *
+ * Enrolment is a link, not a relationship the platform manages on an institute's
+ * behalf: a student redeems a code the institute published, so being on a roster is
+ * something they did rather than something that happened to them.
+ *
+ * Deliberately holds no email, phone, or location. An institute needs a name to
+ * put on a milestone and nothing more, and a roster is the kind of table that
+ * quietly becomes a contact list. Everything else about a student is reachable
+ * only through their own account.
+ *
+ * Cascades from either side. If a student leaves the course they disappear from
+ * the roster, and if the institute closes its account its roster goes with it.
+ */
+export const trainerStudents = pgTable(
+  'trainer_students',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** The institute. */
+    trainerId: uuid('trainer_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** The enrolled student. Always a worker; enrolment of any other role is refused. */
+    studentId: uuid('student_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    enrolledAt,
+  },
+  (table) => [
+    // One enrolment per institute per student, so redeeming a code twice is a no-op
+    // rather than a duplicated row in the roster and a duplicated pending decision.
+    uniqueIndex('trainer_students_trainer_student_unique').on(table.trainerId, table.studentId),
+    index('trainer_students_trainer_id_idx').on(table.trainerId),
+    index('trainer_students_student_id_idx').on(table.studentId),
+  ],
+);
+
+/**
+ * A micro-credential an institute has signed off, awaiting or holding the
+ * student's confirmation.
+ *
+ * This is the first record on the platform pairing one named institution with one
+ * named person's capability, and it is scoped as narrowly as the saved-worker table
+ * was: only the issuing institute sees it in full, the student sees their own, and
+ * it is never shown to another institute or to any employer.
+ *
+ * Two decisions worth stating.
+ *
+ * `student_id` is nullable and `ON DELETE set null`, matching `capability_blocks`
+ * and `work_proof_logs` rather than cascading. A student who has earned a credential
+ * must still be able to delete their account — the two `ON DELETE restrict` keys
+ * that once made that impossible are the defect recorded as `doc/13` E-025, and
+ * adding a third would repeat it. The row is retained and stamped, so the skill and
+ * the institute survive to keep contributing to aggregate counts while the person
+ * does not.
+ *
+ * `issued_by` is `set null` rather than cascading: a credential is the institute's
+ * record, so one instructor leaving must not erase what the institute signed.
+ *
+ * It is also the one name on this schema that is read back and shown, unlike every
+ * other. An endorsement with nobody's name on it is exactly the kind of claim this
+ * platform exists to make attributable, so the issuer is part of the evidence rather
+ * than a detail withheld from it — the student is told which institute and which
+ * member of staff signed a record about them, and nobody else is told anything.
+ *
+ * Deliberately **not** counted anywhere a client-verified proof is counted.
+ * `verifiedProofs`, `verifiedTotal`, and every employer-search aggregate derive from
+ * `work_proof_logs` and a confirmation row, and none of them reads this table. A
+ * credential says an institution stands behind a skill; a proof says a customer
+ * watched the work happen. Summing them would let a bootcamp that issued to a
+ * hundred students look like a hundred people whose work was verified by real
+ * employers.
+ */
+export const microCredentials = pgTable(
+  'micro_credentials',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Null only once the student deleted their account; see above. */
+    studentId: uuid('student_id').references(() => users.id, { onDelete: 'set null' }),
+    /** The issuing institute. Cascades: its credentials are its own records. */
+    trainerId: uuid('trainer_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** The instructor who signed off. Retained, never exposed. */
+    issuedBy: uuid('issued_by').references(() => users.id, { onDelete: 'set null' }),
+    /**
+     * The capability block on the student's graph this credential sits on.
+     *
+     * Set null with the block rather than cascading the credential away, for the
+     * same reason the worker's proofs survive their block: severing it would strip
+     * the skill and drop the record out of every aggregate. The skill tag is
+     * duplicated on this row precisely so that survives independently.
+     */
+    capabilityBlockId: uuid('capability_block_id').references(() => capabilityBlocks.id, {
+      onDelete: 'set null',
+    }),
+    skillTag: varchar('skill_tag', { length: 160 }).notNull(),
+    skillLevel: integer('skill_level').notNull().default(1),
+    /** The practical the student sat. Free text: curricula are not standardisable. */
+    milestoneTitle: varchar('milestone_title', { length: 200 }).notNull(),
+    /** The instructor's own words. Rendered as text, never as markup. */
+    note: text('note'),
+    status: microCredentialStatus('status').notNull().default('awaiting_student'),
+    issuedAt,
+    /** When the student answered. Null while pending. */
+    answeredAt: timestamp('answered_at', { withTimezone: true }),
+    /** Set when the owning student deleted their account. */
+    anonymisedAt: timestamp('anonymised_at', { withTimezone: true }),
+  },
+  (table) => [
+    index('micro_credentials_trainer_id_idx').on(table.trainerId),
+    index('micro_credentials_student_id_idx').on(table.studentId),
+    // The institute's list is read newest first, and the student's own page reads
+    // both buckets; both queries filter on one of these two columns.
+    index('micro_credentials_trainer_issued_idx').on(table.trainerId, table.issuedAt),
+    index('micro_credentials_student_status_idx').on(table.studentId, table.status),
+  ],
+);
+
+/**
+ * The one live enrolment code for a training provider.
+ *
+ * Only a SHA-256 digest is stored, and the raw code is returned exactly once, when
+ * it is created. This is the same treatment a confirmation link gets, and for the
+ * same reason: the value is a capability, and a stored capability is one a database
+ * disclosure can hand to an attacker.
+ *
+ * The code is short-lived by design — the institute rotates it, and rotating
+ * invalidates the previous one without touching anybody already enrolled, because
+ * enrolment is a row rather than a property of the code. That is what lets the
+ * digest be stored at all: there is no reason for the value to outlive the moment
+ * it was shared.
+ */
+export const trainerEnrolmentCodes = pgTable(
+  'trainer_enrolment_codes',
+  {
+    trainerId: uuid('trainer_id')
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: varchar('code_hash', { length: 64 }).notNull(),
+    createdAt,
+  },
+  (table) => [index('trainer_enrolment_codes_hash_idx').on(table.codeHash)],
+);
+
+export const trainerStudentsRelations = relations(trainerStudents, ({ one }) => ({
+  trainer: one(users, { fields: [trainerStudents.trainerId], references: [users.id] }),
+  student: one(users, { fields: [trainerStudents.studentId], references: [users.id] }),
+}));
+
+export const microCredentialsRelations = relations(microCredentials, ({ one }) => ({
+  trainer: one(users, { fields: [microCredentials.trainerId], references: [users.id] }),
+  student: one(users, { fields: [microCredentials.studentId], references: [users.id] }),
+  capabilityBlock: one(capabilityBlocks, {
+    fields: [microCredentials.capabilityBlockId],
+    references: [capabilityBlocks.id],
+  }),
+}));
+
 export type UserRow = typeof users.$inferSelect;
+export type TrainerStudentRow = typeof trainerStudents.$inferSelect;
+export type MicroCredentialRow = typeof microCredentials.$inferSelect;
 export type ProfileRow = typeof profiles.$inferSelect;
 export type CapabilityBlockRow = typeof capabilityBlocks.$inferSelect;
 export type WorkProofLogRow = typeof workProofLogs.$inferSelect;

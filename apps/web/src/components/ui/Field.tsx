@@ -14,6 +14,20 @@ interface FieldProps {
   multiline?: boolean;
   /** Height of a multiline field, in rows. Ignored for a single-line field. */
   rows?: number;
+  /**
+   * Renders a native select instead of an input.
+   *
+   * Used where the whole set of answers is already known and short — a skill level,
+   * a student on a roster. A native control because it is the one thing every
+   * platform renders identically: a phone gets the system picker, a keyboard gets
+   * type-ahead, and a screen reader announces the option count without any of it
+   * having to be rebuilt here.
+   *
+   * `options` is a value/label pair list. A disabled placeholder is supplied
+   * automatically when no value is preselected, so a form cannot be submitted
+   * against a field the person never actually chose.
+   */
+  select?: ReadonlyArray<{ value: string; label: string; disabled?: boolean }>;
   /** Present only when this field is the one the server rejected. */
   error?: string;
   hint?: ReactNode;
@@ -32,6 +46,13 @@ interface FieldProps {
   value?: string;
   placeholder?: string;
   autoComplete?: string;
+  /**
+   * Whether the browser's spell-checker runs on this input.
+   *
+   * Off for a field carrying a code or a handle, where every autocorrect suggestion
+   * is wrong and an accepted one turns a valid value into an invalid one.
+   */
+  spellCheck?: boolean;
   inputMode?: 'text' | 'numeric' | 'decimal' | 'email' | 'tel';
   required?: boolean;
   min?: number;
@@ -87,6 +108,7 @@ export function Field({
   value,
   placeholder,
   autoComplete,
+  spellCheck,
   inputMode,
   required,
   min,
@@ -96,6 +118,7 @@ export function Field({
   onChange,
   inputSuffix,
   linkedHintId,
+  select,
 }: FieldProps) {
   const errorId = `${name}-error`;
   const hintId = `${name}-hint`;
@@ -105,6 +128,11 @@ export function Field({
       .join(' ') || undefined;
   const report = onChange ? (value: string) => onChange(value) : undefined;
 
+  // A select with nothing preselected leads with a disabled choice, so an
+  // untouched field submits as the empty string rather than as whichever option
+  // happened to be first.
+  const selectNeedsPlaceholder = Boolean(select) && value === undefined && defaultValue === undefined;
+
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={name} className="text-sm font-medium text-ink-900">
@@ -112,7 +140,32 @@ export function Field({
         {required ? <span aria-hidden="true"> *</span> : null}
       </label>
       <div className="relative">
-        {multiline ? (
+        {select ? (
+          <select
+            id={name}
+            name={name}
+            required={required}
+            defaultValue={value === undefined ? defaultValue : undefined}
+            value={value}
+            onChange={report ? (event) => report(event.target.value) : undefined}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={describedBy}
+            className={`min-h-12 w-full appearance-none rounded-xl border bg-white px-4 py-3 text-base text-ink-900 ${
+              error ? 'border-red-700' : 'border-brand-100'
+            }`}
+          >
+            {selectNeedsPlaceholder ? (
+              <option value="" disabled>
+                Choose one
+              </option>
+            ) : null}
+            {select.map((option) => (
+              <option key={option.value} value={option.value} disabled={option.disabled}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        ) : multiline ? (
           <textarea
             id={name}
             name={name}
@@ -144,6 +197,7 @@ export function Field({
               value={value}
               placeholder={placeholder}
               autoComplete={autoComplete}
+              spellCheck={spellCheck}
               inputMode={inputMode}
               onChange={report ? (event) => report(event.target.value) : undefined}
               aria-invalid={error ? true : undefined}

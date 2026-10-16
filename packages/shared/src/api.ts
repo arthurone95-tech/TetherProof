@@ -3,6 +3,7 @@ import type {
   ConnectionStatus,
   EmployerVerificationStatus,
   InvitationPreference,
+  MicroCredentialStatus,
   NotificationKind,
   ProofReviewStatus,
   SkillLevel,
@@ -618,6 +619,204 @@ export interface NotificationsResponse {
   notifications: NotificationItem[];
   unreadCount: number;
   expiring: ProofExpiryNotice[];
+}
+
+// ---------------------------------------------------------------------------
+// Training providers (doc/02 Module 4)
+// ---------------------------------------------------------------------------
+
+/** One student on a training provider's roster. */
+export interface RosterStudent {
+  enrolmentId: string;
+  fullName: string | null;
+  /** Credentials this student has accepted from this institute. */
+  credentialCount: number;
+  /** Milestones issued to this student and still awaiting their answer. */
+  pendingCount: number;
+  enrolledAt: string;
+}
+
+export type TrainerEnrolmentResponse = {
+  /** True when a roster existed and the student is on it. */
+  enrolled: boolean;
+  organizationName: string | null;
+};
+
+/**
+ * The institute's roster and the one-time enrolment code.
+ *
+ * The code is the whole enrolment mechanism, deliberately. The alternative — an
+ * institute typing student addresses into a form — would have the platform
+ * collecting the personal details of people who never asked to be in a roster.
+ *
+ * `enrolmentCode` is present only in the response that creates one, and is the last
+ * time the value ever exists: only its digest is stored. `hasActiveCode` is what
+ * the roster page reads afterwards.
+ */
+export interface RosterResponse {
+  students: RosterStudent[];
+  hasActiveCode: boolean;
+  organizationName: string | null;
+}
+
+/** The response to creating or rotating an enrolment code. */
+export interface EnrolmentCodeResponse {
+  /** Shown once. Copy it now; it cannot be read back. */
+  enrolmentCode: string;
+  organizationName: string | null;
+}
+
+/**
+ * One issued micro-credential, as the issuing institute sees it.
+ *
+ * `status` is about whether the *student has agreed to hold it*, never about
+ * whether the skill was verified. See `MICRO_CREDENTIAL_STATUSES` for why the
+ * vocabulary is built that way.
+ */
+export interface IssuedCredential {
+  id: string;
+  studentName: string | null;
+  skillTag: string;
+  skillLevel: SkillLevel;
+  milestoneTitle: string;
+  note: string | null;
+  status: MicroCredentialStatus;
+  issuedAt: string;
+  answeredAt: string | null;
+}
+
+/** The institute's milestone issuer screen. */
+export interface CredentialListResponse {
+  credentials: IssuedCredential[];
+  awaitingCount: number;
+  acceptedCount: number;
+}
+
+/**
+ * One skill's standing in the market, from the institute's demand dashboard.
+ *
+ * Everything here is derived from rows the platform already holds: employer
+ * capability specs are declared demand and worker capability blocks are supply.
+ * There is no external labour-market feed behind this, and no number on this card
+ * that came from a third party.
+ *
+ * `invitationsSent`, `invitationsDeclined` and `invitationsAccepted` are
+ * deliberately **network totals, not per skill**. `direct_offers` records which
+ * spec an invitation came from, and nothing else — an invitation sent straight from
+ * a search result carries no skill at all. Attributing rejections per skill would
+ * therefore silently count only the ones an employer happened to save a spec for,
+ * which reads as a complete picture of why candidates get turned down and is
+ * nothing of the kind. The totals are complete; a per-skill split would not be, so
+ * there isn't one. `doc/06` records that `spec_id` is nullable for exactly this
+ * reason.
+ *
+ * `gapScore` ranks a skill for the institute's curriculum and is demand minus
+ * supply, so a skill many employers are searching and few workers hold sorts first.
+ * It is a ranking aid computed from the figures beside it and is never presented as
+ * an authoritative shortage: it is only as good as the employers who happened to
+ * write a spec, and a skill nobody searched for is not a skill nobody needs.
+ */
+export interface DemandSkillRow {
+  skillTag: string;
+  /** Employers currently searching this skill. */
+  activeSearches: number;
+  /** Workers holding a capability block for this skill. */
+  availableWorkers: number;
+  /** Active searches per available worker. Above 1 means demand outruns supply. */
+  demandPerWorker: number;
+  /** `demand minus supply`, floored at zero. The curriculum signal. */
+  gapScore: number;
+}
+
+/** The institute's demand dashboard. */
+export interface DemandInsightsResponse {
+  skills: DemandSkillRow[];
+  totals: {
+    activeSearches: number;
+    invitationsSent: number;
+    invitationsDeclined: number;
+    invitationsAccepted: number;
+    availableWorkers: number;
+    institutions: number;
+  };
+  /**
+   * When the figures were computed.
+   *
+   * Everything is read live at request time, so this is the moment of the read
+   * rather than the moment anything was last updated. It is returned so the page
+   * can say how current the numbers are instead of implying they are standing.
+   */
+  generatedAt: string;
+}
+
+/** The institute's dashboard summary. */
+export interface TrainerOverviewResponse {
+  studentCount: number;
+  awaitingCredentials: number;
+  acceptedCredentials: number;
+  topDemandSkills: DemandSkillRow[];
+  organizationName: string | null;
+}
+
+/**
+ * One micro-credential on a student's own record.
+ *
+ * `organizationName` and `instructorName` are both here because a credential is
+ * worthless as evidence without knowing who stands behind it: an unattributed
+ * endorsement is exactly the kind of claim this platform exists to make
+ * attributable. They are shown to the student, who is the party entitled to ask
+ * who signed a record about them, and to nobody else.
+ *
+ * Both are resolved through a fallback chain ending at the issuing account's own name,
+ * because `profiles.organization_name` and `profiles.full_name` are optional and a
+ * `profiles` row only exists for an account that registered through the public form.
+ * Reading those columns directly produced credentials that named nobody; see `doc/13`
+ * E-054. A null here means the account carries no name anywhere, which is a real absence
+ * rather than a missed join.
+ *
+ * Neither name is contact information and neither is ever returned to another
+ * student, an employer, or a different institute.
+ */
+export interface StudentCredential {
+  id: string;
+  skillTag: string;
+  skillLevel: SkillLevel;
+  milestoneTitle: string;
+  note: string | null;
+  status: MicroCredentialStatus;
+  /**
+   * The institution, resolved to something the student can be shown.
+   *
+   * Falls back to the issuer's own account name when no organization name was
+   * recorded, because a provider who called their account "Accra Technical Institute"
+   * is identifiable even with the separate field left blank. Null only when the
+   * issuing account carries no name anywhere — a real absence, not a missed join.
+   */
+  organizationName: string | null;
+  /**
+   * The member of staff who signed it off, or null when that account is gone or has
+   * no name. The credential survives deletion — it is the institute's record, not an
+   * individual's — but an unattributable endorsement is shown as unattributed rather
+   * than credited to whoever signed it next.
+   */
+  instructorName: string | null;
+  issuedAt: string;
+  answeredAt: string | null;
+}
+
+/**
+ * The student's own credentials page: what is waiting, and what they hold.
+ *
+ * A credential is not a customer-verified work proof and this response is kept
+ * structurally separate from `WorkerOverviewResponse` so the two can never be
+ * summed by a client that happened to receive both. `acceptedCredentials` counts
+ * institutional endorsements; `verifiedTotal` on the worker's overview counts work
+ * a customer confirmed.
+ */
+export interface StudentCredentialsResponse {
+  awaiting: StudentCredential[];
+  accepted: StudentCredential[];
+  declinedCount: number;
 }
 
 /** One of the worker's confirmation links that is about to run out. */

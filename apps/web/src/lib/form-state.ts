@@ -117,6 +117,42 @@ export interface ProofSubmissionView {
 export const EMPTY_PROOF: ProofFormState = {};
 
 /**
+ * Result of signing off on a milestone, and of answering one.
+ *
+ * Its own type because the milestone issuer needs something `FormState` has no room
+ * for: the credential that was created, so the page can name the practical the
+ * institute just recorded rather than only reporting that something happened.
+ *
+ * `awaitingStudent` is carried because the outcome genuinely is not "done". A
+ * credential the student has not answered is a notification, not a credential, and
+ * a form that said "Saved!" would be telling the instructor something untrue.
+ */
+export interface MilestoneState {
+  error?: string;
+  field?: 'enrolmentId' | 'skillTag' | 'milestoneTitle' | 'note' | 'code';
+  done?: boolean;
+  /** The recorded practical, present only once one has been created. */
+  issued?: {
+    id: string;
+    studentName: string | null;
+    skillTag: string;
+    milestoneTitle: string;
+  };
+  /**
+   * A freshly generated enrolment code, returned exactly once and never readable
+   * again. Carried in state so the roster page can show it to copy immediately
+   * after generating, which is the only moment it exists.
+   */
+  enrolmentCode?: string;
+  /** True once a student has answered, for the accept/decline buttons. */
+  answered?: 'accepted' | 'declined';
+  /** The institute a student just joined, named on a successful redemption. */
+  enrolledWith?: string | null;
+}
+
+export const EMPTY_MILESTONE: MilestoneState = {};
+
+/**
  * Result of editing an existing log entry.
  *
  * A separate, smaller state from `ProofFormState`: editing sends no media and

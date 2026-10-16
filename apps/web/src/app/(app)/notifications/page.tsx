@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import {
+  Award,
   BadgeCheck,
   Briefcase,
   CircleX,
@@ -212,6 +213,10 @@ const PRESENTATION_FOR_KIND: Record<
   offer_declined: { icon: UserX, chip: 'bg-neutral-100 text-neutral-700' },
   verification_confirmed: { icon: BadgeCheck, chip: 'bg-emerald-50 text-emerald-700' },
   verification_rejected: { icon: CircleX, chip: 'bg-red-50 text-red-800' },
+  // Amber like the other "waiting on you" kinds, and a distinct glyph from a
+  // verification: this is an institute asking whether a student will hold a
+  // credential, which is a different decision from a customer confirming work.
+  credential_issued: { icon: Award, chip: 'bg-amber-50 text-amber-700' },
   link_expired: { icon: Clock3, chip: 'bg-amber-50 text-amber-700' },
   link_expiring: { icon: Hourglass, chip: 'bg-amber-50 text-amber-700' },
 };
