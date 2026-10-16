@@ -2651,3 +2651,148 @@ pm run lint exits 0 with no warnings.
 * 
 pm run test:unit runs 29 tests across 3 files, all passing.
 * The full live smoke suite still passes, which is what confirms the shadowed-variable fix did not change the outcome of the check it repaired.
+
+---
+
+## E-054: The training provider module issued credentials that named nobody
+
+**Status:** resolved 2026-10-16
+**Area:** training provider module (doc/02 Module 4), `apps/api/src/modules/trainers/`
+
+### The symptom
+
+Two live assertions failed against a correctly migrated database:
+
+```
+FAIL  the credential names the institute that issued it  (organizationName null)
+FAIL  the credential names the instructor who signed it off  (instructorName null)
+```
+
+A student's credential page showed "A training provider" and "the instructor who recorded
+this is no longer on the platform" for a credential that had been signed off seconds
+earlier by an account that demonstrably still existed.
+
+### Root cause, in two parts
+
+`listStudentCredentials` read attribution straight off two columns of `profiles`:
+
+```ts
+organizationName: profiles.organizationName,
+instructorName:   issuerProfile.fullName,
+```
+
+Both are **optional**, and both are on a table that only one code path ever writes.
+
+**First: the columns are optional.** A training provider who registered and never filled
+in an organization name has `organization_name = NULL`, so the credential named no
+institution. Nobody had done anything wrong; the design simply assumed a field that is not
+required.
+
+**Second, and this is the one that produced the live failure: `profiles` rows are created
+only by `/auth/register`.** `apps/api/src/modules/auth/service.ts` inserts the row; the
+`on_auth_user_created` trigger that mirrors the role claim into `public.users` does not. So
+any account provisioned another way - an administrator writing the claim, a service-role
+`createUser`, the fixture path the live suite uses - has a name in `auth.users` and **no
+`profiles` row at all**. Every profile column joined null.
+
+This is the same class of defect as E-027, which fixed the *write* path for accounts
+provisioned outside registration. The *read* path had the same blind spot and it was not
+noticed until an account of that shape read a credential.
+
+The consequence is worse than a cosmetic null. `doc/08` requires an endorsement to be
+attributable, because an unattributed claim is exactly what the platform exists to make
+attributable. The failure was reached by doing nothing at all, which is the worst way for a
+guarantee to break.
+
+### What was done
+
+Attribution now resolves through an explicit three-tier chain in
+`apps/api/src/modules/trainers/attribution.ts`:
+
+1. `profiles.organization_name` - what the provider called their institute.
+2. `profiles.full_name` - the account name, used for both fields when no organization was
+   recorded.
+3. `auth.users.raw_user_meta_data ->> 'full_name'` - the account's own name in the
+   authoritative identity store, which every account has.
+
+Tier 3 is a *read* of Supabase Auth, not a duplication of it into a second table, so
+`doc/06` §2's single-source rule holds. It is no less trustworthy than tier 2: both are
+display names the holder may edit, and neither carries an authorization decision - the role
+that decides what an account may do is read from the server-controlled
+`app_metadata.role` claim, never from a name.
+
+Two things the resolver deliberately does not do, both of which would have been the wrong
+fix:
+
+* **It does not invent an institution.** No fallback to the skill name, the milestone
+  title, or anything derived from the credential. A plausible-looking institution derived
+  from the record would be indistinguishable from a real one, which is strictly worse than
+  an honest "a training provider".
+* **It does not claim a deleted account when the name is merely blank.** The two absences
+  are different and the UI distinguishes them, rather than telling a student an instructor
+  had left the platform when they had simply not named themselves.
+
+`organizationNameFor` - used by the roster, the dashboard, and the notification a student
+receives - was given the same fallback, so those three surfaces cannot name three different
+institutions. The student's card also stops printing the same name twice when the
+institution and the signatory resolve to one account, which is the usual case for a small
+institute.
+
+### The pre-flight check, which was also wrong
+
+Independently, the suite's pre-flight reported the credential enum absent against a
+database where it demonstrably existed. The query was unscoped:
+
+```sql
+select exists (select 1 from pg_type where typname = 'micro_credential_status')
+```
+
+`pg_type` is cluster-wide, so a type of that name in *any* schema satisfies it. The check
+was not reporting a false negative for that reason alone - the real cause was that the
+message was never updated after the migration succeeded - but the check itself was weaker
+than it read. It is now scoped to `public`, matching the `to_regclass('public....')` form
+every other check in the suite uses, and it additionally asserts the enum's *values*:
+
+```
+PASS  the enum carries exactly awaiting_student, accepted and declined
+PASS  the enum has no "verified" or "issued" value
+```
+
+The second assertion is the one that matters. A migration creating the type with a
+`verified` or `issued` value would pass an existence check and break the dual-backing
+guarantee at the storage layer, where no service-level test could see it.
+
+### A note on the removal queue, investigated and deliberately not changed
+
+The suite reports nine `orphaned_proof_media` rows whose objects no longer exist. Verified
+against production rather than assumed:
+
+* 9 rows, **0 objects present** in the bucket.
+* All 9 uploaders' accounts are deleted.
+* All 9 date from 2026-10-11, a single earlier test run.
+
+So this is not a leak. `orphaned_proof_media` is a work queue written by the account-
+deletion trigger when SQL cannot reach storage; a row whose object is gone means the
+removal already happened and the row is a **completed record**. Deleting them would be a
+database write against the only evidence that those deletions finished, which is the one
+thing the table exists to provide. Left alone, and the note now reports the drained/pending
+split so an operator can tell a finished queue from a real backlog.
+
+### Verification
+
+* `attribution.test.ts`: 17 tests, including the two regressions restated as assertions -
+  a blank organization name, and a provider with no profile row at all. Removing either
+  tier fails the unit suite, not only the live one.
+* Live suite: **463 passed, 0 failed**, up from 456/2. The two failing assertions now pass,
+  and five further assertions were added around them: the name is the account's name and
+  nothing derived from the credential, the named account really exists with the
+  `training_provider` role, and no non-issuer id appears anywhere in the payload.
+* Lint, unit (58), typecheck, build, security (93), fraud (95), integrity (54) and the
+  secret scrub all pass.
+
+### The honest limitation
+
+Attribution is resolved at read time, so a provider who renames themselves re-labels every
+credential they have ever issued. Snapshotting the issuer onto the row at signing time is
+the correct fix and needs a migration, which was not authorised. Recorded here rather than
+assumed away.

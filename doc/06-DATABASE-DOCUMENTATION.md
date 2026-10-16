@@ -172,6 +172,80 @@ Nothing in this table is readable or writable by an employer through PostgREST �
 deliberately **no INSERT or UPDATE policy** — because the API writes it with the service role,
 and a search result is only meaningful server-side.
 
+### I2. Training Provider Tables (migration `0011_trainer_module`)
+
+#### `trainer_students`
+A student enrolled with one institute.
+* `id` (UUID, Primary Key)
+* `trainer_id` (UUID, Foreign Key referencing `users.id`, `ON DELETE CASCADE`)
+* `student_id` (UUID, Foreign Key referencing `users.id`, `ON DELETE CASCADE`)
+* `enrolled_at` (TIMESTAMP)
+
+**Deliberately holds no email, phone, or location column.** Enrolment is a code the student
+redeems, so the platform never handles a list of addresses an institute compiled. A unique index
+on `(trainer_id, student_id)` makes redeeming twice a no-op rather than a duplicate roster
+entry and a duplicated pending decision.
+
+#### `trainer_enrolment_codes`
+The institute's one live enrolment code, stored only as a digest.
+* `trainer_id` (UUID, Primary Key, Foreign Key referencing `users.id`, `ON DELETE CASCADE`)
+* `code_hash` (VARCHAR(64), SHA-256)
+* `created_at` (TIMESTAMP)
+
+The raw code exists exactly once, in the response that creates it — the same treatment a
+confirmation link gets, and for the same reason: a stored capability is one a database
+disclosure can hand to an attacker. Rotating replaces the digest and invalidates the previous
+code without unenrolling anybody, because enrolment is a row rather than a property of the
+code. That is what makes storing only the digest workable. RLS is enabled and forced with **no
+policy at all**, so the table is service-role-only by construction.
+
+#### `micro_credentials`
+A milestone an institute has signed off.
+* `id` (UUID, Primary Key)
+* `student_id` (UUID, **nullable**, Foreign Key referencing `users.id`, `ON DELETE SET NULL`)
+* `trainer_id` (UUID, Foreign Key referencing `users.id`, `ON DELETE CASCADE`)
+* `issued_by` (UUID, **nullable**, Foreign Key referencing `users.id`, `ON DELETE SET NULL`)
+* `capability_block_id` (UUID, **nullable**, Foreign Key referencing `capability_blocks.id`, `ON DELETE SET NULL`)
+* `skill_tag` (VARCHAR(160))
+* `skill_level` (INTEGER)
+* `milestone_title` (VARCHAR(200))
+* `note` (TEXT, Optional. The instructor's words, rendered as text only)
+* `status` (ENUM `micro_credential_status`: `awaiting_student`, `accepted`, `declined`)
+* `issued_at` (TIMESTAMP), `answered_at` (TIMESTAMP, null while awaiting)
+* `anonymised_at` (TIMESTAMP, **NULL** except on a record retained after its owner deleted their account)
+
+**There is deliberately no `issued` and no `verified` value in the enum.** `doc/02` §5.1 calls a
+micro-credential "dual-backed" without defining the second backing party; the only reading
+consistent with this platform's purpose is two independent parties, the institute and the
+student, so signing off can only ever produce `awaiting_student`. An institute that could
+attach an endorsement to a record unaided would make its own graduates the most credentialed
+people on the network, which is exactly what an endorsement should be worth something about.
+
+**A credential is not a verified proof, and this is enforced structurally rather than by
+convention.** `verifiedProofs`, `verifiedTotal`, and every employer-search aggregate derive
+from `work_proof_logs` and a confirmation row; none of them reads this table. A credential says
+an institution stands behind a skill. A verified proof says a customer watched the work happen.
+Summing them would let a bootcamp that issued to a hundred students look like a hundred people
+whose work was verified by real employers, when none of them may have had a customer at all.
+
+`student_id` is nullable and sets null rather than cascading, matching `capability_blocks` and
+`work_proof_logs`. A student who has earned a credential must still be able to delete their
+account: the two `ON DELETE restrict` keys that once made that impossible are `doc/13` E-025,
+and a third would repeat it. The row is retained and stamped, so the skill and the institute
+keep contributing to aggregate counts while the person does not.
+
+`issued_by` is the one name on this schema that is read back and shown, unlike every other. An
+endorsement with nobody's name on it is the kind of claim this platform exists to make
+attributable, so the issuer is part of the evidence rather than a detail withheld from it —
+shown to the student, and to nobody else. It sets null rather than cascading, because a
+credential is the institute's record: one instructor leaving must not erase what the institute
+signed.
+
+**No unique index on `(trainer_id, student_id, skill_tag)`**, deliberately. A student who
+repeats a course earns a second credential for the same skill, and an institute running two
+intakes of the same syllabus must be able to say which was which. `milestone_title` and
+`issued_at` are what distinguish them.
+
 ### I. Direct Offers Table (`direct_offers`)
 Stores direct connection requests sent from employers to verified workers.
 * `id` (UUID, Primary Key)
@@ -199,5 +273,5 @@ answer independently.
 * **A nullable `worker_id` is not an oversight:** on a deliberately retained anonymised record, a non-null `worker_id` would be a contradiction. Code reading these tables must exclude `worker_id IS NULL` explicitly rather than rely on a join dropping the rows. `doc/13` E-029 records the two places that had to change - the candidate aggregate and the collusion graph - and both exclusions are deliberate rather than incidental.
 * **`orphaned_proof_media`:** SQL cannot delete storage objects. `storage.protect_delete()` refuses it, verified against the live project, so the trigger records the bucket and path of every object still stored at deletion time, read back from `storage.objects` rather than assumed so the record survives a bucket rename. This is an auditable queue, not a record of what happened: the bytes are still there until something drains it. An object path is `<user_id>/<YYYY-MM-DD>/<uuid>.<ext>`, so the prefix still identifies the person who asked to be removed; holding that path is acceptable only because the row is written at deletion time, when the user id in the prefix has just been deleted from `auth.users`.
 * **Encryption:** Sensitive personal data and authentication secrets must be encrypted at rest.
-* **PII Isolation:** Verifier phone numbers and raw client details are isolated from public worker profiles to preserve privacy.
+* **PII Isolation:** Verifier phone numbers and raw client details are isolated from public worker profiles to preserve privacy. The same applies to a training provider's roster: `trainer_students` has no email, phone, or location column, and no `/trainers` endpoint can return one, so an institute holds a name and nothing more. A student joins by redeeming a code the institute published, so the platform never handles a list of addresses an institute compiled.
 * **Token Hashing:** Verification links are the live capability to confirm work, so only a SHA-256 hash of the token is persisted. The raw token exists once, in the response that creates the record, and is never written to the database or to logs. Lookup by `token_hash` ensures a database disclosure is insufficient to forge a confirmation.

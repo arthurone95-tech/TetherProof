@@ -797,6 +797,198 @@ queue, since there is no worker to restore anything for.
 
 ---
 
+## 6B. Training Provider Endpoints
+
+The training provider's workspace (`doc/02` Module 4) and the student's own side of it. Every
+route requires a valid access token. `/trainers/*` requires the `training_provider` role and
+`/workers/credentials` and `/workers/enrolment` require `worker`; both are enforced at the
+router mount, so a wrong role is a 403 on the whole group rather than on whichever handler
+happened to check.
+
+### A. Institute Dashboard
+* `GET /api/v1/trainers/overview`
+
+One read answers every figure on the dashboard, so the tiles cannot disagree with each other or
+with the pages they point at. Returns `studentCount`, `awaitingCredentials`,
+`acceptedCredentials`, `organizationName`, and `topDemandSkills`.
+
+### B. Student Roster
+* `GET /api/v1/trainers/roster` — the institute's own students.
+* `POST /api/v1/trainers/roster/code` — create or rotate the enrolment code.
+* `DELETE /api/v1/trainers/roster/{enrolmentId}` — remove a student.
+
+Response (200 OK):
+```json
+{
+  "students": [
+    {
+      "enrolmentId": "6b1f1f0a-1c2d-4e3f-8a9b-0c1d2e3f4a5b",
+      "fullName": "Ama Mensah",
+      "credentialCount": 2,
+      "pendingCount": 1,
+      "enrolledAt": "2026-10-15T09:12:00Z"
+    }
+  ],
+  "hasActiveCode": true,
+  "organizationName": "Accra Technical Institute"
+}
+```
+
+A roster entry carries a name and nothing else. There is no email, phone, or location on the
+table, and no endpoint here can return one — an institute needs a name to sign a milestone and
+nothing more, and a roster is the kind of table that quietly becomes a contact list.
+
+**Enrolment runs through a code, not a form.** A student redeems a code the institute published,
+so being on a roster is something they did. The alternative — an institute typing student
+addresses into a form — would have the platform collecting the personal details of people who
+never asked to be in one. Only a SHA-256 digest of the code is stored, and the raw value is
+returned exactly once, in the response to `POST /roster/code`; `hasActiveCode` reports whether
+one is live without ever returning it. Rotating invalidates the previous code but touches
+nobody already enrolled, because enrolment is a row rather than a property of the code.
+
+Removing a student **keeps** the credentials they already hold. Leaving a course does not
+un-take a practical somebody sat, and deleting the endorsement would leave the institute with
+no record of what it certified.
+
+### C. Milestone Issuer
+* `GET /api/v1/trainers/credentials` — what this institute has signed off.
+* `POST /api/v1/trainers/credentials` — sign off a practical.
+
+Request:
+```json
+{
+  "enrolmentId": "6b1f1f0a-1c2d-4e3f-8a9b-0c1d2e3f4a5b",
+  "skillTag": "Refrigeration Repair",
+  "milestoneTitle": "Refrigeration workshop practical 3",
+  "skillLevel": 2,
+  "note": "Passed the compressor fault-finding practical."
+}
+```
+
+Addressed by `enrolmentId` and never by a student id, email, or name. There is no shape of this
+request that could name somebody who is not already on the issuing institute's roster, and a
+second institute's enrolment id is a 404 rather than a 403 — a 403 would confirm the row
+exists.
+
+**This endpoint cannot produce a credential a student holds.** Signing off creates a row in
+`awaiting_student`, and only the student can move it. `doc/02` §5.1 calls a micro-credential
+"dual-backed" without defining the second backing party, and the only reading consistent with
+this platform's purpose is two independent parties: the institute and the student. The worst
+outcome of a compromised or careless institute account is therefore a pile of unanswered
+notifications, not a network full of fabricated verified experience.
+
+### D. Market Demand
+* `GET /api/v1/trainers/demand` — `limit` (1–50, default 12).
+
+Response (200 OK):
+```json
+{
+  "skills": [
+    {
+      "skillTag": "Solar Panel Installation",
+      "activeSearches": 4,
+      "availableWorkers": 1,
+      "demandPerWorker": 4,
+      "gapScore": 3
+    }
+  ],
+  "totals": {
+    "activeSearches": 12,
+    "availableWorkers": 9,
+    "invitationsSent": 31,
+    "invitationsAccepted": 18,
+    "invitationsDeclined": 6,
+    "institutions": 4
+  },
+  "generatedAt": "2026-10-15T09:40:11.402Z"
+}
+```
+
+Derived entirely from rows the platform already holds. Demand is employer capability specs
+that are currently running; supply is worker capability blocks. **No external labour-market
+feed is involved** and no number here came from a third party.
+
+**No credential contributes to supply.** Otherwise an institute's own graduates would inflate
+the very shortage figure it uses to justify its own curriculum.
+
+`gapScore` is `demand minus supply`, floored at zero, so an oversupplied skill can never read
+as a shortage. A skill nobody has searched for is **not** a skill nobody needs — only one
+nobody has written down.
+
+`invitationsSent`, `invitationsAccepted` and `invitationsDeclined` are network totals and are
+deliberately **not** broken down per skill. `direct_offers` records the spec an invitation came
+from and no skill at all, so a per-skill rejection count would silently describe only the
+invitations whose employer happened to save a spec, and would read as a complete picture of why
+candidates are turned down when it is not one.
+
+### E. Student Credentials
+* `POST /api/v1/workers/enrolment` — redeem an institute's code.
+* `GET /api/v1/workers/credentials` — what is waiting, and what the student holds.
+* `POST /api/v1/workers/credentials/{credentialId}` — accept or decline.
+
+Request to answer:
+```json
+{ "response": "accepted" }
+```
+
+`response` is `accepted` or `declined`. The verb is deliberate: the student is agreeing to hold
+the endorsement, **not** vouching for the skill. Nothing in this request can be read as a
+claim that the work was independently verified.
+
+One answer, and it is final. A second attempt is a 409 rather than a silent overwrite, because
+an institute acts on what it is told and reporting a replacement as a recording would be worse
+than saying it had already been answered. A credential belonging to somebody else is a 404, not
+a 403.
+
+Response (200 OK):
+```json
+{
+  "awaiting": [
+    {
+      "id": "9c2e3d4a-1b2c-4d5e-8f90-1a2b3c4d5e6f",
+      "skillTag": "Refrigeration Repair",
+      "skillLevel": 2,
+      "milestoneTitle": "Refrigeration workshop practical 3",
+      "note": "Passed the compressor fault-finding practical.",
+      "status": "awaiting_student",
+      "organizationName": "Accra Technical Institute",
+      "instructorName": "Kwesi Boateng",
+      "issuedAt": "2026-10-15T09:20:00Z",
+      "answeredAt": null
+    }
+  ],
+  "accepted": [],
+  "declinedCount": 0
+}
+```
+
+`organizationName` and `instructorName` are both returned, because a credential is worthless
+as evidence without knowing who stands behind it — an unattributed endorsement is exactly the
+kind of claim this platform exists to make attributable. They are shown to the student, who is
+the party entitled to ask who signed a record about them, and to nobody else.
+
+Both are resolved through a fallback chain — the account's organization name, then its profile
+name, then its own name in `auth.users`. The earlier fields are optional and a `profiles` row
+only exists for an account that registered through the public form, so reading them directly
+produced credentials that named nobody (`doc/13` E-054). `instructorName` is null only when
+the account carries no name in any of the three; the credential then survives as the
+institute's record and is shown as unattributed rather than credited to whoever signed it next.
+
+**`accepted` does not mean verified.** It records that the student agreed to hold the
+endorsement. Accepting writes nothing to `work_proof_logs` or `verifications` and moves no
+number an employer searches on: `verifiedProofs` and `verifiedTotal` derive from proofs and
+never read `micro_credentials`. A bootcamp that issued to a hundred students has endorsed a
+hundred students; it has not produced a hundred people whose work was confirmed by customers,
+and nothing in this response lets the two be summed together. The awaiting and accepted buckets
+are returned separately and are deliberately different shapes from the worker overview, so a
+client cannot add them together by accident.
+
+`declined` is stored rather than deleted, so "the student refused this" is never
+indistinguishable from "this was never offered", and an institute cannot quietly re-approach
+somebody by issuing a slightly different milestone.
+
+---
+
 ## 7. Location Endpoints
 
 A single public helper behind the web app's "Use my location": it turns the

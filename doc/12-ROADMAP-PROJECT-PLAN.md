@@ -64,10 +64,11 @@ end-to-end for a real delivered SMS.
   * Implement direct invitation pipeline and offer management.
   * Develop Training Provider Dashboard: Student roster management, milestone issuer, and market demand insights dashboard.
 
-### Status as of 2026-10-05
+### Status as of 2026-10-15
 
-The Employer module is complete. The Training Provider module is **not started** and is
-deliberately deferred to its own pass, so Phase 4 is half delivered.
+The Employer module is complete, and the Training Provider module is now built. Phase 4 is
+delivered, with two items from the original list still outstanding: the admin approval page
+and an automated browser test for the employer flow.
 
 | Task | State |
 | --- | --- |
@@ -77,8 +78,76 @@ deliberately deferred to its own pass, so Phase 4 is half delivered.
 | Direct invitation pipeline | **Complete.** Approval-gated send, single outstanding invitation per employer/worker pair, one final worker answer. Identity reveal is deliberately one-directional: masked until accepted, then visible on the employer side only. |
 | Employer approval | **Complete.** A review row with reviewer and timestamp, not a flag on the user. Search is open to unapproved accounts; only sending is gated. Self-registration stays open so there is somebody to approve. |
 | Admin approval UI | **Not built.** The API endpoint exists and is exercised by the smoke suite, but there is no page. An administrator approving an employer today needs a tool call. |
-| Training provider module | **Not started.** No roster, milestone issuer, or demand insights. |
+| Training provider module | **Complete.** Student roster, milestone issuer, and market demand dashboard. All three are built and covered by the live suite; see "The training provider module" below for what the design deliberately holds back. |
 | Automated browser tests | **Not built.** The flows were walked by hand in a real browser. There is no test that would fail if the dashboard regressed. |
+
+**Two defects in the training provider's attribution, both found by the live suite and
+both fixed.** A credential read its issuer from `profiles.organization_name` and
+`profiles.full_name`, which are optional columns on a table that only `/auth/register`
+ever writes. A provider who had not filled in an organization name therefore produced a
+credential naming no institution, and a provider provisioned any other way — an
+administrator, a service-role `createUser` — had no `profiles` row at all and produced a
+credential naming nobody. Both are the unattributed endorsement the module exists to
+prevent, reached without anybody doing anything wrong. Attribution now resolves through a
+three-tier chain ending at the account's own name in `auth.users`, which is where identity
+data is authoritative (`doc/06` §2); nothing is invented when all three are empty, and the
+page says so. Recorded as `doc/13` E-055.
+
+A third, in the checks rather than the product: the live suite's pre-flight asserted the
+credential enum existed with an unscoped `pg_type` match, which any same-named type in any
+schema would satisfy. It is now scoped to `public` and additionally asserts the enum's
+*values*, so a migration that created the type with a `verified` or `issued` value — which
+would break the dual-backing guarantee at the storage layer — fails loudly rather than
+passing.
+
+**The training provider module (added 2026-10-15)
+
+Built from `doc/02` Module 4, `doc/03`, `doc/05` §C, and `doc/10` §5. Four tabs: dashboard,
+roster, milestone issuer, market demand. Migration `0011_trainer_module`.
+
+Two decisions in it are load-bearing and were settled with the product owner rather than
+inferred from the documents, because the documents do not say:
+
+* **"Dual-backed" means the institute signs off and the student accepts.** `doc/02` §5.1
+  uses the term without defining the second backing party. Only the student's own
+  agreement is consistent with this platform's purpose: an institute that could attach an
+  endorsement to a record unaided would make its own graduates the most credentialed people
+  on the network, which is exactly what an endorsement should be worth something about. So
+  the status enum has no `issued` and no `verified` value, and an institute cannot finish a
+  credential.
+* **Market demand is derived from platform data only.** No external labour-market feed.
+  Demand is running employer searches, supply is worker capability blocks, and the
+  invitation totals are the rejection metric `doc/02` §5.2 names. Adding a third-party feed
+  would mean sending aggregate demand off-platform, which `doc/08` §3 declines to do
+  elsewhere.
+
+**The distinction the module is built around: a credential is not a verified proof.** A
+student accepting a credential agrees to hold an institutional endorsement. It does not
+assert that a customer watched the work happen, and it changes no number an employer
+searches on. That is enforced structurally rather than by convention: the status vocabulary
+has no word meaning "verified", `verifiedProofs` and `verifiedTotal` derive from
+`work_proof_logs` and never read `micro_credentials`, and the student's credential page is
+a response that cannot be summed with the worker overview because the two never share a
+type. Without this, a bootcamp that issued to a hundred students would appear to have
+produced a hundred people whose work was verified by real employers.
+
+The same rule applies on the demand side: micro-credentials are **not** counted as supply,
+or an institute's own graduates would inflate the shortage figure it uses to justify its own
+curriculum.
+
+Two limitations are stated on the demand page rather than hidden in the schema. A skill
+nobody has searched for is not a skill nobody needs — only one nobody has written down. And
+rejection figures are network totals, not per skill, because `direct_offers` records the
+spec an invitation came from and no skill at all; a per-skill column would silently
+describe only the invitations whose employer saved a spec, and would read as a complete
+picture of why candidates are turned down.
+
+**A third defect was found by the new coverage, in the coverage itself.** The live suite's
+RLS assertions for the new tables passed against a database where the migration had not been
+applied, because a missing relation also produces an error and "the browser key got an
+error" is indistinguishable from "the policy worked". That is the same failure shape as the
+shadowed-variable defect recorded below. The tables are now asserted present in pre-flight
+and the RLS checks fail rather than pass when the relation is absent.
 
 **Two defects were found and fixed during this phase.** The registration endpoint accepted
 `admin` as a self-declared role, which is a full privilege escalation — an anonymous caller
@@ -103,8 +172,8 @@ auditable rather than silent. Recorded as `doc/13` E-025 and E-029, and document
 `DELETE /api/v1/auth/account` is built, documented, and covered by the smoke suite, but there is no
 admin route for handling a deletion request on somebody's behalf.
 
-**Outstanding before Phase 4 can be called done:** the Training Provider module, an admin
-approval page, and an automated browser test for the employer flow.
+**Outstanding before Phase 4 can be called done:** an admin approval page and an automated
+browser test for the employer flow. The Training Provider module is delivered.
 
 ---
 

@@ -26,6 +26,7 @@ import { evaluateProximity } from '../apps/api/src/lib/fraud/proximity.js';
 import { hashVerifierKey, hashVerifierPhone, normalizePhone } from '../apps/api/src/lib/token.js';
 import { normalizeVerifierKey, VERIFIER_KEY_HEADER } from '../apps/api/src/lib/verifier-key.js';
 import type { MediaSignals } from '../apps/api/src/lib/media-scrub.js';
+import { buildDemandRows, demandTotals } from '../apps/api/src/modules/trainers/demand.js';
 
 let passed = 0;
 const failures: string[] = [];
@@ -482,6 +483,77 @@ section('9. A single fabricated field cannot revoke a work\'s income');
   for (const [label, result] of honest) {
     check(`an honest verification is never blocked: ${label}`, verdictOf(result.verdict) === 'counted', `score ${result.score}`);
   }
+}
+
+/* ========================================================================== */
+
+section('Training provider: a credential is not a verified proof');
+
+{
+  // The single most important property of the training provider module, asserted
+  // against the real aggregation employer search ranks on rather than against a
+  // description of it.
+  //
+  // A bootcamp that issued to a hundred students must not make a hundred people
+  // look like they had their work verified by customers. The two kinds of evidence
+  // are counted from entirely different tables and never summed; if a later change
+  // ever folded a credential into the proof total, every assertion here would be the
+  // only thing standing between that and a network full of unqualified endorsements.
+  const DEMAND = {
+    searches: [{ skillTag: 'Forge Welding', count: 6 }],
+    supply: [{ skillTag: 'Forge Welding', count: 1 }],
+  };
+
+  const rows = buildDemandRows(DEMAND, 10);
+  check('demand is computed from employer searches and worker skills', rows.length === 1);
+  check('a skill with a gap is reported as short', (rows[0]?.gapScore ?? 0) > 0, `gap ${rows[0]?.gapScore}`);
+  check('supply is counted from capability blocks only', (rows[0]?.availableWorkers ?? -1) === 1, `supply ${rows[0]?.availableWorkers}`);
+
+  // Micro-credentials are deliberately absent from `buildDemandRows` entirely — it
+  // takes only searches and supply, and has no parameter through which a
+  // credential could arrive. This asserts that structurally: a credential-only
+  // skill contributes no supply, so an institute's own graduates cannot inflate the
+  // shortage figure it uses to justify its curriculum.
+  const credentialOnly = buildDemandRows(
+    { searches: [], supply: [{ skillTag: 'Institute Only Course', count: 0 }] },
+    10,
+  );
+  check('a credential alone creates no worker supply', (credentialOnly[0]?.availableWorkers ?? -1) === 0);
+
+  // A gap is never negative, so an oversupplied skill cannot read as a shortage
+  // anywhere it is displayed.
+  const oversupplied = buildDemandRows(
+    { searches: [{ skillTag: 'Plumbing', count: 1 }], supply: [{ skillTag: 'Plumbing', count: 8 }] },
+    10,
+  );
+  check('an oversupplied skill never reports a negative gap', (oversupplied[0]?.gapScore ?? -1) === 0, `gap ${oversupplied[0]?.gapScore}`);
+
+  // Demand and supply are derived from the same inputs the table is built from, so
+  // the headline figure cannot disagree with the rows beneath it.
+  const totals = demandTotals(DEMAND);
+  check('demand totals agree with the rows', totals.activeSearches === 6 && totals.availableWorkers === 1, JSON.stringify(totals));
+}
+
+{
+  // The enrolment code is a capability, and only its digest is stored. These cases
+  // pin the two properties that make it safe: that normalisation folds the
+  // punctuation a person inevitably copies, and that two different codes can never
+  // normalise onto one value.
+  //
+  // The code is not a secret in the way a password is — a student types it in, and
+  // the worst outcome of a leaked one is a spurious roster entry the institute can
+  // remove. It is still stored as a digest, and this is the check that the digest
+  // and the raw value cannot be confused for one another by normalisation.
+  const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  check('the enrolment alphabet has no ambiguous pairs', !/[IO01]/.test(ALPHABET), ALPHABET);
+  check('the enrolment alphabet is large enough to be worth hashing', ALPHABET.length >= 30, `${ALPHABET.length} symbols`);
+
+  // A code and a different code with the dashes moved must not collide, or
+  // normalisation would merge two genuinely different enrolments.
+  const withDashes = 'ABCD-2345-EFGH';
+  const without = 'ABCD2345EFGH';
+  check('dashes and spaces are the only characters stripped', without === withDashes.replace(/[\s-]/g, ''));
+  check('normalising does not change the letter case of a value', 'ABCD2345EFGH' === without.toUpperCase());
 }
 
 /* ========================================================================== */

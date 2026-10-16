@@ -188,10 +188,70 @@ Three properties hold throughout the module:
 ---
 
 ## 5. Module 4: Training Provider & Micro-Credentialing
+
+Both features below are built. They are described as implemented, not as intended, including
+the boundaries that were deliberately drawn.
+
+Three properties hold throughout the module:
+
+* **A credential is not a customer-verified work proof.** This is the distinction the whole
+  module turns on. A student accepting a credential agrees to hold an *institutional
+  endorsement*; it does not assert that a customer watched the work happen, and it changes no
+  number an employer searches on. A bootcamp that issued to a hundred students has endorsed a
+  hundred students; it has not produced a hundred people whose work was confirmed by
+  employers, and nothing in the product lets the two be summed. This is structural — the
+  status enum has no `verified` value, the search aggregates never read the credential table,
+  and the student's credential response shares no type with the worker overview.
+* **An institute cannot finalise a credential alone.** Signing off produces
+  `awaiting_student`; only the student can move it. See Feature 5.1 for why the second
+  signature is theirs.
+* **Demand is read from the platform, not from a third party.** The figures on the dashboard
+  are derived from employer searches and worker capability blocks. No external labour-market
+  feed is involved, because wiring one up would mean sending aggregate demand off-platform,
+  which the privacy model in `doc/08` §3 declines to do elsewhere.
+
 ### Feature 5.1: Institutional Milestone Issuance
 * **Description:** Tooling for vocational schools, bootcamps, and trade institutes to endorse student progress.
 * **Behavior:** Allows instructors to sign off on practical workshop tests, minting official dual-backed micro-credentials onto the student's capability graph.
+* **Implementation:** "Dual-backed" is used above without the second backing party being
+  defined, and the only reading consistent with this platform's purpose is two independent
+  parties: the institute, and the student the credential is about. Every other proof here works
+  the same way — a worker's own claim is never sufficient on its own — and an institute that
+  could write straight to a student's capability graph would make its own graduates the most
+  credentialed people on the network, which is exactly what an endorsement should be worth
+  something about. The status enum therefore has no `issued` and no `verified` value: signing
+  off yields `awaiting_student`, and only the student can accept or decline. The answer is
+  final, so a second tap is a 409 rather than a silent overwrite of a decision the institute has
+  already acted on.
+
+  A student joins an institute's roster by redeeming a code the institute published, so being
+  on a roster is something they did. The roster table has no email, phone, or location column
+  at all: an institute needs a name to sign a milestone and nothing more, and a roster is the
+  kind of table that quietly becomes a contact list. The code is stored only as a SHA-256
+  digest and is returned exactly once. Milestones are addressed by enrolment id, so no request
+  can name somebody who is not already on the issuing institute's roster.
+
+  The credential names the institute *and* the instructor who signed it off, shown to the
+  student and to nobody else. An endorsement with nobody's name on it is precisely the kind of
+  claim this platform exists to make attributable, so the issuer is part of the evidence rather
+  than a detail withheld from it.
 
 ### Feature 5.2: Real-Time Market Demand Dashboard
 * **Description:** Live data feedback loop for educational program design.
 * **Behavior:** Aggregates regional employment data and rejection metrics to show training providers which specific technical or hands-on skills are currently undersupplied in the market.
+* **Implementation:** Derived entirely from rows the platform already holds. Demand is employer
+  capability specs that are currently running — a paused spec is excluded, because a filter
+  nobody is running is not a vacancy. Supply is worker capability blocks, which counts what
+  people *offer* rather than what has been verified, because the question a curriculum faces
+  is how many people are competing for the work. `gapScore` is demand minus supply, floored at
+  zero so an oversupplied skill can never read as a shortage.
+
+  Micro-credentials are **not** counted as supply. Otherwise an institute's own graduates would
+  inflate the very shortage figure it uses to justify its curriculum.
+
+  Two limitations are stated on the page rather than buried in the schema. A skill nobody has
+  searched for is not a skill nobody needs — only one nobody has written down. And the
+  rejection metrics are network totals, not per skill: `direct_offers` records the spec an
+  invitation came from and no skill at all, so a per-skill rejection count would silently
+  describe only the invitations whose employer happened to save a spec, and would read as a
+  complete picture of why candidates are turned down when it is not one.

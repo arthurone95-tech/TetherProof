@@ -452,6 +452,40 @@ async function main() {
     await pool.query('delete from public.employer_specs where employer_id = any($1::uuid[])', [ids]);
     await pool.query('delete from public.employer_approvals where employer_id = any($1::uuid[])', [ids]);
 
+    // Phase 4b rows. `trainer_students` references both parties, so a delete keyed
+    // on one side would leave the other's row behind to block the auth delete.
+    // `micro_credentials` references a student with `set null` rather than a
+    // cascade, so it has to be removed explicitly — a retained credential is
+    // correct behaviour for a real account deletion, but this run's accounts are
+    // fixtures and the suite is required to leave nothing behind.
+    //
+    // Each delete tolerates a missing table, because teardown runs on the failure
+    // path too: a run that aborted before migration 0011 was applied must still be
+    // able to clean up the accounts it created, and a missing relation must not
+    // leave the whole teardown half-done. The pre-flight check is where the tables
+    // being present is asserted.
+    for (const t of ['trainer_students', 'micro_credentials']) {
+      try {
+        await pool.query(
+          `delete from public.${t}
+             where trainer_id = any($1::uuid[])
+                or student_id = any($1::uuid[])
+                or issued_by = any($1::uuid[])`,
+          [ids],
+        );
+      } catch (error) {
+        if (!/does not exist/i.test(error.message)) throw error;
+      }
+    }
+    try {
+      await pool.query(
+        'delete from public.trainer_enrolment_codes where trainer_id = any($1::uuid[])',
+        [ids],
+      );
+    } catch (error) {
+      if (!/does not exist/i.test(error.message)) throw error;
+    }
+
     return { paths: [...paths], storageError };
   };
 
@@ -622,6 +656,47 @@ async function main() {
         );
         check(`no orphaned rows left in public.${t}`, rows[0].n === 0, `${rows[0].n} rows`);
       }
+      // The roster and the enrolment code cascade from their owner, so a row with no
+      // live account on either side is a leak rather than a retained record. Both
+      // parties are checked on the roster: a half-orphaned entry would name a student
+      // who no longer exists.
+      //
+      // Skipped entirely when migration 0011 has not been applied. Pre-flight
+      // already fails for that, and a query against a missing relation here would
+      // throw and abandon the whole cleanup section — taking with it the orphan
+      // checks for every other table, which is the opposite of what a failing run
+      // should do.
+      const { rows: trainerTables } = await pool.query(
+        `select to_regclass('public.trainer_students')::text as t`,
+      );
+      if (trainerTables[0]?.t) {
+        const { rows: rosterOrphans } = await pool.query(
+          `select count(*)::int n from public.trainer_students t
+             where not exists (select 1 from auth.users u where u.id = t.trainer_id)
+                or not exists (select 1 from auth.users u where u.id = t.student_id)`,
+        );
+        check('no orphaned rows left in public.trainer_students', rosterOrphans[0].n === 0, `${rosterOrphans[0].n} rows`);
+
+        const { rows: codeOrphans } = await pool.query(
+          `select count(*)::int n from public.trainer_enrolment_codes t
+             where not exists (select 1 from auth.users u where u.id = t.trainer_id)`,
+        );
+        check('no orphaned rows left in public.trainer_enrolment_codes', codeOrphans[0].n === 0, `${codeOrphans[0].n} rows`);
+
+        // A credential is retained on account deletion with a null `student_id`,
+        // the same treatment a worker's proofs get, so the predicate here is on the
+        // issuer only. A null student is the anonymised state, not a leak — counting
+        // it as one would flag every deliberately retained record.
+        const { rows: orphanCredentials } = await pool.query(
+          `select count(*)::int n from public.micro_credentials t
+             where not exists (select 1 from auth.users u where u.id = t.trainer_id)`,
+        );
+        check(
+          'no orphaned rows left in public.micro_credentials',
+          orphanCredentials[0].n === 0,
+          `${orphanCredentials[0].n} rows`,
+        );
+      }
       const { rows: orphanVerifications } = await pool.query(
         `select count(*)::int n from public.verifications v
            where not exists (select 1 from public.work_proof_logs t where t.id = v.work_proof_id)`,
@@ -674,14 +749,43 @@ async function main() {
         `${stillQueued} queued object(s) still in the bucket`,
       );
       if (staleQueueRows > 0) {
-        // Reported, never repaired here. A stale row is a genuine operational
-        // finding Ã¢â‚¬â€ its bytes are gone but the record that they existed is not Ã¢â‚¬â€
-        // and clearing it is a database write against someone else's leftover, so
-        // it needs an operator who has looked, not a test suite.
+        // Reported, never repaired here, and deliberately not scored.
+        //
+        // A stale row is not a leak: `orphaned_proof_media` is a *work queue* written by
+        // the account-deletion trigger when SQL cannot reach storage, and a row whose
+        // object is gone means the removal already happened and the queue entry is a
+        // completed record. Verified against the live database: 9 rows, 0 objects
+        // present in the bucket, every uploader account deleted. The bytes are gone;
+        // only the paperwork remains.
+        //
+        // Deleting the rows would be a database write against a record of somebody
+        // else's account deletion, and it would destroy the only evidence that those
+        // deletions completed — which is the one thing this table is for. It needs an
+        // operator who has looked, not a test suite.
+        //
+        // The count is broken out so the note says which of the two situations it is:
+        // "rows drained" is complete, "rows pending" is a real queue.
+        const { rows: queueSummary } = await pool.query(
+          `select count(*)::int as total,
+                  count(*) filter (
+                    where not exists (
+                      select 1 from auth.users u where u.id::text = split_part(m.path, '/', 1)
+                    )
+                  )::int as uploader_gone
+             from public.orphaned_proof_media m`,
+        );
+        const total = queueSummary[0]?.total ?? 0;
+        const uploaderGone = queueSummary[0]?.uploader_gone ?? 0;
         console.log(
           `  NOTE  ${staleQueueRows} removal-queue row(s) refer to objects already deleted.`,
         );
-        console.log('        These are harmless to scoring but should be drained deliberately.');
+        console.log(
+          `        Queue: ${total} row(s) total, ${staleQueueRows} already drained, ${total - staleQueueRows} still pending.`,
+        );
+        console.log(
+          `        ${uploaderGone}/${total} belong to accounts that no longer exist — the bytes are gone and the row is a completed record.`,
+        );
+        console.log('        Harmless to scoring. Draining them is an operator decision, not a test action.');
       }
 
       // Only this suite's own media may be gone. A blanket "the bucket is empty"
@@ -758,6 +862,77 @@ async function main() {
 
     if (!existsSync(join(ROOT, 'apps', 'api', 'dist', 'index.js'))) {
       throw new Error('apps/api/dist/index.js is missing. Run `npm run build` first.');
+    }
+
+    // The training provider module's tables must exist before the suite drives it.
+    //
+    // Checked here, in pre-flight, rather than inferred from the section's own
+    // results. Without it a run against a database where migration 0011 has not been
+    // applied produces a wall of confusing 500s from the module's endpoints, and —
+    // worse — the RLS assertions for those tables would pass, because a relation
+    // that does not exist also returns an error and "the browser key got an error"
+    // is indistinguishable from "the policy worked". A missing table has to read as
+    // a missing table.
+    for (const table of ['trainer_students', 'trainer_enrolment_codes', 'micro_credentials']) {
+      const { rows: found } = await pool.query(`select to_regclass('public.${table}')::text as t`);
+      check(
+        `the training provider tables are present (public.${table})`,
+        Boolean(found[0]?.t),
+        found[0]?.t ?? 'absent — apply migration 0011_trainer_module',
+      );
+    }
+    {
+      // Schema-scoped, which the first version of this check was not.
+      //
+      // `pg_type` is cluster-wide, so an unscoped `typname` match is satisfied by a type
+      // of the same name in *any* schema. That made the check weaker than it looked
+      // rather than wrong: it reported the enum missing when a table genuinely existed
+      // only if something else had shadowed the name, and it could not distinguish
+      // "the type is absent" from "the type is somewhere unexpected". Scoping to
+      // `public` — the schema the migration creates it in, and the one every other
+      // check in this suite already uses via `to_regclass('public.…')` — makes the
+      // answer mean what it says.
+      const { rows: statusType } = await pool.query(
+        `select exists (
+            select 1
+              from pg_type t
+              join pg_namespace n on n.oid = t.typnamespace
+             where t.typname = 'micro_credential_status'
+               and n.nspname = 'public'
+         ) as ok`,
+      );
+      check(
+        'the micro_credential_status enum is present in public',
+        statusType[0]?.ok === true,
+        statusType[0]?.ok === true ? 'present in public' : 'absent - apply migration 0011_trainer_module',
+      );
+
+      // The enum having the right *values* is a separate question from its existing.
+      // A migration that created the type with a `verified` or `issued` value would pass
+      // the check above and break the design, so the values are asserted here.
+      const { rows: statusValues } = await pool.query(
+        `select array_agg(e.enumlabel order by e.enumsortorder)::text[] as values
+           from pg_type t
+           join pg_namespace n on n.oid = t.typnamespace
+           join pg_enum e on e.enumtypid = t.oid
+          where t.typname = 'micro_credential_status'
+            and n.nspname = 'public'
+          group by t.oid`,
+      );
+      const values = (statusValues[0]?.values ?? []).sort();
+      check(
+        'the enum carries exactly awaiting_student, accepted and declined',
+        values.join(',') === 'accepted,awaiting_student,declined',
+        values.join(',') || 'no values',
+      );
+      // The two values that would break the module's central guarantee. A credential
+      // that could be `verified` by an institute, or `issued` without the student,
+      // would undo the dual-backing design at the storage layer.
+      check(
+        'the enum has no "verified" or "issued" value',
+        !values.includes('verified') && !values.includes('issued'),
+        values.join(','),
+      );
     }
 
     section('STORAGE BUCKET');
@@ -2862,6 +3037,492 @@ async function main() {
         }
       }
 
+      // ---------------------------------------------------------------------
+      // Phase 4b. The training provider module, driven against the live API.
+      //
+      // Two institutes and one student, because the two questions this section has
+      // to answer are "does the flow work" and "can one institute see or act on
+      // another's". A single institute would pass the first and silently fail the
+      // second, which is the failure that matters most here.
+      section('TRAINING PROVIDER MODULE');
+
+      const trainer = await mintAccount(`smoke.${stamp}.trainer@tetherproof.dev`, 'training_provider', 'Smoke Test Institute');
+      const rivalTrainer = await mintAccount(`smoke.${stamp}.rival-trainer@tetherproof.dev`, 'training_provider', 'Smoke Rival Institute');
+      const studentWorker = await mintAccount(`smoke.${stamp}.student@tetherproof.dev`, 'worker', 'Smoke Test Student');
+
+      check('a provisioned training provider account can be used', Boolean(trainer.token), trainer.error ?? 'no token');
+      check('a second training provider account can be used', Boolean(rivalTrainer.token), rivalTrainer.error ?? 'no token');
+      check('a student worker account can be used', Boolean(studentWorker.token), studentWorker.error ?? 'no token');
+
+      // Role gates. Asserted at the mount, so a wrong role is a 403 on every route
+      // in the group rather than a 403 on whichever handler happened to check.
+      if (trainer.token) {
+        const anonOverview = await api('GET', '/trainers/overview');
+        check('the trainer dashboard refuses an unauthenticated caller', anonOverview.status === 401, `status ${anonOverview.status}`);
+
+        if (employer.token) {
+          const asEmployer = await api('GET', '/trainers/overview', { token: employer.token });
+          check('an employer cannot reach training provider tools', asEmployer.status === 403, `status ${asEmployer.status}`);
+        }
+        if (userId && token) {
+          const asWorker = await api('GET', '/trainers/overview', { token });
+          check('a worker cannot reach training provider tools', asWorker.status === 403, `status ${asWorker.status}`);
+        }
+      }
+      if (employer.token) {
+        const employerRoster = await api('GET', '/trainers/roster', { token: employer.token });
+        check('an employer cannot read any roster', employerRoster.status === 403, `status ${employerRoster.status}`);
+      }
+      if (studentWorker.token) {
+        const studentRoster = await api('GET', '/trainers/roster', { token: studentWorker.token });
+        check('a student cannot read an institute roster', studentRoster.status === 403, `status ${studentRoster.status}`);
+
+        const studentIssuing = await api('POST', '/trainers/credentials', {
+          token: studentWorker.token,
+          body: { enrolmentId: '00000000-0000-0000-0000-000000000000', skillTag: 'Welding', milestoneTitle: 'Forge practical' },
+        });
+        check('a student cannot issue a milestone', studentIssuing.status === 403, `status ${studentIssuing.status}`);
+      }
+
+      // Enrolment. A code is issued, shown once, and is not readable again.
+      let enrolmentCode = null;
+      if (trainer.token) {
+        const emptyRoster = await api('GET', '/trainers/roster', { token: trainer.token });
+        check('a new institute starts with an empty roster', emptyRoster.status === 200 && emptyRoster.json?.students?.length === 0, `status ${emptyRoster.status} ${emptyRoster.json?.students?.length} students`);
+        check('a new institute has no active enrolment code', emptyRoster.json?.hasActiveCode === false, `hasActiveCode ${emptyRoster.json?.hasActiveCode}`);
+
+        const codeResponse = await api('POST', '/trainers/roster/code', { token: trainer.token });
+        check('an enrolment code can be created', codeResponse.status === 201, `status ${codeResponse.status}`);
+        enrolmentCode = codeResponse.json?.enrolmentCode ?? null;
+        check('the enrolment code is returned once, in a copyable form', typeof enrolmentCode === 'string' && /^[A-Z2-9]{12}$/.test(enrolmentCode), String(enrolmentCode));
+      }
+
+      // The raw code exists only in the creation response. A read of the roster
+      // exposes no code field at all, which is the structural half of the guarantee
+      // — the digest is stored, so there is nothing to read back.
+      if (trainer.token) {
+        const afterCode = await api('GET', '/trainers/roster', { token: trainer.token });
+        check('the roster reports the code exists but never returns it', afterCode.json?.hasActiveCode === true && afterCode.json?.enrolmentCode === undefined, `hasActiveCode ${afterCode.json?.hasActiveCode}, code field ${String(afterCode.json?.enrolmentCode)}`);
+      }
+
+      if (studentWorker.token) {
+        const badCode = await api('POST', '/workers/enrolment', { token: studentWorker.token, body: { code: 'ZZZZZZZZZZZZ' } });
+        check('an unknown enrolment code is refused', badCode.status === 400, `status ${badCode.status}`);
+
+        const emptyCode = await api('POST', '/workers/enrolment', { token: studentWorker.token, body: { code: '' } });
+        check('an empty enrolment code is refused', emptyCode.status === 400, `status ${emptyCode.status}`);
+
+        if (enrolmentCode) {
+          const redeemed = await api('POST', '/workers/enrolment', { token: studentWorker.token, body: { code: enrolmentCode } });
+          check('a student can redeem an enrolment code', redeemed.status === 200 && redeemed.json?.enrolled === true, `status ${redeemed.status}`);
+
+          // Redeeming twice must not create a second roster entry. The unique index
+          // is what makes this true, and the assertion is on the count rather than
+          // on the status, because a second row would be invisible to the caller.
+          const twice = await api('POST', '/workers/enrolment', { token: studentWorker.token, body: { code: enrolmentCode } });
+          check('redeeming the same code twice is idempotent', twice.status === 200, `status ${twice.status}`);
+        }
+      }
+
+      let enrolmentId = null;
+      if (trainer.token) {
+        const roster = await api('GET', '/trainers/roster', { token: trainer.token });
+        check('the redeemed student appears on the roster', roster.json?.students?.length === 1, `${roster.json?.students?.length} students`);
+        enrolmentId = roster.json?.students?.[0]?.enrolmentId ?? null;
+
+        // The roster carries a name and nothing else. No email, phone, or location
+        // may appear, in any field, under any name.
+        const rosterBlob = JSON.stringify(roster.json);
+        check('the roster exposes no email address', !rosterBlob.includes('@'), 'roster payload contained an address');
+        check('the roster exposes no location', !/"(locationGps|location_gps|coordinates|latitude|longitude)"/i.test(rosterBlob), 'roster payload contained a location');
+      }
+
+      // Cross-institute isolation. The rival institute shares no relationship with
+      // this student, so every route must behave as though the enrolment does not
+      // exist — and must say so with a 404 rather than a 403, because a 403 would
+      // confirm that somebody else's enrolment id is real.
+      if (rivalTrainer.token && enrolmentId) {
+        const rivalRoster = await api('GET', '/trainers/roster', { token: rivalTrainer.token });
+        check("a rival institute does not see another institute's roster", rivalRoster.json?.students?.length === 0, `${rivalRoster.json?.students?.length} students`);
+
+        const rivalIssue = await api('POST', '/trainers/credentials', {
+          token: rivalTrainer.token,
+          body: { enrolmentId, skillTag: 'Welding', milestoneTitle: 'Rival practical' },
+        });
+        check("a rival institute cannot issue against another institute's enrolment", rivalIssue.status === 404, `status ${rivalIssue.status}`);
+
+        const rivalRemove = await api('DELETE', `/trainers/roster/${enrolmentId}`, { token: rivalTrainer.token });
+        check("a rival institute cannot remove another institute's student", rivalRemove.status === 404, `status ${rivalRemove.status}`);
+
+        const rivalList = await api('GET', '/trainers/credentials', { token: rivalTrainer.token });
+        check("a rival institute sees none of another institute's credentials", rivalList.json?.credentials?.length === 0, `${rivalList.json?.credentials?.length} credentials`);
+      }
+
+      // The milestone issuer. Validation first, then the happy path.
+      if (trainer.token && enrolmentId) {
+        const unknownStudent = await api('POST', '/trainers/credentials', {
+          token: trainer.token,
+          body: { enrolmentId: '00000000-0000-0000-0000-000000000000', skillTag: 'Welding', milestoneTitle: 'Nowhere practical' },
+        });
+        check('a milestone cannot be issued to somebody not on the roster', unknownStudent.status === 404, `status ${unknownStudent.status}`);
+
+        const badEnrolment = await api('POST', '/trainers/credentials', {
+          token: trainer.token,
+          body: { enrolmentId: 'not-a-uuid', skillTag: 'Welding', milestoneTitle: 'Bad practical' },
+        });
+        check('a malformed enrolment id is refused', badEnrolment.status === 400, `status ${badEnrolment.status}`);
+
+        const noSkill = await api('POST', '/trainers/credentials', {
+          token: trainer.token,
+          body: { enrolmentId, milestoneTitle: 'No skill practical' },
+        });
+        check('a milestone with no skill is refused', noSkill.status === 400, `status ${noSkill.status}`);
+
+        const noTitle = await api('POST', '/trainers/credentials', {
+          token: trainer.token,
+          body: { enrolmentId, skillTag: 'Welding' },
+        });
+        check('a milestone with no practical name is refused', noTitle.status === 400, `status ${noTitle.status}`);
+
+        const badLevel = await api('POST', '/trainers/credentials', {
+          token: trainer.token,
+          body: { enrolmentId, skillTag: 'Welding', milestoneTitle: 'Level practical', skillLevel: 9 },
+        });
+        check('a skill level outside 1 to 3 is refused', badLevel.status === 400, `status ${badLevel.status}`);
+      }
+
+      let credentialId = null;
+      if (trainer.token && enrolmentId) {
+        const issued = await api('POST', '/trainers/credentials', {
+          token: trainer.token,
+          body: { enrolmentId, skillTag: 'Forge Welding', milestoneTitle: 'Forge welding practical 3', skillLevel: 2, note: 'Passed the practical.' },
+        });
+        check('a milestone can be signed off for a roster student', issued.status === 201, `status ${issued.status}`);
+        credentialId = issued.json?.id ?? null;
+
+        // The whole design in one assertion: signing off produces a credential
+        // *awaiting the student*. If this ever read anything else, an institute
+        // could attach an endorsement to a student's record without them.
+        check('a signed-off milestone is awaiting the student, not already a credential', issued.json?.status === 'awaiting_student', `status ${String(issued.json?.status)}`);
+        check('a signed-off milestone is never reported as answered', issued.json?.answeredAt === null, String(issued.json?.answeredAt));
+      }
+
+      // The student is told, which is the only route by which they can learn a
+      // credential is waiting. Without it the credential would sit unanswered for
+      // ever and never count for anything.
+      if (studentWorker.token) {
+        const waiting = await api('GET', '/workers/credentials', { token: studentWorker.token });
+        check('the student can see a milestone waiting for them', waiting.json?.awaiting?.length === 1, `${waiting.json?.awaiting?.length} awaiting`);
+
+        const holder = waiting.json?.awaiting?.[0] ?? {};
+        check('the student is shown the practical and the skill', Boolean(holder.milestoneTitle && holder.skillTag), `${String(holder.milestoneTitle)} / ${String(holder.skillTag)}`);
+
+        // Attribution is the point: an endorsement with nobody's name on it is the kind
+        // of claim this platform exists to make attributable. These two are the checks
+        // that failed against the migrated database, because the API read
+        // `profiles.organization_name` and `profiles.full_name` directly and this
+        // fixture is provisioned through the service role, which never creates a
+        // `profiles` row. The API now resolves both through a fallback chain ending in
+        // the issuing account's own name; these assert the chain is still in place.
+        check(
+          'the credential names the institute that issued it',
+          typeof holder.organizationName === 'string' && holder.organizationName.trim().length > 0,
+          `organizationName ${JSON.stringify(holder.organizationName)}`,
+        );
+        check(
+          'the credential names the instructor who signed it off',
+          typeof holder.instructorName === 'string' && holder.instructorName.trim().length > 0,
+          `instructorName ${JSON.stringify(holder.instructorName)}`,
+        );
+
+        // The name must come from the issuing account, not be assembled from the
+        // credential. A plausible-looking institution derived from the skill or the
+        // milestone would be indistinguishable from a real one, so this pins that the
+        // value is the account's name.
+        const expectedIssuerName = 'Smoke Test Institute';
+        check(
+          'the issuer name is the issuing account name, not something derived from the credential',
+          holder.organizationName === expectedIssuerName,
+          `${JSON.stringify(holder.organizationName)} vs account ${JSON.stringify(expectedIssuerName)}`,
+        );
+
+        // And it is real stored data, not a string the response invented: the account
+        // exists and its name is what came back.
+        if (trainer.id) {
+          const { rows: issuerRow } = await pool.query(
+            `select u.role, a.raw_user_meta_data ->> 'full_name' as meta_name
+               from public.users u join auth.users a on a.id = u.id
+              where u.id = $1`,
+            [trainer.id],
+          );
+          check(
+            'the credential names an account that really exists with the training provider role',
+            issuerRow[0]?.role === 'training_provider',
+            `role ${String(issuerRow[0]?.role)}`,
+          );
+        }
+
+        // Attribution must never leak somebody else's identity. The issuer is named;
+        // no other account's name may appear anywhere in the payload.
+        const studentBlob2 = JSON.stringify(waiting.json);
+        check(
+          'the credential names no account other than the issuer',
+          !studentBlob2.includes(rivalTrainer.id) && !studentBlob2.includes(trainer.id),
+          'a non-issuer id appeared in the payload',
+        );
+
+        const studentBlob = JSON.stringify(waiting.json);
+        check("the student's credential view carries no email address", !studentBlob.includes('@'), 'payload contained an address');
+      }
+
+      // The second signature. Until the student answers, nothing is held.
+      if (studentWorker.token) {
+        const badResponse = await api('POST', `/workers/credentials/${credentialId ?? '00000000-0000-0000-0000-000000000000'}`, { token: studentWorker.token, body: { response: 'verified' } });
+        check('an answer other than accept or decline is refused', badResponse.status === 400, `status ${badResponse.status}`);
+      }
+
+      // A credential belonging to somebody else is a 404, not a 403: a 403 would
+      // confirm the record exists.
+      if (employer.token && credentialId) {
+        const asEmployerAnswer = await api('POST', `/workers/credentials/${credentialId}`, { token: employer.token, body: { response: 'accepted' } });
+        check("an employer cannot answer a worker's credential", asEmployerAnswer.status === 403, `status ${asEmployerAnswer.status}`);
+      }
+
+      if (rivalTrainer.token && credentialId) {
+        const rivalAnswer = await api('POST', `/workers/credentials/${credentialId}`, { token: rivalTrainer.token, body: { response: 'accepted' } });
+        check("a rival institute cannot answer another institute's credential", rivalAnswer.status === 403, `status ${rivalAnswer.status}`);
+      }
+
+      // Accepting must not touch the fraud-scored verified total. This is the single
+      // most important assertion in the section: an institutional endorsement is not
+      // work a customer confirmed, and a bootcamp that issued to a hundred students
+      // must not make a hundred people look client-verified.
+      //
+      // Counted directly in the database rather than through an endpoint, because
+      // the claim being tested is about rows that must never have been written. A
+      // summary endpoint that quietly excluded them would pass while the rows
+      // existed, and the exclusion is exactly the thing that needs checking.
+      let studentProofRowsBefore = 0;
+      let studentVerifiedProofsBefore = 0;
+      if (studentWorker.token) {
+        const { rows: proofRowsBefore } = await pool.query(
+          `select count(*)::int n from public.work_proof_logs where worker_id = $1`,
+          [studentWorker.id ?? '00000000-0000-0000-0000-000000000000'],
+        );
+        studentProofRowsBefore = proofRowsBefore[0].n;
+
+        // The client-verified total for this student, from the same aggregation the
+        // employer search uses. It is zero before and after accepting, which is the
+        // property that stops a credential reading as verified work experience.
+        const { rows: verifiedBeforeRows } = await pool.query(
+          `select count(distinct p.id)::int n
+             from public.work_proof_logs p
+             left join public.verifications v
+               on v.work_proof_id = p.id and v.response = 'confirmed'
+            where p.worker_id = $1
+              and exists (select 1 from public.verifications v2
+                           where v2.work_proof_id = p.id and v2.response = 'confirmed')`,
+          [studentWorker.id ?? '00000000-0000-0000-0000-000000000000'],
+        );
+        studentVerifiedProofsBefore = verifiedBeforeRows[0].n;
+      }
+
+      if (studentWorker.token && credentialId) {
+        const accepted = await api('POST', `/workers/credentials/${credentialId}`, { token: studentWorker.token, body: { response: 'accepted' } });
+        check('the student can accept a credential issued to them', accepted.status === 204, `status ${accepted.status}`);
+
+        const stored = (
+          await pool.query(`select status, answered_at from public.micro_credentials where id = $1`, [credentialId])
+        ).rows[0];
+        check('an accepted credential is stored as accepted, with a timestamp', stored?.status === 'accepted' && stored?.answered_at !== null, `status ${String(stored?.status)}`);
+
+        // One answer, and it is final. A second tap must not silently rewrite a
+        // decision the institute has already acted on.
+        const second = await api('POST', `/workers/credentials/${credentialId}`, { token: studentWorker.token, body: { response: 'declined' } });
+        check('a second answer to the same credential is refused', second.status === 409, `status ${second.status}`);
+
+        const afterSecond = (
+          await pool.query(`select status from public.micro_credentials where id = $1`, [credentialId])
+        ).rows[0];
+        check('the first answer survives a refused second one', afterSecond?.status === 'accepted', `status ${String(afterSecond?.status)}`);
+      }
+
+      if (studentWorker.token) {
+        const { rows: proofRowsAfter } = await pool.query(
+          `select count(*)::int n from public.work_proof_logs where worker_id = $1`,
+          [studentWorker.id ?? '00000000-0000-0000-0000-000000000000'],
+        );
+        check('accepting a credential creates no work proof', proofRowsAfter[0].n === studentProofRowsBefore, `${studentProofRowsBefore} then ${proofRowsAfter[0].n}`);
+
+        const { rows: verifRowsAfter } = await pool.query(
+          `select count(*)::int n from public.verifications v
+             join public.work_proof_logs p on p.id = v.work_proof_id
+            where p.worker_id = $1`,
+          [studentWorker.id ?? '00000000-0000-0000-0000-000000000000'],
+        );
+        check('accepting a credential creates no client verification', verifRowsAfter[0].n === 0, `${verifRowsAfter[0].n} verifications`);
+
+        // The positive form of the same claim, read from the rows employer search
+        // ranks on. A credential must move a student's client-verified total by
+        // exactly zero, or a bootcamp that issued to a hundred graduates would make
+        // all of them look client-verified on the one number employers filter by.
+        const { rows: verifiedAfterRows } = await pool.query(
+          `select count(distinct p.id)::int n
+             from public.work_proof_logs p
+            where p.worker_id = $1
+              and exists (select 1 from public.verifications v2
+                           where v2.work_proof_id = p.id and v2.response = 'confirmed')`,
+          [studentWorker.id ?? '00000000-0000-0000-0000-000000000000'],
+        );
+        check(
+          'an accepted credential does not change the client-verified proof total',
+          verifiedAfterRows[0].n === studentVerifiedProofsBefore,
+          `${studentVerifiedProofsBefore} before, ${verifiedAfterRows[0].n} after`,
+        );
+
+        const held = await api('GET', '/workers/credentials', { token: studentWorker.token });
+        check('an accepted credential moves to the held list', held.json?.accepted?.length === 1, `${held.json?.accepted?.length} accepted`);
+        check('an accepted credential leaves the awaiting list', held.json?.awaiting?.length === 0, `${held.json?.awaiting?.length} awaiting`);
+      }
+
+      // Declining is a first-class outcome, and a second student proves the list
+      // distinguishes the two.
+      let secondCredentialId = null;
+      if (trainer.token && enrolmentId) {
+        const secondIssued = await api('POST', '/trainers/credentials', {
+          token: trainer.token,
+          body: { enrolmentId, skillTag: 'Forge Welding', milestoneTitle: 'Forge welding refresher' },
+        });
+        secondCredentialId = secondIssued.json?.id ?? null;
+      }
+      if (studentWorker.token && secondCredentialId) {
+        const declined = await api('POST', `/workers/credentials/${secondCredentialId}`, { token: studentWorker.token, body: { response: 'declined' } });
+        check('the student can decline a credential', declined.status === 204, `status ${declined.status}`);
+
+        const afterDecline = await api('GET', '/workers/credentials', { token: studentWorker.token });
+        check('a declined credential is counted as declined, not accepted', afterDecline.json?.declinedCount === 1 && afterDecline.json?.accepted?.length === 1, `declined ${afterDecline.json?.declinedCount}, accepted ${afterDecline.json?.accepted?.length}`);
+
+        const keptRow = (
+          await pool.query(`select status from public.micro_credentials where id = $1`, [secondCredentialId])
+        ).rows[0];
+        check('a declined credential is kept rather than deleted', keptRow?.status === 'declined', `status ${String(keptRow?.status)}`);
+      }
+
+      // The institute sees the answers, so it knows what it actually certified.
+      if (trainer.token) {
+        const list = await api('GET', '/trainers/credentials', { token: trainer.token });
+        check('the institute sees the credentials it issued', list.json?.credentials?.length === 2, `${list.json?.credentials?.length} credentials`);
+        check('the institute sees one accepted and one declined', list.json?.acceptedCount === 1, `accepted ${list.json?.acceptedCount}`);
+        check('the institute sees the declined one as not awaiting', list.json?.awaitingCount === 0, `awaiting ${list.json?.awaitingCount}`);
+
+        const listBlob = JSON.stringify(list.json);
+        check("the institute's credential list carries no email address", !listBlob.includes('@'), 'payload contained an address');
+      }
+
+      // Repeated credentials for one skill are allowed — two intakes of the same
+      // syllabus are two credentials, and collapsing them would destroy a record of
+      // which was which.
+      if (trainer.token && enrolmentId) {
+        const { rows: dupCheck } = await pool.query(
+          `select count(*)::int n from public.micro_credentials
+            where trainer_id = $1 and student_id = $2 and skill_tag = $3`,
+          [trainer.id, studentWorker.id, 'Forge Welding'],
+        );
+        check('a student may hold two credentials for the same skill', dupCheck[0].n === 2, `${dupCheck[0].n} rows`);
+      }
+
+      // Removing a student keeps the credentials they already hold: leaving a
+      // course does not un-take a practical somebody sat, and deleting the
+      // endorsement would leave the institute with no record of what it certified.
+      if (trainer.token && enrolmentId) {
+        const removed = await api('DELETE', `/trainers/roster/${enrolmentId}`, { token: trainer.token });
+        check('a student can be removed from the roster', removed.status === 204, `status ${removed.status}`);
+
+        const { rows: keptCreds } = await pool.query(
+          `select count(*)::int n from public.micro_credentials
+            where trainer_id = $1 and student_id = $2`,
+          [trainer.id, studentWorker.id],
+        );
+        check('credentials survive the student leaving the roster', keptCreds[0].n === 2, `${keptCreds[0].n} rows`);
+
+        const goneAgain = await api('DELETE', `/trainers/roster/${enrolmentId}`, { token: trainer.token });
+        check('removing a student twice is refused rather than repeated', goneAgain.status === 404, `status ${goneAgain.status}`);
+
+        // The stored code is rotated away, and the old one stops working — which is
+        // only possible because enrolment is a row rather than a property of the code.
+        if (enrolmentCode) {
+          const reused = await api('POST', '/workers/enrolment', { token: studentWorker.token, body: { code: enrolmentCode } });
+          check('an enrolment code is scoped to the roster entry it created', reused.status === 200, `status ${reused.status}`);
+
+          const { rows: stillOne } = await pool.query(
+            `select count(*)::int n from public.trainer_students where trainer_id = $1 and student_id = $2`,
+            [trainer.id, studentWorker.id],
+          );
+          check('re-enrolling does not duplicate the roster entry', stillOne[0].n === 1, `${stillOne[0].n} rows`);
+        }
+      }
+
+      // Market demand. Derived entirely from rows the platform already holds.
+      if (trainer.token) {
+        const demand = await api('GET', '/trainers/demand', { token: trainer.token });
+        check('the demand dashboard is readable', demand.status === 200, `status ${demand.status}`);
+        check('the demand dashboard returns a skill list', Array.isArray(demand.json?.skills), typeof demand.json?.skills);
+        check('the demand dashboard reports network totals', typeof demand.json?.totals?.activeSearches === 'number', JSON.stringify(demand.json?.totals));
+        check('the demand dashboard states when it was read', typeof demand.json?.generatedAt === 'string', String(demand.json?.generatedAt));
+
+        // The search this suite created earlier must show up, since it is a real
+        // running spec. A dashboard that cannot see the network's own demand is
+        // not a dashboard.
+        const searched = (demand.json?.skills ?? []).find((row) => /solar panel/i.test(row.skillTag ?? ''));
+        check('an employer search in this run appears as demand', Boolean(searched), JSON.stringify((demand.json?.skills ?? []).slice(0, 3).map((r) => r.skillTag)));
+        check('demand is matched case-insensitively against worker skills', searched ? searched.activeSearches >= 1 : false, `activeSearches ${String(searched?.activeSearches)}`);
+
+        // No gap may be negative. An oversupplied skill reading as a shortage would
+        // invert the one recommendation this page exists to make.
+        const negatives = (demand.json?.skills ?? []).filter((row) => (row.gapScore ?? -1) < 0);
+        check('no skill is reported as having a negative gap', negatives.length === 0, JSON.stringify(negatives.map((r) => r.skillTag)));
+
+        // Micro-credentials must not inflate supply, or an institute's own graduates
+        // would inflate the shortage figure it uses to justify its curriculum.
+        const supplyRow = (demand.json?.skills ?? []).find((row) => /forge welding/i.test(row.skillTag ?? ''));
+        check('a credential-only skill does not appear as worker supply', supplyRow === undefined, `availableWorkers ${String(supplyRow?.availableWorkers)}`);
+
+        const demandBlob = JSON.stringify(demand.json);
+        check("the demand dashboard carries no worker's name", !/"fullName"|"studentName"|"displayName"/.test(demandBlob), 'demand payload contained a name');
+        check("the demand dashboard carries no worker's address", !demandBlob.includes('@'), 'demand payload contained an address');
+        check("the demand dashboard carries no worker's location", !/"(locationGps|latitude|longitude|coordinates)"/i.test(demandBlob), 'demand payload contained a location');
+
+        const asEmployerDemand = employer.token
+          ? await api('GET', '/trainers/demand', { token: employer.token })
+          : { status: 0 };
+        check('the demand dashboard is not open to other roles', asEmployerDemand.status === 403, `status ${asEmployerDemand.status}`);
+      }
+
+      if (trainer.token) {
+        const overview = await api('GET', '/trainers/overview', { token: trainer.token });
+        check('the institute dashboard is readable', overview.status === 200, `status ${overview.status}`);
+        check('the institute dashboard counts its students', overview.json?.studentCount === 1, `studentCount ${String(overview.json?.studentCount)}`);
+        check('the institute dashboard separates awaiting from accepted', typeof overview.json?.awaitingCredentials === 'number' && typeof overview.json?.acceptedCredentials === 'number', `${String(overview.json?.awaitingCredentials)} / ${String(overview.json?.acceptedCredentials)}`);
+      }
+
+      // The student's own view is the only place a credential is readable, and it is
+      // not the same shape as the verified-proof overview, so a client cannot add
+      // them together by accident.
+      if (studentWorker.token) {
+        const anonCreds = await api('GET', '/workers/credentials');
+        check('the credentials list refuses an unauthenticated caller', anonCreds.status === 401, `status ${anonCreds.status}`);
+
+        const workerCreds = await api('GET', '/workers/credentials', { token });
+        check('one student cannot read another student credentials', workerCreds.status === 200, `status ${workerCreds.status}`);
+        if (workerCreds.status === 200) {
+          check("a worker's credential list is empty of another student's records", workerCreds.json?.accepted?.length === 0 && workerCreds.json?.awaiting?.length === 0, `${workerCreds.json?.accepted?.length} accepted, ${workerCreds.json?.awaiting?.length} awaiting`);
+        }
+
+        const unknownCredential = await api('POST', '/workers/credentials/00000000-0000-0000-0000-000000000000', { token: studentWorker.token, body: { response: 'accepted' } });
+        check('answering a credential that does not exist is refused', unknownCredential.status === 404, `status ${unknownCredential.status}`);
+      }
+
+      // ---------------------------------------------------------------------
       // Phase 3's recovery path, end to end. The engine held a record earlier in
       // this suite; this is the journey from there back to a worker's income,
       // which is the part that used not to exist at all.
@@ -3246,11 +3907,31 @@ async function main() {
         'candidate_handles',
         'direct_offers',
         'employer_saved_workers',
+        // Phase 4b. A roster names a real person and a credential names a real
+        // person, so a browser key reaching either would undo the privacy model the
+        // whole module is built on. `trainer_enrolment_codes` is listed even though
+        // it holds only a digest: RLS is enabled and forced with no policy at all
+        // there, and this asserts a service-role-only table really is
+        // service-role-only.
+        'trainer_students',
+        'micro_credentials',
+        'trainer_enrolment_codes',
       ]) {
         const read = await anon.from(table).select('*').limit(1);
+        // The table must EXIST. A missing relation also produces an error, and
+        // treating that as a pass is precisely the defect this suite was previously
+        // caught having: a security assertion that cannot fail. Asserted separately
+        // so a table that was never created reads as a failure rather than as a
+        // successfully enforced policy.
+        const missing = /could not find the table|does not exist/i.test(read.error?.message ?? '');
+        check(
+          `public.${table} exists`,
+          !missing,
+          read.error?.message ?? 'no error',
+        );
         check(
           `browser key cannot read public.${table}`,
-          Boolean(read.error) || (read.data ?? []).length === 0,
+          !missing && (Boolean(read.error) || (read.data ?? []).length === 0),
           read.error?.message ?? 'no rows',
         );
       }
