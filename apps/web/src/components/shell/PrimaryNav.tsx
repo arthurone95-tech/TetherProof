@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Award, Building2, House, LayoutGrid, List, Mail, Search, TrendingUp, User, Users, type LucideIcon } from 'lucide-react';
+import { Award, Building2, House, LayoutGrid, List, Mail, Search, Settings, TrendingUp, User, Users, type LucideIcon } from 'lucide-react';
 import type { NavItem } from '@/lib/navigation';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 
@@ -155,6 +155,14 @@ const NAV_ICONS: Record<NavItem['icon'], LucideIcon> = {
   roster: Users,
   issuer: Award,
   demand: TrendingUp,
+  // The capability dashboard. Shown as a destination of its own because a person who has
+  // finished setting up still comes back here to add their second or third area, and
+  // burying that under the workspace switcher would make it look like a setting.
+  capabilities: LayoutGrid,
+  business: Building2,
+  // The settings tab. What it means follows the open workspace — an employer sees
+  // "Organization", a trainer "Institute details" — so the icon is the neutral one.
+  settings: Settings,
 };
 
 function NavIcon({ name, className }: { name: NavItem['icon']; className: string }) {

@@ -16,10 +16,10 @@ export const notificationsRouter = Router();
 notificationsRouter.get(
   '/',
   authenticate,
-  authorize('worker', 'employer'),
+  authorize('worker', 'employer', 'training_provider', 'trainee'),
   async (req, res, next) => {
     try {
-      res.json(await listNotifications(req.auth!.userId, req.auth!.role));
+      res.json(await listNotifications(req.auth!.userId, req.auth!.capabilities));
     } catch (error) {
       next(error);
     }
@@ -29,7 +29,7 @@ notificationsRouter.get(
 notificationsRouter.post(
   '/read',
   authenticate,
-  authorize('worker', 'employer'),
+  authorize('worker', 'employer', 'training_provider', 'trainee'),
   async (req, res, next) => {
     try {
       res.json(await markNotificationsRead(req.auth!.userId));
@@ -54,7 +54,7 @@ notificationsRouter.post(
 notificationsRouter.post(
   '/:notificationId/read',
   authenticate,
-  authorize('worker', 'employer'),
+  authorize('worker', 'employer', 'training_provider', 'trainee'),
   async (req, res, next) => {
     try {
       const notificationId = z.string().uuid().safeParse(req.params.notificationId);

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { passwordProblems, SELF_REGISTER_ROLES } from '@tetherproof/shared';
+import { passwordProblems } from '@tetherproof/shared';
 import { gpsSchema } from '../../lib/geo.js';
 import { redirectOriginSchema } from '../../lib/redirect.js';
 
@@ -34,18 +34,21 @@ export const registerSchema = z
       }
     }),
     /**
-     * The role to create the account with.
+     * Accepted for compatibility with clients built before migration `0012`, and
+     * **ignored**.
      *
-     * Constrained to `SELF_REGISTER_ROLES`, which excludes `admin`. Accepting the
-     * full `USER_ROLES` list here let anyone self-declare an administrator: the
-     * endpoint writes the claim server-side, so the account then satisfied
-     * `authorize('admin')` and could call the employer approval endpoint to approve
-     * any employer, defeating the control that stops unsolicited contact with
-     * workers. Rejecting it here is the boundary; provisioning an admin by writing
-     * the claim against the auth account requires a credential that already has
-     * elevated access.
+     * Registration used to ask a new account to pick a role and accept anything in
+     * `SELF_REGISTER_ROLES`. That list is now empty, and asking at all is the first fork
+     * the capability model exists to remove: whichever role was chosen would be the only
+     * one the account could have, and the other three would need a second account. The
+     * field is tolerated rather than rejected so an older deployed client does not break
+     * mid-rollout, but no value of it reaches `auth_metadata`, so it cannot grant anything.
+     *
+     * `admin` was never in that list, and the boundary that excluded it is now stronger
+     * than a list: an administrator is read from the server-controlled claim and is not a
+     * capability, so there is no row anybody could insert. See `doc/13` E-024.
      */
-    role: z.enum(SELF_REGISTER_ROLES).default('worker'),
+    role: z.unknown().optional(),
     fullName: z.string().trim().min(1).max(160).optional(),
     /**
      * Where a confirmation link may return the person who taps it.

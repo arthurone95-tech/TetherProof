@@ -1,5 +1,10 @@
 import { Router } from 'express';
 import { authRouter } from './modules/auth/routes.js';
+import {
+  businessAdminRouter,
+  businessRouter,
+  capabilityRouter,
+} from './modules/capabilities/routes.js';
 import { connectionsRouter } from './modules/connections/routes.js';
 import {
   employerAdminRouter,
@@ -12,7 +17,11 @@ import { notificationsRouter } from './modules/notifications/routes.js';
 import { proofRouter } from './modules/proofs/routes.js';
 import { publicRouter } from './modules/public/routes.js';
 import { adminReviewRouter, reviewRouter } from './modules/review/routes.js';
-import { studentCredentialRouter, trainerRouter } from './modules/trainers/routes.js';
+import {
+  studentCredentialRouter,
+  studentEnrolmentRouter,
+  trainerRouter,
+} from './modules/trainers/routes.js';
 import { verificationRouter } from './modules/verifications/routes.js';
 
 export const apiRouter = Router();
@@ -55,6 +64,11 @@ apiRouter.use('/workers/connections', connectionsRouter);
 // A worker's own micro-credentials and enrolment. Under `/workers` for the same
 // reason as the proofs above it: the authenticated party is a worker, and the
 // scoping is inherited rather than re-decided.
+// Enrolment is mounted FIRST and separately, on uthenticate alone: redeeming a code is
+// what grants 	rainee, so gating it on 	rainee would make it unusable. Order matters —
+// studentEnrolmentRouter must be matched before studentCredentialRouter, which would
+// otherwise swallow /enrolment under a worker/	rainee guard and refuse a new student.
+apiRouter.use('/workers', studentEnrolmentRouter);
 apiRouter.use('/workers', studentCredentialRouter);
 
 // The training provider's workspace: roster, milestone issuer, demand insights.
@@ -66,9 +80,22 @@ apiRouter.use('/trainers', trainerRouter);
 // gated by the worker's own flag plus an unguessable slug.
 apiRouter.use('/public', publicRouter);
 
+// Capabilities and businesses (migration 0012). Reachable by any signed-in
+// account, because activating a capability *is* the thing a person does for
+// themselves — requiring a capability to reach the page that grants capabilities
+// would be a catch-22. The rules about which are self-service live in the
+// service, so they hold however these routes are reached.
+apiRouter.use('/auth/capabilities', capabilityRouter);
+apiRouter.use('/businesses', businessRouter);
+
 // Admin-only employer approvals. Mounted at the API root under `/admin` to keep
 // the elevated surface on one identifiable prefix.
 apiRouter.use('/admin', employerAdminRouter);
+
+// Admin-only business approvals, on the same prefix. Admin is read from the
+// server-controlled claim rather than granted as a capability, so there is no
+// row anybody could insert to reach it.
+apiRouter.use('/admin', businessAdminRouter);
 
 // The queue for records the trust engine withheld, and the only path to
 // `fraud_blocked` or back to `verified`. Admin-only at the mount, alongside the

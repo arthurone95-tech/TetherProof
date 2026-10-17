@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import type { StudentCredentialsResponse } from '@tetherproof/shared';
 import { apiServer, currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 import { EnrolWithInstitute } from './EnrolWithInstitute';
 import { StudentCredentialList } from './StudentCredentialList';
 
@@ -29,7 +30,14 @@ export const metadata: Metadata = {
 export default async function StudentCredentialsPage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role !== 'worker') redirect(user.role === 'employer' ? '/employer' : '/pending');
+  // `trainee` **or** `worker`. This used to be `worker` alone, on the reasoning that "a
+  // student is a worker whose institute recorded something" — which made it impossible for
+  // somebody who had done no paid work to be a student at all. The API made the same change;
+  // if only one side moved, a student would be able to read their credentials through the
+  // endpoint but be redirected away from the page that shows them.
+  if (!user.capabilities.includes('trainee') && !user.capabilities.includes('worker')) {
+    redirect(homeFor(user));
+  }
 
   const credentials = await apiServer<StudentCredentialsResponse>('/workers/credentials');
 

@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import type { StudentCredentialsResponse, WorkerOverviewResponse } from '@tetherproof/shared';
 import { ProofListItemView } from '@/components/proofs/ProofListItemView';
 import { apiServer, currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 
 export const metadata: Metadata = {
   title: 'Dashboard — TetherProof',
@@ -12,7 +13,7 @@ export const metadata: Metadata = {
 export default async function WorkerDashboardPage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role !== 'worker') redirect(user.role === 'employer' ? '/employer' : '/pending');
+  if (!user.capabilities.includes('worker')) redirect(homeFor(user));
 
   let overview: WorkerOverviewResponse | null = null;
   let awaitingCredentials = 0;

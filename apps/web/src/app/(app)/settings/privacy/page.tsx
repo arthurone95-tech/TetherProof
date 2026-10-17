@@ -26,7 +26,7 @@ export const metadata: Metadata = {
 export default async function PrivacyPage() {
   const profile = await currentProfile();
   if (!profile) redirect('/login');
-  if (profile.role !== 'worker') redirect('/settings');
+  if (!profile.capabilities.includes('worker')) redirect('/settings');
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">

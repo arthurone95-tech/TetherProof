@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 import { getInvitationInbox } from '@/lib/server/shell-data';
 import { Card } from '@/components/ui/Card';
 import { RespondForm } from './RespondForm';
@@ -20,7 +21,7 @@ export const metadata: Metadata = {
 export default async function InvitesPage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role !== 'worker') redirect(user.role === 'employer' ? '/employer' : '/pending');
+  if (!user.capabilities.includes('worker')) redirect(homeFor(user));
 
   const inbox = await getInvitationInbox();
 

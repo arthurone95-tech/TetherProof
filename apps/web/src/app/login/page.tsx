@@ -19,7 +19,7 @@ export default async function LoginPage() {
   const user = await currentProfile();
 
   if (user) {
-    redirect(homeFor(user.role));
+    redirect(homeFor(user));
   }
 
   return <LoginView />;

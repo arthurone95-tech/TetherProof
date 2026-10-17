@@ -4,6 +4,7 @@ import type { EmployerApprovalResponse } from '@tetherproof/shared';
 import { Banner } from '@/components/ui/Banner';
 import { Card } from '@/components/ui/Card';
 import { apiServer, currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 import { OrganizationForm } from './OrganizationForm';
 
 export const metadata: Metadata = {
@@ -28,8 +29,7 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
 export default async function EmployerOrganizationPage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role === 'worker') redirect('/dashboard');
-  if (user.role !== 'employer') redirect('/pending');
+  if (!user.capabilities.includes('employer')) redirect(homeFor(user));
 
   const approval = await apiServer<EmployerApprovalResponse>('/employers/approval');
 

@@ -19,11 +19,13 @@ import {
   employerApprovals,
   employerSpecs,
   profiles,
+  userCapabilities,
   users,
   type DirectOfferRow,
   type EmployerSpecRow,
 } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
+import { hasCapability } from '../capabilities/service.js';
 import {
   CANDIDATE_HANDLE_TTL_HOURS,
   issueCandidateHandle,
@@ -115,18 +117,25 @@ export async function setApprovalStatus(
   decision: ApprovalDecisionInput,
   reviewedBy: string,
 ): Promise<EmployerVerificationStatus> {
-  const target = await db
-    .select({ id: users.id, role: users.role })
+  // Two questions, asked separately and in this order, because they have different
+  // answers and merging them would turn one into the other.
+  //
+  // Does the account exist? 404 if not. Then: does it hold the employer capability? 409 if
+  // not — approving somebody who cannot hire would record a decision that grants nothing
+  // and mislabels the record. The existence check has to come first, or a caller could
+  // not tell "no such person" from "not an employer", and the 409 would confirm an id.
+  const [exists] = await db
+    .select({ id: users.id })
     .from(users)
     .where(eq(users.id, employerId))
     .limit(1);
 
-  const account = target[0];
-  if (!account) {
+  if (!exists) {
     throw new AppError({ code: 'NOT_FOUND', message: 'That employer account was not found.', status: 404 });
   }
-  if (account.role !== 'employer') {
-    // Approving a worker would grant nothing useful and would mislabel the record.
+
+  const holdsEmployer = await hasCapability(employerId, 'employer');
+  if (!holdsEmployer) {
     throw new AppError({
       code: 'CONFLICT',
       message: 'That account is not an employer account.',
@@ -911,9 +920,12 @@ export async function listEmployersForAdmin(): Promise<AdminEmployerListItem[]> 
       registeredAt: users.createdAt,
     })
     .from(users)
+    .innerJoin(
+      userCapabilities,
+      and(eq(userCapabilities.userId, users.id), eq(userCapabilities.capability, 'employer')),
+    )
     .leftJoin(profiles, eq(profiles.userId, users.id))
     .leftJoin(employerApprovals, eq(employerApprovals.employerId, users.id))
-    .where(eq(users.role, 'employer'))
     .orderBy(asc(users.createdAt));
 
   const priority: Record<EmployerVerificationStatus, number> = {

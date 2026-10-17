@@ -13,6 +13,7 @@ import { logger } from '../../config/logger.js';
 import { db } from '../../db/client.js';
 import { orphanedProofMedia, profiles, users } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
+import { isAdministrator, listCapabilities } from '../capabilities/service.js';
 import { confirmationCallbackUrl } from '../../lib/redirect.js';
 import { generatePublicSlug } from '../../lib/slug.js';
 import {
@@ -63,7 +64,14 @@ function maskDestination(value: string): string {
   return `***${trimmed.replace(/\D/g, '').slice(-3)}`;
 }
 
-/** Shapes a Supabase user into the public auth contract. */
+/**
+ * Shapes a Supabase user into the public auth contract.
+ *
+ * Administrator comes from the server-controlled claim, because that is the only place it
+ * is read from and the only way it can ever be true. Capabilities are not read here — a
+ * Supabase user object carries none, and a capability that came from the token would be a
+ * capability the database had not agreed to.
+ */
 function toAuthUser(user: {
   id: string;
   email?: string | null;
@@ -72,7 +80,8 @@ function toAuthUser(user: {
 }): AuthUser {
   return {
     id: user.id,
-    role: readRoleClaim(user.app_metadata?.role),
+    capabilities: [],
+    isAdmin: readRoleClaim(user.app_metadata?.role) === 'admin',
     email: user.email ?? null,
     phone: user.phone ?? null,
   };
@@ -176,16 +185,20 @@ async function confirmVerifiedChannel(userId: string, channel: Channel): Promise
 }
 
 export async function register(input: RegisterInput): Promise<AuthResponse> {
-  const role = input.role;
-
   const { data, error } = await supabaseAdmin.auth.admin.createUser({
     email: input.email ?? undefined,
     phone: input.phoneNumber ?? undefined,
     password: input.password,
     // `user_metadata` is editable by the account holder, so it never carries
-    // authorization decisions. The role claim is written here, server-side.
+    // authorization decisions.
     user_metadata: input.fullName ? { full_name: input.fullName } : {},
-    app_metadata: { role },
+    // No role claim is written any more. Migration `0012` made capabilities a set granted
+    // after signup, and asking a new account to pick one here is the first fork this
+    // design exists to remove: whichever was picked first would be the account's only role
+    // and the rest would need a second account. The `on_auth_user_created` trigger grants a
+    // capability from this claim when one is present, so an administrator provisioning an
+    // account still works exactly as before.
+    app_metadata: {},
     email_confirm: false,
     phone_confirm: false,
   });
@@ -198,9 +211,8 @@ export async function register(input: RegisterInput): Promise<AuthResponse> {
     throw AppError.badRequest('Account could not be created with these details.');
   }
 
-  // The `on_auth_user_created` trigger is the only writer of `public.users`:
-  // it reads the role from `app_metadata` at insert time. Writing the row here
-  // as well would collide on the primary key.
+  // A new account starts with no capabilities at all, and its dashboard offers the four it
+  // could have. `worker` is one activation away, so an account is never stranded.
   await db.insert(profiles).values({
     userId: data.user.id,
     fullName: input.fullName ?? null,
@@ -218,7 +230,16 @@ export async function register(input: RegisterInput): Promise<AuthResponse> {
   };
 
   return {
-    user: { id: data.user.id, role, email: data.user.email ?? null, phone: data.user.phone ?? null },
+    user: {
+      id: data.user.id,
+      // A signup grants nothing. The account exists, and the dashboard offers the four
+      // capabilities it could have. This is the whole reason registration stopped asking
+      // for a role: the first role chosen would have been the only one.
+      capabilities: await listCapabilities(data.user.id),
+      isAdmin: false,
+      email: data.user.email ?? null,
+      phone: data.user.phone ?? null,
+    },
     session: null,
     confirmation,
   };
@@ -538,7 +559,6 @@ export async function getProfile(userId: string): Promise<ProfileResponse> {
   const rows = await db
     .select({
       id: users.id,
-      role: users.role,
       fullName: profiles.fullName,
       locationCity: profiles.locationCity,
       locationGps: profiles.locationGps,
@@ -559,10 +579,21 @@ export async function getProfile(userId: string): Promise<ProfileResponse> {
   if (!row) {
     throw AppError.notFound('Profile not found.');
   }
+
+  // The capability set, and the administrator flag, are read separately from the profile
+  // row. They are different questions about the same account — what it may do, and who it
+  // is — and joining them would mean duplicating one capability into a row per request.
+  const [capabilities, isAdmin] = await Promise.all([
+    listCapabilities(userId),
+    isAdministrator(userId),
+  ]);
+
   // A profile row may not exist for an account provisioned outside registration;
   // the privacy defaults it would carry are shown, not an error.
   return {
     ...row,
+    capabilities,
+    isAdmin,
     discoverable: row.discoverable ?? true,
     showNameOnVerificationLink: row.showNameOnVerificationLink ?? true,
     publicProfile: row.publicProfile ?? false,

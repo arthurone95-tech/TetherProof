@@ -5,9 +5,9 @@ import type {
   InvitationPreference,
   MicroCredentialStatus,
   NotificationKind,
+  UserCapability,
   ProofReviewStatus,
   SkillLevel,
-  UserRole,
   VerificationStatus,
 } from './enums.js';
 
@@ -55,7 +55,22 @@ export interface HealthResponse {
 /** Public shape of the signed-in account. Never carries secrets. */
 export interface AuthUser {
   id: string;
-  role: UserRole;
+  /**
+   * What the account may do, or the single role it was created with.
+   *
+   * A signup response, so a brand-new account carries the empty set — the account is
+   * created with no capability and the person activates what they want afterwards, which
+   * is the whole point of migration `0012`. An account created with one by an
+   * administrator carrying a role claim carries that one.
+   */
+  capabilities: UserCapability[];
+  /**
+   * Whether the account administers the platform.
+   *
+   * Never true for a signup: administrator is read from the server-controlled claim and
+   * cannot be requested. See `doc/13` E-024.
+   */
+  isAdmin: boolean;
   email: string | null;
   phone: string | null;
 }
@@ -375,7 +390,25 @@ export interface AdminProofReviewResponse {
  */
 export interface ProfileResponse {
   id: string;
-  role: UserRole;
+  /**
+   * What this account is authorised to do.
+   *
+   * Replaces the single `role` field in migration `0012`. A person may hold several at
+   * once, so this is a set and the interface has to stop pretending otherwise.
+   *
+   * `admin` is not in this list by design. It is a platform role, it is read from the
+   * server-controlled `app_metadata.role` claim, and it is exposed as `isAdmin` below
+   * rather than as a capability — because a capability is something a person does, and
+   * an administrator is something the platform is.
+   */
+  capabilities: UserCapability[];
+  /**
+   * Whether this account administers the platform.
+   *
+   * Kept separate from `capabilities` so no future code path can treat administrator as
+   * something a person activated, or grant it the way the others are granted.
+   */
+  isAdmin: boolean;
   fullName: string | null;
   /**
    * Always null.
@@ -619,6 +652,83 @@ export interface NotificationsResponse {
   notifications: NotificationItem[];
   unreadCount: number;
   expiring: ProofExpiryNotice[];
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities and businesses (migration 0012)
+// ---------------------------------------------------------------------------
+
+/** One capability and how it is currently held. */
+export interface CapabilityStatus {
+  capability: UserCapability;
+  held: boolean;
+  /**
+   * Why it is held. `legacy` means the account already had this role before
+   * capabilities existed, which is recorded so an access review can tell an
+   * inherited grant from a deliberate one.
+   */
+  grantSource: string | null;
+  grantedAt: string | null;
+  /**
+   * Whether the person may activate it themselves.
+   *
+   * False for `employer`, which follows an approved business and a membership, and for
+   * `trainee`, which follows a valid institutional enrolment. The interface uses this
+   * to decide between "Activate" and "Ask for access", and it is the server's answer
+   * rather than the client's — a page that guessed would be a page that guessed wrong.
+   */
+  selfService: boolean;
+  /** One line saying how to get it, for the capabilities that are not held. */
+  howToActivate: string;
+}
+
+/**
+ * The signed-in account's capabilities, from `GET /auth/capabilities`.
+ *
+ * Every capability is always present, held or not, so the dashboard renders the same
+ * four rows whatever the account happens to have. `activeWorkspace` is what the person
+ * is looking at now, and is always one of the held ones.
+ */
+export interface CapabilitiesResponse {
+  capabilities: CapabilityStatus[];
+  /** The workspace the account opens on, and the default for the switcher. */
+  activeWorkspace: string | null;
+}
+
+/** A business, as its owner or a member sees it. */
+export interface BusinessSummary {
+  id: string;
+  name: string;
+  status: 'pending' | 'approved' | 'rejected';
+  /** The owner's own name. Shown to a member so they know whose business it is. */
+  ownerName: string | null;
+  memberCount: number;
+  /** Whether the viewer may hire through it: approved, and a member. */
+  canHire: boolean;
+  createdAt: string;
+  reviewedAt: string | null;
+  note: string | null;
+}
+
+/** The account's businesses, from `GET /businesses`. */
+export interface BusinessesResponse {
+  businesses: BusinessSummary[];
+}
+
+/** One business in the administrator's approval queue. */
+export interface AdminBusinessListItem {
+  id: string;
+  name: string;
+  ownerName: string | null;
+  ownerId: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  reviewedAt: string | null;
+  note: string | null;
+}
+
+export interface AdminBusinessesResponse {
+  businesses: AdminBusinessListItem[];
 }
 
 // ---------------------------------------------------------------------------

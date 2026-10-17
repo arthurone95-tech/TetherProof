@@ -26,7 +26,7 @@ export default async function InfoLayout({ children }: { children: React.ReactNo
   if (profile) {
     return (
       <div className="flex min-h-screen flex-col">
-        <BackHeader home={homeFor(profile.role)} />
+        <BackHeader home={homeFor(profile)} />
         <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-6">
           <article className="flex flex-col gap-8">{children}</article>
         </main>

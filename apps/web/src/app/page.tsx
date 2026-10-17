@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import type { UserRole } from '@tetherproof/shared';
+import type { UserCapability } from '@tetherproof/shared';
 import { Banner } from '@/components/ui/Banner';
 import { Card } from '@/components/ui/Card';
 import { homeFor } from '@/lib/navigation';
@@ -23,9 +23,30 @@ const modules = [
   },
 ];
 
-/** Where a signed-in member of each role should go. */
-function destinationFor(role: UserRole): string {
-  return homeFor(role);
+/**
+ * The signed-in summary, said in terms of what the person can actually do.
+ *
+ * Capability-based rather than role-based, so a Kojo who is an electrician, a student and
+ * a business owner is told what all three of those can do rather than being described by
+ * whichever one happened to be checked first.
+ */
+function summaryFor(capabilities: readonly UserCapability[]): string {
+  if (capabilities.length === 0) {
+    return 'Choose how you want to use TetherProof and your workspace opens.';
+  }
+  if (capabilities.includes('worker') && capabilities.includes('employer')) {
+    return 'Log the work you have done, and hire the proof you need for your business.';
+  }
+  if (capabilities.includes('worker')) {
+    return 'Log completed jobs, and keep the proof a customer can confirm.';
+  }
+  if (capabilities.includes('employer')) {
+    return 'Search verified proof, save the filters you reuse, and invite the workers you want to talk to.';
+  }
+  if (capabilities.includes('training_provider')) {
+    return 'Manage your students, sign off their practicals, and see what the market is short of.';
+  }
+  return 'Review the milestones your institute has recorded, and decide what to keep.';
 }
 
 /**
@@ -64,20 +85,14 @@ export default async function HomePage({
       {user ? (
         <div className="rounded-2xl border border-brand-100 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-ink-900">
-            Signed in as {user.fullName ?? user.role}
+            Signed in as {user.fullName ?? 'you'}
           </h2>
-          <p className="mt-2 text-sm text-ink-600">
-            {user.role === 'employer'
-              ? 'Search verified proof, save the filters you reuse, and invite the workers you want to talk to.'
-              : user.role === 'worker'
-                ? 'Answer invitations from employers, and keep logging work that builds your proof.'
-                : 'Your account is active. The tools for your role are not built yet.'}
-          </p>
+          <p className="mt-2 text-sm text-ink-600">{summaryFor(user.capabilities)}</p>
           <Link
-            href={destinationFor(user.role)}
+            href={homeFor(user)}
             className="mt-4 inline-flex min-h-12 items-center rounded-xl bg-brand-600 px-6 font-semibold text-white hover:bg-brand-700"
           >
-            Go to your dashboard
+            {user.capabilities.length === 0 ? 'Choose your workspace' : 'Go to your workspace'}
           </Link>
           <Link
             href="/settings/account"

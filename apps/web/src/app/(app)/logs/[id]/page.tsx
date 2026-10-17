@@ -8,6 +8,7 @@ import { SkillLevelBadge, VerificationStatusPill } from '@/components/proofs/Pro
 import { ApiRequestError } from '@/lib/api-error';
 import { prettyCoords } from '@/lib/gps';
 import { apiServer, currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 import { EditLogForm } from './EditLogForm';
 
 export const metadata: Metadata = {
@@ -37,7 +38,7 @@ export default async function LogDetailPage({
 
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role !== 'worker') redirect(user.role === 'employer' ? '/employer' : '/pending');
+  if (!user.capabilities.includes('worker')) redirect(homeFor(user));
 
   let proof: ProofDetailResponse['proof'];
   try {

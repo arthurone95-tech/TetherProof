@@ -11,6 +11,7 @@ import type {
 } from '@tetherproof/shared';
 import { ApiRequestError } from '@/lib/api-error';
 import { apiServer, currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 import { Avatar } from '@/components/ui/Avatar';
 import { Banner } from '@/components/ui/Banner';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
@@ -41,8 +42,7 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
 export default async function EmployerCandidatesPage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role === 'worker') redirect('/dashboard');
-  if (user.role !== 'employer') redirect('/pending');
+  if (!user.capabilities.includes('employer')) redirect(homeFor(user));
 
   const [acceptedResult, sentResult] = await Promise.allSettled([
     apiServer<AcceptedCandidatesResponse>('/employers/candidates'),

@@ -2796,3 +2796,470 @@ Attribution is resolved at read time, so a provider who renames themselves re-la
 credential they have ever issued. Snapshotting the issuer onto the row at signing time is
 the correct fix and needs a migration, which was not authorised. Recorded here rather than
 assumed away.
+---
+
+## E-055: A capability could be self-granted, defeating the business approval entirely
+
+* **Status:** Open — fixed in code, **not verified against a database**
+* **Found:** 2026-10-16, during review of the `0012` capability work, before any live run.
+
+### Description
+`capabilities/service.ts` exported a single `grant(userId, capability, source)` used by every
+caller, and it had no self-service gate. `POST /auth/capabilities` called it with `source: 'self'`,
+so a request naming `employer` inserted an `employer` capability row for the caller and returned
+`201`.
+
+That makes the whole business entity decorative. Employer rights exist because somebody vetted the
+organisation; a self-declared one is the original problem restated. The same held for `trainee`,
+which was supposed to require an institutional enrolment.
+
+### Why the fix is in the service and not the route
+`grant()` is *deliberately* unguarded — enrolment and business approval need to grant a capability
+the person could not grant themselves, and that difference between the two is what an approval
+means. So the gate went into a separate function, `activateSelfService()`, which is the only entry
+point the route uses and which refuses anything not in `SELF_SERVICE`. A gate written only in a
+handler is one forgotten import away from being bypassed by the next route that calls `grant()`
+directly.
+
+### Verification
+Six live assertions added: `employer` and `trainee` are each refused with `403`, the refused
+self-grant leaves the capability set unchanged, and `admin` is still rejected at validation as a
+value that is not a capability at all. **These cannot run until migration `0012` is applied.**
+
+---
+
+## E-056: Business membership could be granted by any signed-in account
+
+* **Status:** Open — fixed in code, **not verified against a database**
+* **Found:** 2026-10-16, same review as E-055.
+
+### Description
+`POST /businesses/:businessId/members` took a business id from the URL and a user id from the body
+and passed both to `addMember()` without checking that the caller owned that business. Any
+signed-in account could therefore name any approved business and any colleague, create the
+membership, and grant that colleague `employer`.
+
+The same function also let an existing *member* add further members. A member who can grow the set
+of people who may hire defeats the review the approval represents.
+
+### Fix
+`addMember()` now takes the caller's id and requires `business.ownerUserId === callerId` —
+owner, not member. It throws `403` rather than `404`, because the caller has already proved they
+are signed in and answering "no such business" to one they do not own would confirm the id exists
+to somebody probing for it. The check is in the service so every caller inherits it.
+
+### Verification
+Two live assertions: an account cannot add itself to somebody else's business, and the refused
+request grants no hiring capability. **They cannot run until migration `0012` is applied.**
+
+---
+
+## E-057: A rejected business would have silently removed a pre-existing employer's access
+
+* **Status:** Open — fixed in code, **not verified against a database**
+* **Found:** 2026-10-16, same review.
+
+### Description
+Migration `0012` promises that nobody loses access they have today. Business approval revokes the
+owner's `employer` capability when a business is rejected, which is right for somebody who
+earned it through a business.
+
+It is wrong for an account that already held `employer` before the migration. That person holds it
+with `grant_source = 'legacy'`, and a rejected business would have taken it away — breaking the
+one promise the backfill makes, for a business being turned down rather than their account being
+cancelled. The original code wrapped the revoke in a `try`/`catch`, which does not help: `revoke()`
+only throws when the capability is absent, so it succeeded and removed the grant.
+
+### Fix
+The revoke now reads the capability row first and returns unless `grant_source = 'business'`. A
+legacy grant is left alone.
+
+---
+
+## E-058: The 0012 code cannot serve any request until its migration is applied
+
+* **Status:** Accepted
+* **Found:** 2026-10-16, first live run after the change.
+
+### Description
+`authenticate()` calls `listCapabilities()` on every authenticated request, and registration calls
+it to build its response. Both query `public.user_capabilities`. Against a database without
+migration `0012`, **every** authenticated request returns `500` and registration returns `500` —
+the application is entirely non-functional, not merely degraded.
+
+Confirmed live: `register returns 201` failed with `500`, and 28 assertions failed as a
+consequence, including the whole account-deletion section.
+
+### Why it is not papered over with a shim
+The obvious mitigation is to catch the missing-relation error and return an empty capability set.
+That would convert a mass `500` into a mass `403`, which sounds safer and is not:
+
+* it hides the missing migration behind plausible-looking authorisation denials, which is
+  materially harder to diagnose than a `500` that says the relation does not exist; and
+* a capability gate that quietly returns "nobody has any capability" is a gate that will one day
+  do that in production for a reason nobody is looking for.
+
+Failing loudly on a missing relation is the correct behaviour for a deployment that has gone wrong
+in an obvious way, provided the ordering is stated.
+
+### Mitigation
+**Apply migration `0012_multi_capability.sql` before deploying the code that needs it.** There is
+then no window in which the two disagree. This is a deployment-ordering requirement, not a code
+change, and it is recorded in the deployment notes. The live suite has a pre-flight check that
+reports "apply migration 0012_multi_capability" rather than aborting part-way, and the capability
+sections skip themselves when it is absent.
+
+---
+
+## E-059: Business records are keyed on the person, not the business
+
+* **Status:** Accepted
+* **Found:** 2026-10-16, during the `0012` design.
+
+### Description
+Employer job specs, saved candidates and invitations remain keyed on `users.id` rather than on
+`businesses.id`. Somebody who runs two businesses sees one set of employer records.
+
+### Why it was left
+The agreed design asked for a *simple* business workspace, and the capability model is the part
+that has to be right: one account, several authorised areas, hiring behind a vetted organisation.
+Threading `business_id` through five tables, every query that reads them, and every saved
+shortlist is a much larger change to a working, tested module, made for a case the design does not
+name.
+
+The business is still real: it is the authorisation vehicle and the display identity, and the
+employer capability genuinely follows an approved one. If two-business separation is ever needed
+it is a migration on top of this one, not a rewrite of it.
+
+---
+
+## E-060: The trainee backfill would have failed the whole migration at the worst moment
+
+* **Status:** Resolved — found by dry run, fixed, re-verified
+* **Found:** 2026-10-17, applying `0012` inside a transaction against the live database and
+  rolling it back.
+
+### Description
+```sql
+INSERT INTO public.user_capabilities (user_id, capability, grant_source, granted_at)
+SELECT DISTINCT ts.student_id, 'trainee', 'enrolment', ts.enrolled_at
+  FROM public.trainer_students ts
+ON CONFLICT (user_id, capability) DO NOTHING;
+```
+fails with `column "capability" is of type user_capability but expression is of type text`.
+
+Under `SELECT DISTINCT` an unadorned string literal is resolved to `text` rather than to the
+column's enum type, so the target-type propagation from the `INSERT` does not reach it.
+
+### Why it is the worst possible statement to get wrong
+The live database has **zero enrolments**. This statement therefore inserts nothing — but it
+fails at parse time regardless of matching rows. It sits thirteenth in the migration, so the
+twelve statements before it — including the type and table creation — had already run. Written
+any other way, this would have aborted the migration two-thirds of the way through, against a
+production database, at the point of maximum exposure. Drizzle runs a migration in a
+transaction so nothing would have been left half-applied, but the deploy would have failed at
+the worst moment and the cause would have looked like a schema conflict rather than a cast.
+
+### Fix
+The literals are cast explicitly (`'trainee'::public.user_capability`,
+`'enrolment'::public.capability_grant_source`), as is `'legacy'` in the other backfill for the
+same reason. Verified: the migration now applies end to end.
+
+### The lesson, which is why this is recorded at all
+The same class of defect is **E-002**, fixed on 2026-10-08 by migration `0002` when the
+`0001` trigger assigned a `text` expression to the `user_role` enum column. It has now
+happened twice, in the same codebase, in the same month of work. A dry run against the real
+database — `BEGIN; <migration>; <verify>; ROLLBACK;` — caught both. Neither a unit test nor a
+typecheck can see this class of defect, because it is a question about how the PostgreSQL
+parser resolves types, not about what any TypeScript says.
+
+---
+
+## E-061: `min(uuid)` does not exist, and the statement failed regardless of matching rows
+
+* **Status:** Resolved — found by dry run, fixed, re-verified
+* **Found:** 2026-10-17, immediately after E-060, in the same dry run.
+
+### Description
+```sql
+UPDATE public.user_capabilities c
+   SET granted_by = ( SELECT min(ts.trainer_id) FROM public.trainer_students ts
+                       WHERE ts.student_id = c.user_id )
+ WHERE c.capability = 'trainee' AND c.grant_source = 'enrolment' AND c.granted_by IS NULL;
+```
+fails with `function min(uuid) does not exist`.
+
+PostgreSQL defines `min()` for numbers, strings, dates and arrays — **not** for `uuid`. There
+is no `max(uuid)` either. This was assumed rather than checked, and it is invisible to every
+tool in this repository: it is not a type error, because `ts.trainer_id` really is a `uuid`.
+
+### Why it is worse than it looks
+Like E-060, this statement matches zero rows on the live database (no enrolments) and would
+still have failed, because function resolution happens during parsing. Two independent
+migration-stopping defects, in the two statements a developer would most reasonably assume were
+the safest in the file.
+
+### Fix
+`ORDER BY ts.trainer_id LIMIT 1` in a scalar subquery. A student enrolled by two institutes has
+two legitimate grantors and only one is recorded; that is a deliberate simplification, and the
+lowest id is at least deterministic for a value nothing is meant to depend on.
+
+---
+
+## E-062: There is no zero-downtime ordering for this change
+
+* **Status:** Resolved by splitting the migration
+* **Found:** 2026-10-17, while preparing the production release sequence.
+
+### Description
+The change makes two demands on the database that cannot both be met at once:
+
+* the **currently deployed** application reads `public.users.role` in five places, one of
+  which — `GET /auth/me` — the web layout reads on **every signed-in page**; and
+* the **new** application reads `public.user_capabilities` on every authenticated request,
+  because `authenticate()` loads the capability set before any guard runs.
+
+So applying the migration first breaks the running application, and deploying the code first
+breaks it too, in mirror image. There is no ordering of two steps that avoids an outage.
+
+### Fix: expand / contract, in three steps with no window
+The migration was split. `0012_multi_capability.sql` only *adds* — enum, three tables,
+backfill, RLS — and deliberately keeps `users.role`. `0013_drop_user_role.sql` removes it, and
+must not run until the new code is deployed.
+
+One detail made this safe rather than merely workable. Two triggers call `sync_user_role()`:
+`on_auth_user_created` (AFTER INSERT) and `on_auth_user_role_changed` (AFTER UPDATE OF
+`raw_app_meta_data`). The function `0012` installs therefore **both** grants the capability
+**and** keeps `users.role` mirrored, byte-for-byte in behaviour. Without that, replacing the
+trigger during the expand phase would have left the column the deployed application reads
+quietly going stale — a silent wrong-answer bug rather than a visible outage, which is worse.
+`0013` then replaces the function with the capability-only version and drops the column.
+
+### Verified by dry run against the live database, 2026-10-17
+| Assertion | Result |
+|---|---|
+| `0012` applies | clean |
+| `users.role` still present after `0012` | true — the old application is unaffected |
+| trigger still mirrors `users.role` | true |
+| `user_capabilities` rows available to the new code | 9 |
+| changing a role claim still updates `users.role` | `worker` → `employer` (old behaviour preserved) |
+| the same change is additive, revoking nothing | `[worker, employer]` |
+| `0012` then `0013` applies | clean |
+| `users.role` present after `0013` | false |
+| capabilities after `0013` | 6 worker, 2 employer, 1 training_provider |
+| orphaned capabilities | 0 |
+| `employer_approvals` foreign keys | both intact |
+
+---
+
+## E-063: A recent recoverable backup could not be verified
+
+* **Status:** Open — **blocking the migration**
+* **Found:** 2026-10-17, before applying anything to the live database.
+
+### Description
+Applying `0012` and `0013` to a live project requires certainty that the database can be put
+back. That certainty could not be established from this environment.
+
+### What was checked
+* No Supabase personal access token: none in `.env`, none at `~/.supabase/access-token`
+* No Supabase CLI installed
+* No management API or dashboard access
+* The available credentials are data-plane only — `DATABASE_URL`, the service-role key and
+  the anon key — and none of them can report backup state
+
+### What was established, and what it is not
+`archive_mode = on`, `archive_command` is a `wal-g` push via `admin-mgr`, `archive_mode`
+healthy with **992 segments archived, 0 failures**, most recent 17 minutes before the check.
+
+This is strong evidence that the **mechanism** behind point-in-time recovery is running and
+healthy. It is **not** verification that a backup exists. The following remain unknown and are
+not derivable from inside the database:
+
+1. whether managed backups or PITR are enabled **on the project** — `archive_mode` is the
+   mechanism, not the service;
+2. the **retention window**, so it cannot even be said whether a backup from today exists;
+3. whether any backup has actually **completed** and been catalogued;
+4. whether a restore has ever been **tested** — the decisive one, since an untested backup is
+   not a proven-recoverable backup.
+
+### Why this is blocking rather than noted
+The instruction was to stop before executing if a recent recoverable backup cannot be verified.
+It cannot be, so nothing was applied. Every check in this entry was read-only, and both
+migrations were verified inside transactions that were rolled back — the database is
+byte-for-byte as it was found.
+
+### Partial mitigation, and its limit
+The single most alarming step, `DROP COLUMN users.role`, is **recoverable without a backup**,
+because the value is derivable from the new table:
+
+```sql
+ALTER TABLE public.users ADD COLUMN role public.user_role;
+UPDATE public.users u SET role = (
+  SELECT c.capability::user_role FROM public.user_capabilities c
+   WHERE c.user_id = u.id ORDER BY c.granted_at DESC LIMIT 1);
+```
+
+That restores the column, and the backfill records the original `granted_at` from
+`users.created_at`, so a single-capability account restores exactly. It is a convenience, not
+a safety net: it protects only the dropped column, and it protects against nothing else —
+including any accidental write to or deletion of the other sixteen tables. **It does not
+substitute for a verified backup.**
+
+---
+
+## E-064: Enrolment was behind the capability it grants — student-first enrolment was impossible
+
+* **Status:** Resolved — found by the live suite, fixed, verified
+* **Found:** 2026-10-17, first full live run after `0012` was applied.
+
+### Description
+The enrolment-code redemption route sat on `studentCredentialRouter`, which migration `0012`
+had gated on `authorize('worker', 'trainee')`. Redeeming a code is what *grants* `trainee`, so
+a person who had neither capability got `403`.
+
+That is a chicken-and-egg that defeats the entire point of the change: somebody joining an
+institute before their first paid job is the ordinary case, and the agreed design says
+explicitly that "a student with no qualifying verified work must not become searchable". A
+person with no work could not become a student at all.
+
+The live suite caught it as four linked failures — enrolment `403`, no `trainee` granted, no
+institute recorded as grantor, and the credential read refused.
+
+### Fix
+Enrolment moved to its own router, `studentEnrolmentRouter`, guarded by `authenticate` alone,
+mounted **before** `studentCredentialRouter` so the prefix does not swallow it.
+
+A session-only guard is correct here because **the enrolment code is the authorisation**:
+
+* codes are written only by `training_provider` accounts and stored as a SHA-256 digest, so
+  one cannot be guessed from the table;
+* a wrong code matches nothing and grants nothing;
+* what a valid code grants is `trainee`, which reaches a person's own credential records and
+  nothing else.
+
+Anyone signed in may therefore *attempt* a redemption, and the worst an attempt achieves
+without a real code is a failed lookup — the same exposure as any credential-verification
+endpoint.
+
+### Why the ordering matters
+Express matches routers in mount order. Had `studentCredentialRouter` stayed mounted first,
+`/workers/enrolment` would still be captured by the `worker`/`trainee` guard and the fix would
+have looked applied while changing nothing. The order is commented at the mount site.
+
+---
+
+## E-065: Four security assertions were silently skipping
+
+* **Status:** Resolved
+* **Found:** 2026-10-17, while reviewing which of the new assertions had actually executed.
+
+### Description
+Two guards in the new multi-capability section were never satisfied, so the assertions inside
+them did not run and could not fail:
+
+1. The escalation block was wrapped in `if (escalateToken)`. The escalate account was
+   registered but **never email-confirmed**, so sign-in returned `401`, no token was issued,
+   and four assertions — including *"an account that asked for 'admin' cannot reach the admin
+   surface"* — never executed. The suite reported `531 passed` while quietly skipping the most
+   security-relevant checks in the change.
+2. The public-portfolio assertion was wrapped in `if (slug)`. `mintAccount` provisions through
+   the auth admin API, which creates `public.users` but **not** `profiles`, so the
+   `UPDATE … RETURNING` matched nothing. The check guarding the single highest-risk line in the
+   whole migration — that a person with two capabilities keeps their public page — never ran.
+
+### Fix
+Both guards removed rather than merely satisfied, so a future breakage fails loudly:
+
+* the escalate account is confirmed before sign-in, and there is now an explicit assertion
+  that the sign-in worked, so the block cannot be entered silently;
+* a `profiles` row is created for the fixture first, and the slug itself is asserted rather
+  than branched on.
+
+The assertions now report `PASS` and the portfolio check has a companion that reads the page
+twice.
+
+### The rule
+A conditional wrapper around an assertion converts it into documentation. The live suite
+already says this in its own comments — *"a security assertion that cannot fail"* was the
+defect class behind the `0000` check — and it applied to the new code too.
+
+---
+
+## E-066: The escalation account leaked on every run
+
+* **Status:** Resolved
+* **Found:** 2026-10-17, same session.
+
+### Description
+The `wants-admin` account created by the escalation test was never pushed onto `createdUsers`,
+so cleanup did not remove it. Every run left one account behind, and the pre-flight leftover
+check reported `FAIL … (1 removed)` permanently — self-healing only because the *next* run's
+pre-flight deleted it.
+
+### Why it mattered beyond the noise
+The leftover check is the suite's own signal that it cleans up after itself. A permanent
+failure there trains a reader to ignore it, which is exactly when a *real* leak would go
+unnoticed. The fix registers the id for cleanup immediately after it is read.
+
+Verified: `531 passed, 0 failed`, and zero `smoke.%` accounts remain afterwards.
+
+---
+
+## E-067: A PowerShell edit corrupted `package.json`
+
+* **Status:** Resolved
+* **Found:** 2026-10-17, while adding the export/restore npm scripts.
+
+### Description
+`ConvertFrom-Json` → `ConvertTo-Json` → `Set-Content -Encoding utf8` did two damaging things:
+
+* Windows PowerShell 5.1's `utf8` writes a **byte-order mark**, and Node's JSON parser rejects
+  it — `SyntaxError: C:\PROJECTS\TetherProof\package.json`.
+* `ConvertTo-Json` reformatted the whole file: a 51-insertion, 49-deletion diff for what should
+  have been two added lines.
+
+Every `npm` command in the repository failed until this was caught.
+
+### Fix
+`git checkout HEAD -- package.json`, then the two scripts added with a targeted edit. The diff
+is now the intended 2 lines and nothing else.
+
+### The rule
+Never round-trip a repository JSON file through PowerShell. Use a targeted edit. The BOM is
+the loud failure; the silent whole-file reformat is the one that would have ended up in a
+commit.
+
+---
+
+## E-068: A floating switcher was built, then replaced by a header control
+
+* **Status:** Resolved — built and removed within the same working session
+* **Found:** 2026-10-17, while implementing role switching.
+
+### Description
+The first implementation put a pinned circular button near the bottom-right corner on
+phones, opening a bottom sheet of capabilities — the WhatsApp compose-button pattern. The
+owner then chose a header-based selector instead, on the grounds that the header is not
+crowded and that a permanent floating control will eventually overlap whichever dashboard
+control is added next.
+
+### Resolution
+`WorkspaceFab` was deleted rather than left disabled, and the control lives in the header at
+every width. The reasoning is recorded here because the argument is worth keeping either way:
+
+* a floating control has to live somewhere, and the bottom-right corner is where it competes
+  with the bottom tab row for the thumb;
+* the header already carries the section title and the account menu, so a role selector is
+  not competing for space there;
+* it gives the active role a permanent, identifiable home, which a floating `+` does not —
+  a `+` says "add", and what this does is mostly "switch".
+
+Nothing else changed: the navigation model, the setup pages and the capability service were
+all independent of where the control was mounted.
+
+### The responsive shape, since one control has to serve two very different screens
+A dropdown anchored under a header button overflows a phone screen. So the panel is **one
+element** whose positioning classes change at `md`: `fixed inset-x-0 bottom-0` with a scrim
+and a drag handle on a phone, `absolute left-0 top-full` with no scrim on a desktop. One
+implementation, two shapes, and no second component that could drift from the first.

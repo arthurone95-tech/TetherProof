@@ -40,7 +40,7 @@ export default async function SettingsPage() {
     },
   ];
 
-  if (profile.role === 'employer') {
+  if (profile.capabilities.includes('employer')) {
     account.push({
       href: '/employer/organization',
       title: 'Organization',
@@ -50,7 +50,7 @@ export default async function SettingsPage() {
   }
 
   const preferences: Entry[] =
-    profile.role === 'worker'
+    profile.capabilities.includes('worker')
       ? [
           {
             href: '/settings/privacy',

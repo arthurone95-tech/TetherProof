@@ -1,4 +1,5 @@
 import type { NavItem } from '@/lib/navigation';
+import type { UserCapability } from '@tetherproof/shared';
 import { AppHeader } from './AppHeader';
 import type { AccountSummary } from './AccountMenu';
 import { AppTabs } from './AppTabs';
@@ -7,6 +8,16 @@ interface AppShellProps {
   /** Where the brand mark goes: the member's own home, not the marketing page. */
   home: string;
   items: NavItem[];
+  /**
+   * The account's full capability set.
+   *
+   * The header selector shows **all four** capabilities, not only the held ones: tapping one
+   * you do not have is how somebody discovers there is something to set up. It is a single
+   * control at every width — bottom sheet on a phone, dropdown on a desktop — rather than a
+   * header control plus a floating one, because two controls offering the same list would be
+   * one more thing to choose between.
+   */
+  capabilities: readonly UserCapability[];
   /** Who is signed in: the avatar and the top of the account menu. */
   account: AccountSummary;
   /** Whether this account has an inbox (workers and employers): the header bell. */
@@ -50,6 +61,7 @@ interface AppShellProps {
 export function AppShell({
   home,
   items,
+  capabilities,
   account,
   showNotifications,
   pendingInvitations,
@@ -64,6 +76,7 @@ export function AppShell({
         account={account}
         showNotifications={showNotifications}
         unreadNotifications={unreadNotifications}
+        capabilities={capabilities}
       />
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-7 pb-32 md:pb-14">{children}</main>
@@ -73,6 +86,7 @@ export function AppShell({
         padding under the content keeps the last card clear of the row.
       */}
       <AppTabs items={items} pendingInvitations={pendingInvitations} />
+
     </div>
   );
 }

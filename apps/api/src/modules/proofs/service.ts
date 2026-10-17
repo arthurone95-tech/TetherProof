@@ -18,6 +18,7 @@ import {
   capabilityBlocks,
   directOffers,
   profiles,
+  userCapabilities,
   users,
   verifications,
   workProofLogs,
@@ -640,10 +641,25 @@ export async function workerCapabilities(
 export async function getPublicCapabilityProfile(
   slug: string,
 ): Promise<PublicCapabilityProfileResponse> {
+  // "Holds the worker capability" rather than "has role = worker".
+  //
+  // This is the single line most likely to be missed by migration `0012`, and missing it
+  // would be silent: a person who is both a worker and a student would keep all their
+  // records, keep their proofs verified, and simply stop appearing on their own public
+  // page, because whatever single role the account carried was no longer the literal
+  // string 'worker'. A test covers it — see the combined-capability cases in the live
+  // suite — because a regression here destroys somebody's portfolio without one error.
   const [page] = await db
     .select({ workerId: profiles.userId, displayName: profiles.fullName })
     .from(profiles)
-    .innerJoin(users, and(eq(users.id, profiles.userId), eq(users.role, 'worker')))
+    .innerJoin(users, eq(users.id, profiles.userId))
+    .innerJoin(
+      userCapabilities,
+      and(
+        eq(userCapabilities.userId, users.id),
+        eq(userCapabilities.capability, 'worker'),
+      ),
+    )
     .where(and(eq(profiles.publicSlug, slug), eq(profiles.publicProfile, true)))
     .limit(1);
 

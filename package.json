@@ -25,6 +25,8 @@
     "test": "npm run test --workspaces --if-present",
     "db:generate": "npm run db:generate --workspace @tetherproof/api",
     "db:migrate": "npm run db:migrate --workspace @tetherproof/api",
+    "export:database": "node scripts/export-database.mjs",
+    "restore:accounts": "node scripts/restore-auth-users.mjs",
     "storage:ensure-bucket": "npm run storage:ensure-bucket --workspace @tetherproof/api",
     "smoke": "node scripts/smoke.mjs",
     "scrub-check": "tsx scripts/scrub-check.ts",

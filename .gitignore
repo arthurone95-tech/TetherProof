@@ -69,3 +69,7 @@ temp/
 # Working owner's material, deliberately untracked (doc/13 E-015).
 # Kept here at the owner's request so it cannot be committed by accident.
 doc/others/
+
+# Database exports. Recovery artefacts, not source: they contain password
+# hashes and tokens, so they must never be committed. See BACKUP.md.
+backups/

@@ -11,13 +11,14 @@ import type {
   ProofUpdateResponse,
   SkillLevel,
   UpdateProofInput,
-  UserRole,
+  UserCapability,
   VerificationResendResponse,
 } from '@tetherproof/shared';
 import { ApiRequestError, isCredentialRefusal } from './api-error';
 import type {
   AuthCallbackResult,
   AppealState,
+  CapabilityState,
   FormState,
   MilestoneState,
   ProofEditState,
@@ -54,8 +55,8 @@ function messageFor(error: unknown, fallback: string): string {
  * redirects have to agree: a sign-in that lands on `/invites` while the nav
  * points at `/dashboard` would be two answers to one question.
  */
-function landingFor(role: UserRole): string {
-  return homeFor(role);
+function landingFor(input: { capabilities: readonly UserCapability[]; isAdmin?: boolean }): string {
+  return homeFor(input);
 }
 
 export async function signIn(_previous: FormState, formData: FormData): Promise<FormState> {
@@ -71,7 +72,7 @@ export async function signIn(_previous: FormState, formData: FormData): Promise<
       body: { email, password },
     });
     if (result.session) await writeSession(result.session);
-    redirect(landingFor(result.user.role));
+    redirect(landingFor(result.user));
   } catch (error) {
     if (isRedirect(error)) throw error;
     /**
@@ -94,7 +95,9 @@ export async function registerAccount(_previous: FormState, formData: FormData):
   const password = String(formData.get('password') ?? '');
   const confirmPassword = String(formData.get('confirmPassword') ?? '');
   const fullName = String(formData.get('fullName') ?? '').trim();
-  const role = String(formData.get('role') ?? 'worker');
+  // The role field is no longer read. Kept as a named absence rather than deleted so the
+// reason is next to the code that used to need it: a signup asks for no role, and the
+// capabilities are chosen on the dashboard afterwards.
 
   if (!email) return { error: 'Enter your email address.', field: 'email' };
   if (fullName.length === 0) return { error: 'Enter your name.', field: 'fullName' };
@@ -152,9 +155,10 @@ export async function registerAccount(_previous: FormState, formData: FormData):
         email,
         password,
         fullName,
-        // Constrained to the same list the API accepts, so the form cannot offer a
-        // choice the endpoint will refuse.
-        role: role === 'employer' || role === 'training_provider' ? role : 'worker',
+        // No role is sent. Migration `0012` makes capabilities a set granted after signup,
+        // and the endpoint ignores this field for compatibility with a client that has
+        // not been redeployed yet — so a stale client keeps working without being able to
+        // grant anything.
         ...(redirectOrigin ? { redirectOrigin } : {}),
       },
     });
@@ -162,7 +166,7 @@ export async function registerAccount(_previous: FormState, formData: FormData):
     if (result.session) {
       // An account created while the provider auto-confirms arrives signed in.
       await writeSession(result.session);
-      redirect(landingFor(result.user.role));
+      redirect(landingFor(result.user));
     }
 
     // Otherwise the account exists but must prove ownership of its channel first.
@@ -221,7 +225,7 @@ export async function confirmWithCode(_previous: FormState, formData: FormData):
       body: { email, token: code },
     });
     if (result.session) await writeSession(result.session);
-    redirect(landingFor(result.user.role));
+    redirect(landingFor(result.user));
   } catch (error) {
     if (isRedirect(error)) throw error;
     return { error: messageFor(error, 'That code could not be used. Request a new one and try again.') };
@@ -325,7 +329,7 @@ async function landingForCurrentProfile(): Promise<AuthCallbackResult> {
     return { ok: false, error: CALLBACK_FAILED };
   }
 
-  return { ok: true, landing: landingFor(profile.role) };
+  return { ok: true, landing: landingFor(profile) };
 }
 
 /**
@@ -412,6 +416,10 @@ export async function saveProfile(_previous: FormState, formData: FormData): Pro
       await apiServer('/auth/profile', { method: 'PATCH', body });
     }
     revalidatePath('/profile');
+    revalidatePath('/roles');
+    revalidatePath('/setup/worker');
+    revalidatePath('/setup/training_provider');
+    revalidatePath('/setup/trainee');
     revalidatePath('/employer');
     revalidatePath('/employer/organization');
     return { done: true };
@@ -652,6 +660,104 @@ export async function sendOffer(_previous: FormState, formData: FormData): Promi
     return { done: true };
   } catch (error) {
     return { error: messageFor(error, 'We could not send that invitation. Please try again.') };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities and businesses (migration 0012)
+// ---------------------------------------------------------------------------
+
+/**
+ * Activates a capability the account does not hold.
+ *
+ * Whether this is allowed is decided by the server, which knows the self-service rules;
+ * this action only forwards the name and reports what happened. A page that decided for
+ * itself would be a second copy of a security rule, and the copy is what drifts.
+ *
+ * Navigating to `/capabilities` on success rather than into the new workspace: the button
+ * said "activate", not "take me there", and the page is where the person can see what
+ * they now hold alongside what they do not.
+ */
+/**
+ * Records an administrator's decision on a business.
+ *
+ * The employer capability is granted or taken inside the same service call, so this action
+ * does not need to remember to do a second thing — and cannot get it half-right, which
+ * would leave a business reading "approved" that nobody can hire through.
+ */
+export async function decideBusinessApproval(
+  _previous: CapabilityState,
+  formData: FormData,
+): Promise<CapabilityState> {
+  const businessId = String(formData.get('businessId') ?? '');
+  const status = String(formData.get('status') ?? '');
+  const note = String(formData.get('note') ?? '').trim();
+
+  if (status !== 'approved' && status !== 'rejected' && status !== 'pending') {
+    return { error: 'Choose approve or reject.' };
+  }
+
+  try {
+    await apiServer(`/admin/businesses/${encodeURIComponent(businessId)}/approval`, {
+      method: 'POST',
+      body: note ? { status, note } : { status },
+    });
+    revalidatePath('/admin');
+    return { done: true };
+  } catch (error) {
+    return { error: messageFor(error, 'We could not record that decision. Please try again.') };
+  }
+}
+
+export async function activateCapability(
+  _previous: CapabilityState,
+  formData: FormData,
+): Promise<CapabilityState> {
+  const capability = String(formData.get('capability') ?? '').trim();
+  if (!capability) return { error: 'That capability is not valid.' };
+
+  try {
+    await apiServer('/auth/capabilities', { method: 'POST', body: { capability } });
+    revalidatePath('/capabilities');
+    revalidatePath('/roles');
+    revalidatePath('/dashboard');
+    // The setup page decides for itself what to show from the capability it holds, so it
+    // has to be re-read after a grant: it advances from the activation step to the
+    // configuration step on its own. Without this the page would sit on a button for a
+    // capability the account now holds, and pressing it again would be a no-op.
+    revalidatePath(`/setup/${capability}`);
+    return { done: true, granted: true };
+  } catch (error) {
+    return {
+      error: messageFor(
+        error,
+        'That could not be activated just now. Refresh and try again.',
+      ),
+    };
+  }
+}
+
+/**
+ * Creates a business, which is how a person earns the employer capability.
+ *
+ * Deliberately not an activation: the business is created pending, and the capability
+ * arrives when an administrator approves it. Presenting this as "activate employer" and
+ * then waiting for review would be the kind of promise the page above refuses to make.
+ */
+export async function createBusiness(
+  _previous: CapabilityState,
+  formData: FormData,
+): Promise<CapabilityState> {
+  const name = String(formData.get('name') ?? '').trim();
+  if (name.length < 2) return { error: 'Give the business a name of at least 2 characters.', field: 'name' };
+
+  try {
+    await apiServer('/businesses', { method: 'POST', body: { name } });
+    revalidatePath('/capabilities');
+    revalidatePath('/businesses');
+    return { done: true, granted: false };
+  } catch (error) {
+    return { error: messageFor(error, 'The business could not be created. Please try again.') };
   }
 }
 

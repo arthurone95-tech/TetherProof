@@ -38,9 +38,16 @@ export default async function ProfilePage() {
   const profile = await currentProfile();
   if (!profile) redirect('/login');
 
+  // Worker-only sections, and the worker's own data behind them. Capability-gated rather
+  // than role-gated: the profile of somebody who is both a worker and a business owner
+  // shows their work portfolio as well as their organisation, which is the whole point of
+  // one account.
+  const isWorker = profile.capabilities.includes('worker');
+  const isEmployer = profile.capabilities.includes('employer');
+
   let capabilities: WorkerCapabilityProfileResponse | null = null;
   let connections: ConnectionsResponse | null = null;
-  if (profile.role === 'worker') {
+  if (isWorker) {
     [capabilities, connections] = await Promise.all([
       apiServer<WorkerCapabilityProfileResponse>('/workers/capabilities').catch(() => null),
       apiServer<ConnectionsResponse>('/workers/connections').catch(() => null),
@@ -51,7 +58,7 @@ export default async function ProfilePage() {
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
       <Card title="Your details">
         <ProfileForm
-          role={profile.role}
+          showOrganizationName={isEmployer || profile.capabilities.includes('training_provider')}
           fullName={profile.fullName}
           organizationName={profile.organizationName}
           locationGps={profile.locationGps}
@@ -59,19 +66,19 @@ export default async function ProfilePage() {
         />
       </Card>
 
-      {profile.role === 'worker' && capabilities ? (
+      {capabilities?.skills.length || capabilities?.verifiedTotal ? (
         <Card title="Your capabilities">
           <CapabilitiesCard capabilities={capabilities} />
         </Card>
       ) : null}
 
-      {profile.role === 'worker' ? (
+      {isWorker ? (
         <Card title="Share your proof">
           <ShareCard enabled={profile.publicProfile} slug={profile.publicSlug} />
         </Card>
       ) : null}
 
-      {profile.role === 'worker' && connections ? (
+      {isWorker && connections ? (
         <Card title="Connected sources">
           <ConnectionsCard connections={connections.connections} />
         </Card>

@@ -4,6 +4,7 @@ import type { CredentialListResponse, RosterResponse } from '@tetherproof/shared
 import { Banner } from '@/components/ui/Banner';
 import { Card } from '@/components/ui/Card';
 import { apiServer, currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 import { MilestoneIssuerForm } from './MilestoneIssuerForm';
 import { IssuedCredentialList } from './IssuedCredentialList';
 
@@ -28,9 +29,7 @@ export const metadata: Metadata = {
 export default async function TrainerCredentialsPage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role === 'worker') redirect('/dashboard');
-  if (user.role === 'employer') redirect('/employer');
-  if (user.role !== 'training_provider') redirect('/pending');
+  if (!user.capabilities.includes('training_provider')) redirect(homeFor(user));
 
   // Both reads, because the form's student picker and the list beneath it are two
   // views of the same institute and must not be allowed to disagree about who is on

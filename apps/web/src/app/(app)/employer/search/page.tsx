@@ -14,6 +14,7 @@ import type {
 import { ApiRequestError } from '@/lib/api-error';
 import { changeSpec } from '@/lib/actions';
 import { apiServer, currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 import { Banner } from '@/components/ui/Banner';
 import { Avatar } from '@/components/ui/Avatar';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
@@ -64,8 +65,7 @@ export default async function EmployerSearchPage({
 }) {
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role === 'worker') redirect('/dashboard');
-  if (user.role !== 'employer') redirect('/pending');
+  if (!user.capabilities.includes('employer')) redirect(homeFor(user));
 
   const params = await searchParams;
   const skill = params.skill?.trim() ?? '';

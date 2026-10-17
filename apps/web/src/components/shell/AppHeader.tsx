@@ -4,16 +4,25 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Bell, type LucideIcon } from 'lucide-react';
 import type { NavItem } from '@/lib/navigation';
+import type { UserCapability } from '@tetherproof/shared';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 import { subpageTitleFor } from '@/lib/navigation';
 import { AccountMenu, type AccountSummary } from './AccountMenu';
 import { BackHeader } from './BackHeader';
 import { PrimaryNav } from './PrimaryNav';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher';
 
 interface AppHeaderProps {
   /** The member's own home — what "on Home" means for this account. */
   home: string;
   items: NavItem[];
+  /**
+   * The areas this account is authorised to work in.
+   *
+   * Shown only when there is more than one, because a switcher offering a single entry is
+   * a control that claims to do something it does not.
+   */
+  capabilities: readonly UserCapability[];
   /** Who is signed in: drives the avatar and the top of the account menu. */
   account: AccountSummary;
   /** Whether this account has an inbox (workers and employers); others see no bell. */
@@ -49,6 +58,7 @@ interface AppHeaderProps {
 export function AppHeader({
   home,
   items,
+  capabilities,
   account,
   showNotifications,
   unreadNotifications,
@@ -87,6 +97,14 @@ export function AppHeader({
         <div className="hidden md:block">
           <PrimaryNav items={items} variant="bar" />
         </div>
+
+        {/*
+          The switcher sits beside the navigation rather than inside the account menu,
+          because moving between your own areas is not a setting — it is the thing you
+          came to do, and burying it one tap into an avatar would make the second
+          capability feel like a setting too.
+        */}
+        <WorkspaceSwitcher capabilities={capabilities} />
 
         <div className="ml-auto flex items-center gap-0.5 md:gap-1">
           {showNotifications ? (

@@ -6,6 +6,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   real,
   text,
   timestamp,
@@ -15,6 +16,45 @@ import {
 } from 'drizzle-orm/pg-core';
 
 export const userRole = pgEnum('user_role', ['worker', 'employer', 'training_provider', 'admin']);
+
+/**
+ * The capabilities an account may hold, migration `0012`.
+ *
+ * Replaces the single `users.role` column. One person can be an electrician, a student at
+ * an institute, and the owner of a business that hires, and that is three capabilities on
+ * one identity rather than three accounts with three portfolios that could never be joined.
+ *
+ * `admin` is deliberately absent and cannot be added here. It is a platform role rather
+ * than something a person does, it is read from the server-controlled `app_metadata.role`
+ * claim, and it has never been self-assignable — that is the E-024 privilege-escalation
+ * surface, and a table a signup could reach is exactly the wrong place to reintroduce it.
+ */
+export const userCapability = pgEnum('user_capability', [
+  'worker',
+  'employer',
+  'training_provider',
+  'trainee',
+]);
+
+/**
+ * Why a capability was held.
+ *
+ * Recorded rather than inferred, so an access review can tell an inherited grant from a
+ * deliberate one. `legacy` is the migration `0012` backfill: an account that already had a
+ * role keeps exactly what it had, and saying so is more honest than implying somebody
+ * granted it.
+ */
+export const capabilityGrantSource = pgEnum('capability_grant_source', [
+  'self',
+  'legacy',
+  'enrolment',
+  'business',
+  'admin',
+  'registration',
+]);
+
+export const businessStatus = pgEnum('business_status', ['pending', 'approved', 'rejected']);
+export const businessMemberRole = pgEnum('business_member_role', ['owner', 'member']);
 export const metadataStatus = pgEnum('metadata_status', ['pending', 'valid', 'flagged_ai_fake']);
 export const verificationStatus = pgEnum('verification_status', [
   'pending',
@@ -84,6 +124,7 @@ const updatedAt = timestamp('updated_at', { withTimezone: true }).notNull().defa
  */
 const enrolledAt = timestamp('enrolled_at', { withTimezone: true }).notNull().defaultNow();
 const issuedAt = timestamp('issued_at', { withTimezone: true }).notNull().defaultNow();
+const grantedAt = timestamp('granted_at', { withTimezone: true }).notNull().defaultNow();
 
 export const users = pgTable(
   'users',
@@ -95,15 +136,119 @@ export const users = pgTable(
      */
     id: uuid('id').primaryKey(),
     /**
-     * Authoritative application role. Mirrored into `app_metadata.role` so the
-     * database and the token agree, and so the value cannot be edited by the
-     * account holder.
+     * The former `role` column is gone, and its absence is the point of migration
+     * `0012`. One account may now hold several capabilities, so a single column could
+     * only ever name one of them and would have been *wrong* for exactly the people
+     * this change exists to serve. Reading capabilities is what `authorize` does.
+     *
+     * The PostgreSQL `user_role` enum type still exists — dropping an enum type is a
+     * separate, riskier operation and it is referenced by the historical migrations
+     * that produced today's data — but nothing writes to it or reads from it.
      */
-    role: userRole('role').notNull().default('worker'),
     createdAt,
     updatedAt,
   },
-  (table) => [index('users_role_idx').on(table.role)],
+);
+
+/**
+ * What one account is authorised to do.
+ *
+ * The set that replaced `users.role`. A composite primary key makes holding two
+ * capabilities two rows and holding the same one twice impossible by construction rather
+ * than by a unique index somebody could forget to add.
+ *
+ * Cascades with the account: deleting removes the capabilities, and an anonymised record
+ * is left with none, which is the same treatment `profiles` gets.
+ */
+export const userCapabilities = pgTable(
+  'user_capabilities',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    capability: userCapability('capability').notNull(),
+    grantSource: capabilityGrantSource('grant_source').notNull().default('self'),
+    grantedAt,
+    /**
+     * The account that granted this, where there was one. Null for self-service and for
+     * the `0012` backfill, which is the honest answer: nobody else was involved.
+     */
+    grantedBy: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.capability] }),
+    // Capability lookups are always "every holder of X", so the leading column is the
+    // useful one.
+    index('user_capabilities_capability_idx').on(table.capability),
+  ],
+);
+
+/**
+ * A business that hires through TetherProof.
+ *
+ * A real entity rather than a label on a person, because the agreed design keeps an
+ * owner's personal worker identity separate from their business's employer permissions.
+ * Kojo the electrician and "Kojo Electrical Services" are different things that happen to
+ * share an owner, and only the second one carries hiring rights.
+ *
+ * `status` mirrors `employer_approvals` on purpose. An approval is a row with a reviewer,
+ * a time and an optional note, not a boolean, because "approved: yes" becomes
+ * indistinguishable from "approved by a colleague last quarter". Creating one is open to
+ * any account so there is somebody to approve — the same reasoning that left employer
+ * self-registration open, and why a pending business is a real state rather than a
+ * broken one.
+ */
+export const businesses = pgTable(
+  'businesses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: varchar('name', { length: 200 }).notNull(),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: businessStatus('status').notNull().default('pending'),
+    reviewedBy: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    /** Shown to the owner. Never a document reference or a contact detail. */
+    note: varchar('note', { length: 200 }),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [
+    index('businesses_owner_idx').on(table.ownerUserId),
+    index('businesses_status_idx').on(table.status, table.createdAt),
+  ],
+);
+
+/**
+ * Who may act for a business.
+ *
+ * A membership is what grants the `employer` capability, so this table is the answer to
+ * "why may this person hire?" — and revoking a membership takes the capability away again,
+ * which is why it is a row rather than a flag on the business.
+ *
+ * Cascades from both sides. A business that closes takes its members with it; a person
+ * who deletes their account is removed from every business they belonged to.
+ */
+export const businessMemberships = pgTable(
+  'business_memberships',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    businessId: uuid('business_id')
+      .notNull()
+      .references(() => businesses.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    memberRole: businessMemberRole('member_role').notNull().default('member'),
+    createdAt,
+  },
+  (table) => [
+    // One membership per person per business. Doubling it would double the employer
+    // surface, the same reasoning as the unique index on `direct_offers`.
+    uniqueIndex('business_memberships_unique').on(table.businessId, table.userId),
+    index('business_memberships_user_idx').on(table.userId),
+  ],
 );
 
 export const profiles = pgTable(

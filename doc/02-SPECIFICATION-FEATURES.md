@@ -173,17 +173,119 @@ Three properties hold throughout the module:
   acknowledging a message. A pending invitation cannot be sent twice, and a decision cannot be
   withdrawn, so the controls are not a toggle.
 
-### Feature 4.4: Employer Verification (added during implementation)
-* **Description:** An approval record per employer account.
-* **Behavior:** Self-registration stays open for employers, because requiring approval before
-  anyone can look at the product would leave nobody to approve. Sending an invitation is
-  gated instead.
+### Feature 4.4: Employer Verification (added during implementation, revised by migration `0012`)
+* **Description:** An approval record per **business**, which is what grants the employer capability.
+* **Behavior:** Forming a business stays open to any account, because requiring approval before
+  anyone can ask would leave nobody able to ask. Sending an invitation is gated instead — and the
+  gate is now an approved business with a membership, not a role the person claimed about
+  themselves. A pending business is a working state, not a wall: the owner keeps their worker
+  workspace, their credentials and everything else they had, and only hiring waits.
 * **Implementation:** Approval is a row with a status, a reviewer, a timestamp, and an optional
-  note, not a boolean on the user. The employer sees the status and the note but never who
-  reviewed them: the employer needs to know a decision was made and what it was, and who made
-  it is not theirs to see. Administrators are provisioned by writing the role claim against the
-  auth record, never by self-registration — `admin` is deliberately excluded from the roles the
-  public registration endpoint will accept (see `doc/13` E-024).
+  note, not a boolean on the business. The owner sees the status and the note but never who
+  reviewed them: they need to know a decision was made and what it was, and who made it is not
+  theirs to see. Administrators are provisioned by writing the claim against the auth record,
+  never by anything a signup can reach — and `admin` is not a capability at all, so there is no
+  row to insert (see `doc/13` E-024, E-055, E-056).
+
+---
+
+## 4A. Module 3.5: Capabilities and Workspaces (added by migration `0012`)
+
+One account, several authorised areas, one sign-in.
+
+### Feature 4.5: One account, several capabilities
+* **Description:** An account holds a **set** of capabilities rather than a single role.
+  The vocabulary is `worker`, `employer`, `training_provider`, `trainee`.
+* **Behavior:** Registration asks for no role at all. The Create Account page creates one
+  personal identity, and the person activates what they want from their dashboard afterwards.
+  Asking at signup would be the same first-fork problem the change exists to remove: whichever
+  role was picked first would be the only one the account could have, and the rest would need a
+  second account with a second portfolio that could never be joined to the first.
+* **Implementation:** `user_capabilities`, keyed `(user_id, capability)`. The `users.role` column
+  was **dropped** rather than deprecated — leaving it would leave two sources of truth, and for a
+  person holding two capabilities it would simply be wrong. `admin` is deliberately not a
+  capability; it is read from the server-controlled claim and is exposed as `isAdmin`.
+
+### Feature 4.6: The capability dashboard
+* **Description:** The page an account comes to when it has no workspace yet, and the one it
+  returns to whenever it wants another.
+* **Behavior:** Lists all four capabilities, held or not. Hiding the two a person already has
+  would make the page a to-do list rather than a menu, and would hide the fact that being both a
+  worker and a student is supported rather than accidental. Capabilities that need approval say
+  so and offer the route rather than a button — a button that leads to a refusal teaches the
+  person the app disagrees with itself.
+* **Implementation:** `GET /auth/capabilities` always returns all four, so the page renders the
+  same set of rows whatever the account has. `worker` and `training_provider` are self-service
+  (`POST`); `employer` opens the business form inline because setting up a business is how a
+  person *earns* the capability and the two are one action to them. `worker` cannot be revoked,
+  because it is what gives a person access to their own records.
+
+### Feature 4.7: Joining a training institute
+* **Description:** A student is a membership of an institute, and enrolment is what grants the
+  `trainee` capability.
+* **Behavior:** A person joins with an enrolment code or an invitation. If they already have an
+  account the enrolment links to it; a second account is never created. Student access does not
+  imply worker access, and worker access does not imply student access.
+* **Implementation:** Enrolment calls `grant(studentId, 'trainee', 'enrolment', trainerId)` inside
+  `redeemEnrolmentCode`, so the grant cannot be forgotten by a future route that enrols somebody,
+  and the institute is recorded as the grantor. The student credential router was gated on
+  `worker`, which meant somebody who had done no paid work could not be a student at all; it is
+  now gated on `worker` **or** `trainee`. A student with no qualifying verified work must not
+  become searchable to employers, and training credentials never count as customer-verified work.
+
+### Feature 4.8: The role selector, in the header
+* **Description:** Moving between the areas a person is authorised for.
+* **Behavior:** One control in the header at every width, showing the active role. Tapping it
+  lists **all four** roles: one they have switches them there, one they do not have opens that
+  role's setup page, and the active one is marked. A bottom sheet on a phone, a dropdown on a
+  desktop, because a dropdown anchored near the top of a small screen either overflows or needs
+  scrolling. It is **not** a role *change*: nothing in it writes and nothing in it confirms, so
+  switching alters what is on screen, never who somebody is and never their password.
+* **Implementation:** `WorkspaceSwitcher`, one element whose positioning classes change at `md`
+  rather than two components that could drift apart. Driven by the database-backed capability
+  set, so a person cannot reach an area by being shown it — and neither can a modified client,
+  because every route re-checks the same capabilities server-side.
+* **Why not a floating button:** a pinned control has to compete with the bottom tab row for the
+  thumb and will eventually sit over whichever dashboard control comes next. The header already
+  carries the section title and the account menu, so a selector there is not competing for space,
+  and it gives the active role a permanent identifiable home — a `+` says "add", and this mostly
+  says "switch". Recorded as `doc/13` E-068.
+
+### Feature 4.9: Roles & Profiles
+* **Description:** The dedicated page for seeing and changing which roles an account holds.
+  Reached from **Manage roles** at the bottom of the selector, and from the tab row of any
+  account with no role set up yet.
+* **Behavior:** Lists all four roles, held or not, with a one-line explanation of what each is
+  for. Held ones link to their workspace; the rest offer the setup action. Self-service roles
+  offer a button; roles needing somebody else's approval offer the route instead **with no
+  button**, because a button that leads to a refusal teaches the person the app disagrees with
+  itself.
+* **Deliberately separate from account settings.** "My details" and "what I may do here" are
+  different questions, and a role that is not yet set up has no details to edit — sending
+  someone to that capability's settings page would show them an empty form for an organisation
+  that does not exist. `/setup/[capability]` exists for exactly that case, and redirects to the
+  real workspace once the role is held, so the rule holds however the link was produced.
+
+### Feature 4.10: Per-role settings
+* **Description:** Editing the details of the role you are currently working in.
+* **Behavior:** One tab at the end of whichever workspace is open, and it means whatever that
+  workspace calls it — "Organization" for an employer, "Institute details" for a training
+  provider, "Your details" for a worker. Before `0012` the employer's business editor was the
+  only such screen and there was no answer for the other roles.
+* **Implementation:** `WORKSPACES[id].settingsHref` and `navFor` appends it, rather than each
+  navigation array hand-writing a fourth tab — so a workspace cannot forget it, and the label
+  follows the workspace instead of being copied four times.
+
+### Feature 4.11: One linked personal portfolio
+* **Description:** A person who is both a worker and a trainee uses one account and one identity.
+* **Behavior:** The portfolio distinguishes customer-verified work with its evidence from
+  institution-issued credentials and practical milestones. Holding a credential never makes an
+  otherwise ineligible worker discoverable in employer search.
+* **Implementation:** The public portfolio query was the single highest-risk line in this change —
+  it filtered `users.role = 'worker'`, so a person with two capabilities would have kept every
+  record, kept their proofs verified, and simply stopped appearing on their own public page. It
+  now joins on the `worker` **capability** instead. This separation of evidence types is
+  unchanged by `0012` and remains the point of the product.
 
 ---
 

@@ -2,7 +2,6 @@
 
 import { useActionState, useEffect, useState } from 'react';
 import Link from 'next/link';
-import type { UserRole } from '@tetherproof/shared';
 import { ArrowRight, Pencil } from 'lucide-react';
 import { saveProfile } from '@/lib/actions';
 import { EMPTY_FORM, type FormState } from '@/lib/form-state';
@@ -35,13 +34,20 @@ import { AvatarEditor } from './AvatarEditor';
  * is — the API is the only writer of the column.
  */
 export function ProfileForm({
-  role,
+  showOrganizationName,
   fullName,
   organizationName,
   locationGps,
   avatarUrl,
 }: {
-  role: UserRole;
+  /**
+   * Whether the organisation field is shown.
+   *
+   * Decided by the page from the capability set rather than by the form, so the rule about
+   * who has an organisation lives in one place. It used to be `role === 'employer'`, which
+   * meant a trainer could not see the institute they were signing credentials for.
+   */
+  showOrganizationName: boolean;
   fullName: string | null;
   organizationName: string | null;
   locationGps: string | null;
@@ -64,7 +70,8 @@ export function ProfileForm({
   // person typed — so there is no state to write the value into directly.
   const [seed, setSeed] = useState(0);
 
-  const isEmployer = role === 'employer';
+  // Whether the organisation field is shown, decided by the page from the capability set.
+  // The form does not decide for itself, so the rule lives in one place.
 
   async function fillFromDevice(): Promise<void> {
     const fix = await locate();
@@ -96,9 +103,9 @@ export function ProfileForm({
           <div className="min-w-0">
             <p className="truncate text-lg font-semibold text-ink-900">{fullName ?? '—'}</p>
             <p className="truncate text-sm text-ink-600">
-              {isEmployer ? 'Your personal account' : 'Your account'}
+              {showOrganizationName ? 'Your personal account' : 'Your account'}
             </p>
-            {!isEmployer ? (
+            {!showOrganizationName ? (
               <p className="truncate text-sm text-ink-600">
                 {locationGps ? describeLocation(locationGps) : 'No location set.'}
               </p>
@@ -106,7 +113,7 @@ export function ProfileForm({
           </div>
         </div>
 
-        {isEmployer ? (
+        {showOrganizationName ? (
           <Link
             href="/employer/organization"
             className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-brand-100 p-3 transition-colors hover:border-brand-600"
@@ -170,13 +177,13 @@ export function ProfileForm({
           required
           error={state.field === 'fullName' ? state.error : undefined}
           hint={
-            isEmployer
+            showOrganizationName
               ? 'Your personal name. Candidates see the organization name on their invitation.'
               : undefined
           }
         />
 
-        {isEmployer ? (
+        {showOrganizationName ? (
           <p className="rounded-xl bg-brand-50 p-3 text-sm text-ink-700">
             Company details and the search location are on the{' '}
             <Link href="/employer/organization" className="font-semibold text-brand-700 underline">

@@ -1,4 +1,4 @@
-import type { UserRole } from '@tetherproof/shared';
+import type { UserCapability, UserRole } from '@tetherproof/shared';
 
 /** One destination in the signed-in primary navigation. */
 export type NavIcon =
@@ -12,8 +12,111 @@ export type NavIcon =
   | 'organization'
   | 'roster'
   | 'issuer'
-  | 'demand';
+  | 'demand'
+  | 'capabilities'
+  | 'business'
+  | 'settings';
 
+/**
+ * One authorised area a person can be working in.
+ *
+ * The workspace is what replaces a role as the thing the interface is organised around.
+ * A person holding worker and trainee has two, and switching between them changes what is
+ * on screen — it never changes who they are, and it never asks them to sign in again.
+ */
+export interface Workspace {
+  id: UserCapability;
+  label: string;
+  href: string;
+  /** Shown in the switcher as one line, so the choice is not just a name. */
+  blurb: string;
+  /**
+   * Where this capability's own settings live.
+   *
+   * The answer to "how do I edit the details for *this* role". Each workspace names its
+   * own, so a single bottom-bar button can mean "Organization" to an employer and
+   * "Institute" to a trainer without the person having to find it — see `navFor`, which
+   * appends it as the last tab of whichever workspace is open.
+   */
+  settingsHref: string;
+  /** What the settings tab is called in that workspace. */
+  settingsLabel: string;
+  /** Short enough for a thumb-sized tab. */
+  settingsMobileLabel: string;
+}
+
+/**
+ * Every workspace, keyed by capability.
+ *
+ * All four are always present in this map — a workspace is a destination, not a
+ * privilege — and whether one is *offered* is decided by `workspacesFor`, which only
+ * shows the ones the account actually holds. That separation is deliberate: it means a
+ * new capability cannot appear in navigation without someone deciding what its workspace
+ * looks like, rather than silently getting somebody else's.
+ */
+export const WORKSPACES: Record<UserCapability, Workspace> = {
+  worker: {
+    id: 'worker',
+    label: 'My work',
+    href: '/dashboard',
+    blurb: 'Jobs, evidence and customer verification',
+    // A worker's details are the profile: their name, where they are, and the skills
+    // an employer is shown. There is no separate "worker settings" page because there is
+    // nothing else to put on it.
+    settingsHref: '/profile',
+    settingsLabel: 'Your details',
+    settingsMobileLabel: 'You',
+  },
+  trainee: {
+    id: 'trainee',
+    label: 'My training',
+    href: '/credentials',
+    blurb: 'Institute, milestones and credentials',
+    settingsHref: '/roles',
+    settingsLabel: 'Manage capabilities',
+    settingsMobileLabel: 'Manage',
+  },
+  training_provider: {
+    id: 'training_provider',
+    label: 'Institute',
+    href: '/trainer',
+    blurb: 'Students, milestone issuer and demand',
+    // The institute's name is the profile's organisation field. It is what appears on
+    // every credential this provider signs, so it matters more here than for an employer.
+    settingsHref: '/profile',
+    settingsLabel: 'Institute details',
+    settingsMobileLabel: 'Inst.',
+  },
+  employer: {
+    id: 'employer',
+    label: 'Hiring',
+    href: '/employer',
+    blurb: 'Search candidates and manage invitations',
+    settingsHref: '/employer/organization',
+    settingsLabel: 'Organization',
+    settingsMobileLabel: 'Org',
+  },
+};
+
+/**
+ * Where a person goes to *set up* a capability they do not hold yet.
+ *
+ * Separate from `settingsHref` because the two answer different questions: "edit the
+ * details of the thing I have" versus "turn this thing on". Sending someone who has not
+ * activated a capability to that capability's settings page would show them an empty form
+ * for an organisation that does not exist.
+ */
+export function setupHrefFor(capability: UserCapability): string {
+  return `/setup/${capability}`;
+}
+
+/** The workspaces this account may work in, in the order they should be offered. */
+export function workspacesFor(capabilities: readonly UserCapability[]): Workspace[] {
+  const order: UserCapability[] = ['worker', 'trainee', 'training_provider', 'employer'];
+  return order.filter((c) => capabilities.includes(c)).map((c) => WORKSPACES[c]);
+}
+
+/** One destination in the signed-in primary navigation. */
 export interface NavItem {
   href: string;
   label: string;
@@ -43,28 +146,77 @@ export interface MenuGroup {
 }
 
 /**
- * The page each role treats as home.
+ * The page an account opens on.
  *
- * Workers open on the overview (their dashboard), employers on their dashboard,
- * training providers on theirs, and administrators on the approval console.
+ * An administrator gets the approval console, because that is the work they are here to do
+ * and there is no personal workspace to put them in. Everyone else opens on the workspace
+ * matching the first capability they hold, in the order `workspacesFor` uses.
  *
- * The training provider's fallback is still `/pending`, which is the honest page for
- * an account whose role has no workspace. It is simply no longer where a training
- * provider lands, because the module behind those four tabs now exists.
+ * An account with no capability at all — a brand-new signup — lands on the capability
+ * dashboard, which is the honest place for it: there is nothing to show them yet, and
+ * sending them to an empty worker dashboard would imply they had one.
  */
-export function homeFor(role: UserRole): string {
-  switch (role) {
-    case 'employer':
-      return '/employer';
-    case 'admin':
-      return '/admin';
-    case 'training_provider':
-      return '/trainer';
-    case 'worker':
-      return '/dashboard';
-    default:
-      return '/pending';
-  }
+export function homeFor(input: {
+  capabilities: readonly UserCapability[];
+  isAdmin?: boolean;
+}): string {
+  if (input.isAdmin) return '/admin';
+  const first = workspacesFor(input.capabilities)[0];
+  return first ? first.href : '/capabilities';
+}
+
+/**
+ * The navigation for an account.
+ *
+ * The tab row follows the *primary* workspace — the one they landed on — and everything
+ * else is reachable from the switcher in the header. Putting four workspaces in a phone's
+ * bottom bar would leave no room for the labels, and the switcher is already on every
+ * screen.
+ */
+export function navFor(input: {
+  capabilities: readonly UserCapability[];
+  isAdmin?: boolean;
+  /** The workspace being looked at, when it is not the first one held. */
+  active?: UserCapability | null;
+}): NavItem[] {
+  if (input.isAdmin) return ADMIN_NAV;
+
+  const held = workspacesFor(input.capabilities);
+  const primary = held.find((w) => w.id === input.active) ?? held[0];
+  if (!primary) return NO_CAPABILITY_NAV;
+
+  const base = NAV_BY_WORKSPACE[primary.id];
+  const settings = WORKSPACES[primary.id];
+
+  // The settings tab is appended rather than hand-written into each array, so a
+  // workspace cannot forget it and the label follows the workspace instead of being
+  // copied four times. It is also what answers "how do I edit *this* role's details":
+  // one button, meaning whatever the open workspace calls it.
+  if (base.some((item) => item.href === settings.settingsHref)) return base;
+
+  return [
+    ...base,
+    {
+      href: settings.settingsHref,
+      label: settings.settingsLabel,
+      mobileLabel: settings.settingsMobileLabel,
+      icon: 'settings',
+    },
+  ];
+}
+
+/**
+ * True when this account may open this area.
+ *
+ * The client-side half of `requireCapability` on the server, and only the half: it decides
+ * what to draw, never what is reachable. Every route re-checks on the server, because a
+ * page that is merely hidden is not a permission.
+ */
+export function can(
+  capabilities: readonly UserCapability[],
+  capability: UserCapability,
+): boolean {
+  return capabilities.includes(capability);
 }
 
 /**
@@ -116,16 +268,17 @@ const ADMIN_NAV: NavItem[] = [
 ];
 
 /**
- * Training providers live in the three places doc/05 §C names, plus a home.
+ * What a brand-new account sees.
  *
- * Roster, issuer, and demand are the module: who is on the books, what an instructor
- * has signed off, and what the market is short of. The fourth tab is the dashboard
- * that answers the question an institute opens the app with — how many students,
- * how many answers outstanding — before it goes to do any of the three.
- *
- * The issuer tab is the one an instructor lives in, so it gets the short mobile
- * label; "Milestone issuer" is unreadable at the width of a thumb-sized tab.
+ * One destination, because there is exactly one thing to do: choose a capability. Showing
+ * a worker dashboard full of empty states would imply a work profile that does not exist
+ * yet, which is the confusing version of this screen.
  */
+const NO_CAPABILITY_NAV: NavItem[] = [
+  { href: '/roles', label: 'Get started', icon: 'capabilities' },
+  { href: '/profile', label: 'Profile', icon: 'profile' },
+];
+
 const TRAINER_NAV: NavItem[] = [
   { href: '/trainer', label: 'Dashboard', mobileLabel: 'Home', icon: 'home' },
   { href: '/trainer/roster', label: 'Student roster', mobileLabel: 'Roster', icon: 'roster' },
@@ -133,18 +286,27 @@ const TRAINER_NAV: NavItem[] = [
   { href: '/trainer/demand', label: 'Market demand', mobileLabel: 'Demand', icon: 'demand' },
 ];
 
-const PLACEHOLDER_NAV: NavItem[] = [
-  { href: '/pending', label: 'Workspace', icon: 'workspace' },
-  { href: '/profile', label: 'Profile', icon: 'profile' },
+/**
+ * A student's own training record.
+ *
+ * Two tabs, because that is genuinely all there is: what the institute has recorded, and
+ * where to change which capabilities the account holds. The credentials page *is* the
+ * trainee dashboard — it answers "how am I doing" for somebody whose work history lives on
+ * a different workspace entirely.
+ */
+const TRAINEE_NAV: NavItem[] = [
+  { href: '/credentials', label: 'My credentials', mobileLabel: 'Home', icon: 'home' },
 ];
 
-export function navFor(role: UserRole): NavItem[] {
-  if (role === 'worker') return WORKER_NAV;
-  if (role === 'employer') return EMPLOYER_NAV;
-  if (role === 'admin') return ADMIN_NAV;
-  if (role === 'training_provider') return TRAINER_NAV;
-  return PLACEHOLDER_NAV;
-}
+/** Which tab row belongs to which workspace. */
+const NAV_BY_WORKSPACE: Record<UserCapability, NavItem[]> = {
+  worker: WORKER_NAV,
+  trainee: TRAINEE_NAV,
+  training_provider: TRAINER_NAV,
+  employer: EMPLOYER_NAV,
+};
+
+/** The capabilities page is reachable from every workspace, so it appears in the menu. */
 
 /**
  * What lives in the account menu.
@@ -186,8 +348,25 @@ export const ACCOUNT_MENU: ReadonlyArray<MenuGroup> = [
 ];
 
 /**
- * The words under a member's name in the account menu when they have no
- * organisation: the role, in sentence case ("Worker", "Employer").
+ * The words under a member's name in the account menu.
+ *
+ * Their capabilities, in sentence case, because that is what describes them. A person who
+ * is an electrician, a student and a business owner should not be labelled by whichever
+ * one the code happened to check first.
+ */
+export function capabilityLabel(capabilities: readonly UserCapability[]): string {
+  if (capabilities.length === 0) return 'No workspace yet';
+  return capabilities
+    .map((capability) => {
+      const spaced = capability.replace(/_/g, ' ');
+      return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+    })
+    .join(' · ');
+}
+
+/**
+ * The single word for a role, kept for the places that genuinely have one — an
+ * administrator, or a page that is specific to one kind of account.
  */
 export function roleLabel(role: UserRole): string {
   const spaced = String(role).replace(/_/g, ' ');

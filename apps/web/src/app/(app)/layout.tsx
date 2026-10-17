@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import { AppShell } from '@/components/shell/AppShell';
-import { homeFor, navFor, roleLabel } from '@/lib/navigation';
+import { capabilityLabel, homeFor, navFor } from '@/lib/navigation';
 import { currentProfile } from '@/lib/server/api';
 import { getInvitationInbox, getNotifications } from '@/lib/server/shell-data';
 
@@ -23,22 +23,31 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   if (!profile) redirect('/login');
 
   const [pendingInvitations, unreadNotifications] = await Promise.all([
-    pendingInvitationsFor(profile.role),
-    unreadNotificationsFor(profile.role),
+    // Both badges are capability-gated rather than role-gated, because the person who
+    // receives an invitation is a worker and the person who sent one is an employer — and
+    // somebody who is both now has both, which the old single-role check could not
+    // express at all.
+    profile.capabilities.includes('worker') ? pendingInvitationsFor('worker') : 0,
+    profile.capabilities.length > 0 ? unreadNotificationsFor('worker') : 0,
   ]);
 
   return (
     <AppShell
-      home={homeFor(profile.role)}
-      items={navFor(profile.role)}
+      home={homeFor(profile)}
+      items={navFor(profile)}
+      // Both switchers need the full set, including capabilities not yet held: tapping one
+      // is how somebody finds out there is something to set up.
+      capabilities={profile.capabilities}
       account={{
         name: profile.fullName,
         // No email on `ProfileResponse` by design: the organisation if there is
-        // one, otherwise the role.
-        subtitle: profile.organizationName?.trim() || roleLabel(profile.role),
+        // one, otherwise what the person can do. A Kojo who is an electrician, a student
+        // and a business owner should not be labelled by whichever check ran first.
+        subtitle:
+          profile.organizationName?.trim() || capabilityLabel(profile.capabilities),
         avatarUrl: profile.avatarUrl,
       }}
-      showNotifications={profile.role === 'worker' || profile.role === 'employer'}
+      showNotifications={profile.capabilities.length > 0}
       pendingInvitations={pendingInvitations}
       unreadNotifications={unreadNotifications}
     >

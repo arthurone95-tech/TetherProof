@@ -153,6 +153,31 @@ export interface MilestoneState {
 export const EMPTY_MILESTONE: MilestoneState = {};
 
 /**
+ * Result of activating a capability, and of creating a business.
+ *
+ * Separate from `FormState` because these two are the only forms on the page that are
+ * "grant me something" rather than "save me something", and the success copy for them is
+ * about what happens next rather than about something being stored.
+ */
+export interface CapabilityState {
+  error?: string;
+  field?: 'capability' | 'name';
+  done?: boolean;
+  /**
+   * Whether the activation actually granted it.
+   *
+   * `done` is true whenever the request did not fail, which includes a capability the
+   * server declined to self-serve. This is the flag that means "you now hold it", and the
+   * two are kept apart precisely so one cannot be mistaken for the other.
+   */
+  granted?: boolean;
+}
+
+export const EMPTY_CAPABILITY: CapabilityState = {};
+
+export const EMPTY_BUSINESS: CapabilityState = {};
+
+/**
  * Result of editing an existing log entry.
  *
  * A separate, smaller state from `ProofFormState`: editing sends no media and

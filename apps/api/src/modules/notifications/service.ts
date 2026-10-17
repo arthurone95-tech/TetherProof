@@ -1,5 +1,5 @@
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
-import type { NotificationItem, NotificationsResponse, UserRole } from '@tetherproof/shared';
+import type { NotificationItem, NotificationsResponse, UserCapability } from '@tetherproof/shared';
 import { db } from '../../db/client.js';
 import { notifications } from '../../db/schema.js';
 import { workerExpiringLinks } from '../proofs/service.js';
@@ -19,7 +19,7 @@ import { workerExpiringLinks } from '../proofs/service.js';
  */
 export async function listNotifications(
   userId: string,
-  role: UserRole,
+  capabilities: readonly UserCapability[],
 ): Promise<NotificationsResponse> {
   const [rows, [unread]] = await Promise.all([
     db
@@ -47,7 +47,7 @@ export async function listNotifications(
   return {
     notifications: items,
     unreadCount: unread?.count ?? 0,
-    expiring: role === 'worker' ? await workerExpiringLinks(userId) : [],
+    expiring: capabilities.includes('worker') ? await workerExpiringLinks(userId) : [],
   };
 }
 

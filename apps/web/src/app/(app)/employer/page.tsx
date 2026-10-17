@@ -17,6 +17,7 @@ import type { EmployerOverviewResponse, EmployerVerificationStatus } from '@teth
 import { Banner } from '@/components/ui/Banner';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 import { apiServer, currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 
 export const metadata: Metadata = {
   title: 'Employer dashboard — TetherProof',
@@ -69,8 +70,7 @@ const TONES: Record<Tone, { box: string; chip: string }> = {
 export default async function EmployerDashboardPage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role === 'worker') redirect('/dashboard');
-  if (user.role !== 'employer') redirect('/pending');
+  if (!user.capabilities.includes('employer')) redirect(homeFor(user));
 
   let overview: EmployerOverviewResponse | null = null;
   try {

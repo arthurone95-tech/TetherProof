@@ -12,14 +12,112 @@ This document defines the relational database schema, tables, fields, and relati
 ### A. Users Table (`users`)
 Application-level user records for all user types. Identity and credential data is **not** stored here: it lives in Supabase Auth (`auth.users`), and this table mirrors only that identity.
 * `id` (UUID, Primary Key, Foreign Key referencing `auth.users.id`)
-* `role` (ENUM: `worker`, `employer`, `training_provider`, `admin`)
 * `created_at` (TIMESTAMP)
 * `updated_at` (TIMESTAMP)
 
-> **Supabase Auth model.** Email addresses, phone numbers, and password hashes are owned by `auth.users` and are deliberately not duplicated here, so identity data has exactly one source of truth. A database trigger on `auth.users` creates the row here and keeps `role` in step with the server-controlled `app_metadata.role` claim.
+> **The `role` column was removed by migration `0013_drop_user_role.sql`.** It held a single
+> value, so a person could be a worker, a student at an institute, and the owner of a
+> business that hires — but only one of them at a time. That is three accounts and three
+> portfolios that could never be joined. Authorisation now reads `user_capabilities` (section
+> A2), and the column was dropped rather than deprecated so there is no second source of
+> truth that could be wrong for exactly the people this change exists to serve.
+>
+> The removal is deliberately separated in time from the migration that introduces
+> `user_capabilities`. `0012_multi_capability.sql` only **adds** — it leaves `users.role` and
+> the half of `sync_user_role()` that maintains it in place, so the application running at the
+> time is entirely unaffected. `0013_drop_user_role.sql` removes both, and must not run until
+> the multi-capability code is deployed. See `doc/13` E-062 for why there is no other safe
+> ordering.
+>
+> The `user_role` PostgreSQL enum type still exists — dropping an enum is a separate and
+> riskier operation, and it is referenced by the historical migrations that produced
+> today's data — but nothing reads from or writes to it.
+
+> **Supabase Auth model.** Email addresses, phone numbers, and password hashes are owned by `auth.users` and are deliberately not duplicated here, so identity data has exactly one source of truth. A database trigger on `auth.users` creates the row here and grants whatever capability is named in the server-controlled `app_metadata.role` claim. It **grants only** — it never revokes — because a claim naming one capability must not silently strip the others a person holds.
+>
+> Two triggers call it and neither is ever changed: `on_auth_user_created` (AFTER INSERT) and `on_auth_user_role_changed` (AFTER UPDATE OF `raw_app_meta_data`). The second is why the trigger grants rather than sets: it fires whenever an administrator edits any part of the claim metadata, and a replace-semantics function would strip capabilities the claim does not mention.
+
+### A2. User Capabilities Table (`user_capabilities`)
+What one account is authorised to do. Replaces the `users.role` column.
+* `user_id` (UUID, Foreign Key referencing `users.id`, **On Delete Cascade**, Primary Key part)
+* `capability` (ENUM: `worker`, `employer`, `training_provider`, `trainee`, Primary Key part)
+* `grant_source` (ENUM: `self`, `legacy`, `enrolment`, `business`, `admin`, `registration`)
+* `granted_at` (TIMESTAMP)
+* `granted_by` (UUID, Foreign Key referencing `users.id`, **On Delete Set Null**, Nullable)
+
+The composite primary key `(user_id, capability)` makes holding two capabilities two rows and
+holding the same one twice impossible by construction rather than by a unique index somebody
+could forget to add.
+
+**`admin` is deliberately not a capability.** It is a platform role rather than something a
+person does, it is read from the server-controlled `app_metadata.role` claim, and it has never
+been self-assignable — `doc/13` E-024 is the record of what happens when that boundary is
+crossed. Because it is not in this table there is no row anybody could insert and no request
+body that could name it.
+
+`grant_source` is recorded rather than inferred so an access review can tell an inherited grant
+from a deliberate one. `legacy` is the `0012` backfill: an account that already held a role
+keeps exactly what it had, and saying so is more honest than implying somebody granted it.
+
+Row Level Security: enabled **and forced**; the only policy is `SELECT` scoped to
+`user_id = auth.uid()`. A capability list is an authorisation decision, and a browser key that
+could read another account's would be a way to enumerate who holds employer rights. There is no
+INSERT policy at all — granting is a service-role operation.
+
+### A3. Businesses Table (`businesses`)
+A business that hires through TetherProof.
+* `id` (UUID, Primary Key)
+* `name` (VARCHAR(200))
+* `owner_user_id` (UUID, Foreign Key referencing `users.id`, **On Delete Cascade**)
+* `status` (ENUM: `pending`, `approved`, `rejected`, Default: `pending`)
+* `reviewed_by` (UUID, Foreign Key referencing `users.id`, **On Delete Set Null**, Nullable)
+* `reviewed_at` (TIMESTAMP, Nullable)
+* `note` (VARCHAR(200), Nullable — shown to the owner; never a contact detail)
+* `created_at`, `updated_at` (TIMESTAMP)
+
+A real entity rather than a label on a person, because the owner's personal worker identity
+stays separate from the business's hiring permissions. Kojo the electrician and "Kojo Electrical
+Services" are different things that share an owner, and only the second one carries hiring
+rights.
+
+`status` mirrors `employer_approvals` deliberately: an approval is a row with a reviewer, a time
+and an optional note, not a boolean, because "approved: yes" becomes indistinguishable from
+"approved by a colleague last quarter". Creating a business is open to any account so there is
+somebody able to approve — the same reasoning that left employer self-registration open, and why
+a pending business is a real state rather than a broken one.
+
+Row Level Security: enabled **and forced**; `SELECT` for the owner and for anyone holding a
+membership. No INSERT/UPDATE policy — that is the API's decision, made with the service role.
+
+### A4. Business Memberships Table (`business_memberships`)
+Who may act for a business.
+* `id` (UUID, Primary Key)
+* `business_id` (UUID, Foreign Key referencing `businesses.id`, **On Delete Cascade**)
+* `user_id` (UUID, Foreign Key referencing `users.id`, **On Delete Cascade**)
+* `member_role` (ENUM: `owner`, `member`, Default: `member`)
+* `created_at` (TIMESTAMP)
+
+Unique on `(business_id, user_id)`. Doubling a membership would double the employer surface,
+the same reasoning as the unique index on `direct_offers`.
+
+A membership is what grants the `employer` capability, so this table is the answer to "why may
+this person hire?" — and revoking a membership takes the capability away again, which is why it
+is a row rather than a flag on the business.
+
+Row Level Security: enabled **and forced**; `SELECT` for the member and for the business owner.
+No INSERT/UPDATE/DELETE policy at all, so the table is service-role-only by construction.
+
+> **Stated boundary (`doc/13` E-056).** Business *records* — job specs, saved candidates,
+> invitations — are still keyed on the person rather than the business. Somebody running two
+> businesses sees one set of employer records. Threading `business_id` through those tables is a
+> larger change to a working, tested module and was judged out of scope for the "simple
+> business workspace" the design asked for. The business is the authorisation vehicle and the
+> display identity; if two-business separation is needed it is a migration on top of this one,
+> not a rewrite of it.
 
 ### B. Profiles Table (`profiles`)
-Stores extended user details depending on their role.
+Stores extended user details. Which sections appear is decided by the capability set, not by a
+single role.
 * `id` (UUID, Primary Key)
 * `user_id` (UUID, Foreign Key referencing `users.id`, Unique)
 * `full_name` (VARCHAR)

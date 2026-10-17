@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 import { Card } from '@/components/ui/Card';
 import { LogWorkForm } from './LogWorkForm';
 
@@ -20,7 +21,7 @@ export const metadata: Metadata = {
 export default async function WorkspacePage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role !== 'worker') redirect(user.role === 'employer' ? '/employer' : '/pending');
+  if (!user.capabilities.includes('worker')) redirect(homeFor(user));
 
   return (
     <div className="flex flex-col gap-6">

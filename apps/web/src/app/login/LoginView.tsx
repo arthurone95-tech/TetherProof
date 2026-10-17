@@ -30,12 +30,6 @@ const PANELS: Record<Panel, { heading: string; blurb?: string }> = {
   },
 };
 
-const ROLES = [
-  { value: 'worker', label: 'Worker' },
-  { value: 'employer', label: 'Employer' },
-  { value: 'training_provider', label: 'Training provider' },
-] as const;
-
 /**
  * Sign-in, registration, and code confirmation.
  *
@@ -250,8 +244,6 @@ export function LoginView() {
                 </div>
               </div>
 
-              <RolePicker />
-
               {registerState.error && !registerState.field ? (
                 <FormError message={registerState.error} />
               ) : null}
@@ -386,35 +378,6 @@ function Tabs({ panel, onChange }: { panel: Panel; onChange: (panel: Panel) => v
         </button>
       ))}
     </div>
-  );
-}
-
-/**
- * Role as three side-by-side choices instead of a dropdown, so every option is
- * visible without a click. They are real radio inputs, so the group is keyboard
- * and screen-reader operable and posts as `role` exactly as the select did.
- */
-function RolePicker() {
-  return (
-    <fieldset className="flex flex-col gap-1.5">
-      <legend className="mb-1.5 text-sm font-medium text-ink-900">I am signing up as</legend>
-      <div className="grid grid-cols-3 gap-2">
-        {ROLES.map((role) => (
-          <label key={role.value} className="cursor-pointer">
-            <input
-              type="radio"
-              name="role"
-              value={role.value}
-              defaultChecked={role.value === 'worker'}
-              className="peer sr-only"
-            />
-            <span className="flex min-h-12 items-center justify-center rounded-xl border border-brand-100 bg-white px-2 text-center text-sm leading-tight font-medium text-ink-600 transition-colors hover:border-brand-500 peer-checked:border-brand-600 peer-checked:bg-brand-50 peer-checked:font-semibold peer-checked:text-brand-700 peer-checked:ring-1 peer-checked:ring-brand-600 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-brand-600">
-              {role.label}
-            </span>
-          </label>
-        ))}
-      </div>
-    </fieldset>
   );
 }
 

@@ -9,21 +9,39 @@ export const USER_ROLES = ['worker', 'employer', 'training_provider', 'admin'] a
 export type UserRole = (typeof USER_ROLES)[number];
 
 /**
+ * What an account is authorised to do. Migration `0012`.
+ *
+ * This is the set that replaced a single `role` column. Kojo the electrician, a student
+ * at an institute, and the owner of a business that hires is one person holding three of
+ * these — not three accounts, and certainly not three portfolios that could never be
+ * joined into one.
+ *
+ * `admin` is deliberately absent and cannot be added here. It is a platform role rather
+ * than something a person does, it is read from the server-controlled `app_metadata.role`
+ * claim, and it has never been self-assignable: the registration endpoint writing that
+ * claim server-side while honouring a self-declared `admin` let anyone create an account
+ * satisfying `authorize('admin')`, approve any employer, and hand that employer the right
+ * to message workers. See `doc/13` E-024.
+ */
+export const USER_CAPABILITIES = ['worker', 'employer', 'training_provider', 'trainee'] as const;
+export type UserCapability = (typeof USER_CAPABILITIES)[number];
+
+/**
  * Roles an account may choose for itself when registering.
  *
- * `admin` is deliberately absent. The registration endpoint writes the role claim
- * server-side, so honouring a self-declared `admin` let anyone create an account
- * that satisfied `authorize('admin')`: they could then call the employer approval
- * endpoint and approve any employer account, which handed that employer the right
- * to send unsolicited invitations to workers. The whole approval gate was bypassable
- * by a single unauthenticated request.
+ * **Empty by design.** Registration no longer asks a new account to pick a job title: it
+ * creates one personal identity, and the person activates the capabilities they want from
+ * their dashboard afterwards. A signup that asked for a role is the same first-fork problem
+ * this change exists to remove, because whichever role was picked first would be the one
+ * the account had and the rest would need a second account.
  *
- * An admin is provisioned instead, by writing the claim directly against the auth
- * account (Supabase dashboard, or the service-role API). That requires an existing
- * credential with elevated access, which is the point.
+ * Kept as an exported name rather than deleted because the historical migrations
+ * (`0001`, `0002`) reference it and a future reader will look for it.
+ *
+ * `admin` was never in it, and now nothing self-declares anything at all.
  */
-export const SELF_REGISTER_ROLES = ['worker', 'employer', 'training_provider'] as const;
-export type SelfRegisterRole = (typeof SELF_REGISTER_ROLES)[number];
+export const SELF_REGISTER_ROLES = [] as readonly [];
+export type SelfRegisterRole = UserCapability;
 
 export const METADATA_STATUSES = ['pending', 'valid', 'flagged_ai_fake'] as const;
 export type MetadataStatus = (typeof METADATA_STATUSES)[number];

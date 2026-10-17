@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import type {
+  AdminBusinessesResponse,
   AdminEmployerListItem,
   AdminEmployersResponse,
   AdminProofReviewItem,
@@ -9,6 +10,8 @@ import type {
 } from '@tetherproof/shared';
 import { Card } from '@/components/ui/Card';
 import { apiServer, currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
+import { AdminBusinessRow } from './AdminBusinessRow';
 import { ApprovalForm } from './ApprovalForm';
 import { ProofReviewForm } from './ProofReviewForm';
 
@@ -44,13 +47,16 @@ const STATUS_STYLES: Record<EmployerVerificationStatus, { label: string; chip: s
 export default async function AdminPage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
-  if (user.role === 'worker') redirect('/dashboard');
-  if (user.role === 'employer') redirect('/employer');
-  if (user.role !== 'admin') redirect('/pending');
+  if (!user.isAdmin) redirect(homeFor(user));
 
-  const [response, reviews] = await Promise.all([
+  const [response, reviews, businesses] = await Promise.all([
     apiServer<AdminEmployersResponse>('/admin/employers'),
     apiServer<AdminProofReviewResponse>('/admin/proof-review'),
+    // The business queue, on the same console. A business decision and an employer
+    // decision are the same kind of judgement — has somebody looked at this organisation —
+    // so they belong on one screen rather than in two places an administrator has to
+    // remember to check.
+    apiServer<AdminBusinessesResponse>('/admin/businesses').catch(() => ({ businesses: [] })),
   ]);
 
   const pending = response.employers.filter((employer) => employer.status === 'pending');
@@ -64,6 +70,26 @@ export default async function AdminPage() {
 
   return (
     <div className="flex flex-col gap-8">
+      {businesses.businesses.length > 0 ? (
+        <section aria-labelledby="business-heading" className="flex flex-col gap-4">
+          <header className="flex flex-col gap-1">
+            <h1 id="business-heading" className="text-2xl font-bold text-ink-900">
+              Business approvals
+            </h1>
+            <p className="text-sm text-ink-600">
+              Hiring runs through an approved business. Approving one grants its owner the
+              employer capability; rejecting or queuing one takes it away again unless they
+              run another approved business.
+            </p>
+          </header>
+          <ul className="flex flex-col gap-2">
+            {businesses.businesses.map((business) => (
+              <AdminBusinessRow key={business.id} business={business} />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <section aria-labelledby="employer-heading" className="flex flex-col gap-6">
         <header className="flex flex-col gap-1">
           <h1 id="employer-heading" className="text-2xl font-bold text-ink-900">

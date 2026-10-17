@@ -53,11 +53,13 @@ import {
   profiles,
   trainerEnrolmentCodes,
   trainerStudents,
+  userCapabilities,
   users,
 } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
 import { createNotification } from '../../lib/notifications.js';
 import { buildDemandRows, demandTotals, type SearchCountRow, type SupplyCountRow } from './demand.js';
+import { grant } from '../capabilities/service.js';
 import { institutionFor, resolveIssuer } from './attribution.js';
 import type { IssueCredentialInput } from './schemas.js';
 
@@ -161,6 +163,21 @@ async function organizationNameFor(userId: string): Promise<string | null> {
     fullName: row?.fullName ?? null,
     authFullName: row?.authFullName ?? null,
   });
+}
+
+/**
+ * Grants the `trainee` capability, recording the institute that did it.
+ *
+ * Enrolment *is* the student capability, so this is the only route to it — which is what
+ * the agreed design asks for and what stops anybody claiming to be a student. It runs
+ * inside `redeemEnrolmentCode` rather than in the handler, so a future route that enrols
+ * somebody cannot forget the grant.
+ *
+ * `grantedBy` is the institute, so the capability has an identifiable grantor and an
+ * access review of "why can this person see a student record?" has an answer.
+ */
+async function grantTrainee(studentId: string, trainerId: string): Promise<void> {
+  await grant(studentId, 'trainee', 'enrolment', trainerId);
 }
 
 function toIso(value: Date | string): string {
@@ -282,6 +299,11 @@ export async function redeemEnrolmentCode(
     .insert(trainerStudents)
     .values({ trainerId: match.trainerId, studentId })
     .onConflictDoNothing({ target: [trainerStudents.trainerId, trainerStudents.studentId] });
+
+  // Enrolment is what grants the student capability. Inside this function rather than in
+  // the handler so that a future route enrolling somebody cannot forget it — and so the
+  // guarantee holds however the code path is reached.
+  await grantTrainee(studentId, match.trainerId);
 
   return {
     enrolled: true,
@@ -630,7 +652,13 @@ export async function getDemandInsights(
         declined: sql<number>`count(*) filter (where ${directOffers.status} = 'declined')::int`,
       })
       .from(directOffers),
-    db.select({ n: count() }).from(users).where(eq(users.role, 'training_provider')),
+    db
+      .select({ n: count() })
+      .from(users)
+      .innerJoin(
+        userCapabilities,
+        and(eq(userCapabilities.userId, users.id), eq(userCapabilities.capability, 'training_provider')),
+      ),
   ]);
 
   const inputs = {

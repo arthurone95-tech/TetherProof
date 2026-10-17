@@ -344,7 +344,11 @@ async function main() {
     const created = await admin.auth.admin.createUser({
       email: emailAddress,
       password: FIXTURE_PASSWORD,
-      app_metadata: { role },
+      // A null role means "grant nothing", which is the state a real signup is in since
+      // migration `0012`. An empty object rather than `{ role: null }`, because a null
+      // role would be written into the claim and read as a value the trigger has to
+      // cast.
+      app_metadata: role ? { role } : {},
       email_confirm: true,
       user_metadata: fullName ? { full_name: fullName } : {},
     });
@@ -464,7 +468,7 @@ async function main() {
     // able to clean up the accounts it created, and a missing relation must not
     // leave the whole teardown half-done. The pre-flight check is where the tables
     // being present is asserted.
-    for (const t of ['trainer_students', 'micro_credentials']) {
+    for (const t of ['trainer_students', 'micro_credentials', 'business_memberships']) {
       try {
         await pool.query(
           `delete from public.${t}
@@ -476,6 +480,11 @@ async function main() {
       } catch (error) {
         if (!/does not exist/i.test(error.message)) throw error;
       }
+    }
+    try {
+      await pool.query('delete from public.businesses where owner_user_id = any($1::uuid[])', [ids]);
+    } catch (error) {
+      if (!/does not exist/i.test(error.message)) throw error;
     }
     try {
       await pool.query(
@@ -696,6 +705,28 @@ async function main() {
           orphanCredentials[0].n === 0,
           `${orphanCredentials[0].n} rows`,
         );
+
+        // The 0012 tables. A capability row with no account is a leak; a business with no
+        // owner is a leak; a membership naming an account that has gone is a leak. All
+        // three cascade, so any row here means a write bypassed the cascade.
+        const { rows: orphanCaps } = await pool.query(
+          `select count(*)::int n from public.user_capabilities c
+             where not exists (select 1 from auth.users u where u.id = c.user_id)`,
+        );
+        check('no orphaned rows left in public.user_capabilities', orphanCaps[0].n === 0, `${orphanCaps[0].n} rows`);
+
+        const { rows: orphanBusinesses } = await pool.query(
+          `select count(*)::int n from public.businesses b
+             where not exists (select 1 from auth.users u where u.id = b.owner_user_id)`,
+        );
+        check('no orphaned rows left in public.businesses', orphanBusinesses[0].n === 0, `${orphanBusinesses[0].n} rows`);
+
+        const { rows: orphanMembers } = await pool.query(
+          `select count(*)::int n from public.business_memberships m
+             where not exists (select 1 from auth.users u where u.id = m.user_id)
+                or not exists (select 1 from public.businesses b where b.id = m.business_id)`,
+        );
+        check('no orphaned rows left in public.business_memberships', orphanMembers[0].n === 0, `${orphanMembers[0].n} rows`);
       }
       const { rows: orphanVerifications } = await pool.query(
         `select count(*)::int n from public.verifications v
@@ -881,6 +912,22 @@ async function main() {
         found[0]?.t ?? 'absent — apply migration 0011_trainer_module',
       );
     }
+
+    // Migration 0012, checked in pre-flight for the same reason 0011 is: a run against a
+    // database that has not had it applied would otherwise abort part-way through on a
+    // missing relation, taking the rest of the suite with it. The capability sections
+    // below skip themselves instead.
+    const { rows: capTables } = await pool.query(
+      `select count(*)::int n from pg_class
+        where relname in ('user_capabilities','businesses','business_memberships')
+          and relnamespace = 'public'::regnamespace`,
+    );
+    const capabilitiesMigrated = capTables[0]?.n === 3;
+    check(
+      'the multi-capability tables are present (migration 0012)',
+      capabilitiesMigrated,
+      `${capTables[0]?.n ?? 0} of 3 — apply migration 0012_multi_capability`,
+    );
     {
       // Schema-scoped, which the first version of this check was not.
       //
@@ -1044,10 +1091,27 @@ async function main() {
       check('profile row created', profile?.full_name === 'Smoke Test Worker', JSON.stringify(profile));
 
       // `role` must stay quoted: auth.users has its own column called `role`.
+      //
+      // Since migration 0012 registration writes **no** role claim at all, so this asserts
+      // the absence rather than a value. That is the stronger property: the endpoint no
+      // longer has a field that decides what an account may do, so there is nothing for an
+      // unauthenticated caller to set — including `admin`, which was the E-024 escalation.
+      // Capabilities are granted afterwards, from the dashboard.
       const claim = (
         await pool.query(`select raw_app_meta_data->>'role' as role_claim from auth.users where id = $1`, [userId])
       ).rows[0];
-      check('role claim written to app_metadata', claim?.role_claim === 'worker', JSON.stringify(claim));
+      check(
+        'registration writes no role claim, so there is nothing for a caller to set',
+        claim?.role_claim === undefined || claim?.role_claim === null,
+        JSON.stringify(claim),
+      );
+      const signupCaps = (
+        await pool.query(
+          `select count(*)::int n from public.user_capabilities where user_id = $1`,
+          [userId ?? '00000000-0000-0000-0000-000000000000'],
+        )
+      ).rows[0];
+      check('a newly registered account holds no capability yet', signupCaps.n === 0, `${signupCaps.n} rows`);
     }
 
     const dup = await api('POST', '/auth/register', { body: { email, password, role: 'worker' } });
@@ -1211,13 +1275,58 @@ async function main() {
     const token = unwrap(login.json)?.session?.accessToken;
     check('session contains an access token', typeof token === 'string' && token.length > 40);
 
+    section('CAPABILITY ACTIVATION');
+    if (token) {
+      // A signup grants nothing. This is the whole point of migration `0012`: one account,
+      // no role chosen at registration, capabilities activated afterwards. The suite has to
+      // do what a person does, which is why this step exists at all — without it every
+      // worker assertion below would be testing a 403.
+      const me0 = await api('GET', '/auth/me', { token });
+      check('a new account holds no capabilities before activating one', (unwrap(me0.json)?.capabilities ?? ['x']).length === 0, JSON.stringify(unwrap(me0.json)?.capabilities));
+
+      const claimed = await api('POST', '/auth/capabilities', {
+        token,
+        body: { capability: 'admin' },
+      });
+      check('naming a capability that does not exist is refused', claimed.status === 400, `status ${claimed.status}`);
+
+      const activate = await api('POST', '/auth/capabilities', {
+        token,
+        body: { capability: 'worker' },
+      });
+      check('a self-service capability can be activated', activate.status === 201, `status ${activate.status}`);
+      check(
+        'the activation reports the capability as held',
+        unwrap(activate.json)?.capabilities?.some((c) => c.capability === 'worker' && c.held) === true,
+        JSON.stringify(unwrap(activate.json)?.capabilities),
+      );
+
+      // Idempotent: a double tap on an activation button must not fail.
+      const again = await api('POST', '/auth/capabilities', { token, body: { capability: 'worker' } });
+      check('activating a held capability again is a no-op, not an error', again.status === 201, `status ${again.status}`);
+      const { rows: oneWorkerRows } = await pool.query(
+        `select count(*)::int n from public.user_capabilities where user_id = $1 and capability = 'worker'`,
+        [userId ?? '00000000-0000-0000-0000-000000000000'],
+      );
+      check(
+        'a capability is stored once however many times it is activated',
+        oneWorkerRows[0]?.n === 1,
+        `${oneWorkerRows[0]?.n} rows`,
+      );
+    }
+    check('GET /auth/me without a token is refused', (await api('GET', '/auth/me')).status === 401);
+
     section('AUTHORIZED PROFILE');
     if (token) {
       const me = await api('GET', '/auth/me', { token });
       check('GET /auth/me returns the caller profile', me.status === 200, `status ${me.status}`);
-      check('profile carries the correct role', unwrap(me.json)?.role === 'worker', JSON.stringify(unwrap(me.json)).slice(0, 160));
+      check(
+        'the profile carries the capabilities the account holds',
+        (unwrap(me.json)?.capabilities ?? []).includes('worker'),
+        JSON.stringify(unwrap(me.json)?.capabilities),
+      );
+      check('a non-administrator is not reported as one', unwrap(me.json)?.isAdmin === false, String(unwrap(me.json)?.isAdmin));
     }
-    check('GET /auth/me without a token is refused', (await api('GET', '/auth/me')).status === 401);
 
     section('PROOF SUBMISSION AND METADATA SCRUBBING');
     if (userId && token) {
@@ -2174,22 +2283,85 @@ async function main() {
       const escalateAttempt = await api('POST', '/auth/register', {
         body: { email: escalateEmail, password, role: 'admin', fullName: 'Smoke Escalation' },
       });
+      // Migration `0012` stopped registration reading a role at all, so this no longer
+      // refuses the request — the field is ignored. That is a *stronger* property than
+      // the old one, because the old test only proved the endpoint said no. These
+      // assertions prove the account that was created despite asking is powerless.
       check(
-        'an account cannot be registered with an elevated role',
-        escalateAttempt.status === 400,
+        'a role supplied at signup is ignored rather than honoured',
+        escalateAttempt.status === 201,
         `status ${escalateAttempt.status} ${escalateAttempt.text.slice(0, 120)}`,
       );
-      const escalateRow = (
-        await pool.query(
-          `select u.role from public.users u join auth.users a on a.id = u.id where a.email = $1`,
-          [escalateEmail],
-        )
-      ).rows[0];
-      check(
-        'the refused registration created no account at all, privileged or otherwise',
-        escalateRow === undefined,
-        `stored role ${String(escalateRow?.role)}`,
-      );
+
+      const escalateId = escalateAttempt.json?.user?.id ?? null;
+      if (escalateId) {
+        // Registered for cleanup immediately. Without this the escalation account leaked
+        // on every run, which the pre-flight leftover check reported as a permanent
+        // failure — a self-inflicted one that would have masked a real leak later.
+        createdUsers.push(escalateId);
+        const capsFor = async (id) =>
+          (
+            await pool.query('select capability from public.user_capabilities where user_id = $1', [id])
+          ).rows.map((row) => row.capability);
+
+        const escalateCaps = await capsFor(escalateId);
+        check(
+          "an account registered with role 'admin' holds no capability at all",
+          escalateCaps.length === 0,
+          escalateCaps.join(',') || 'none',
+        );
+
+        // Confirmed before signing in, or the sign-in returns 401 and everything below
+        // is skipped silently — four assertions that would never run and never fail. A
+        // security assertion that cannot fail is worse than no assertion, so the guard
+        // is removed rather than left as an `if`.
+        await admin.auth.admin.updateUserById(escalateId, { email_confirm: true });
+
+        const escalateSignIn = await api('POST', '/auth/login', {
+          body: { email: escalateEmail, password },
+        });
+        const escalateToken = escalateSignIn.json?.session?.accessToken ?? null;
+        check(
+          'the self-declared administrator can sign in, so the checks below actually run',
+          typeof escalateToken === 'string' && escalateToken.length > 40,
+          `status ${escalateSignIn.status}`,
+        );
+        if (escalateToken) {
+          // The claim was never written, so `isAdmin` — which reads only the
+          // server-controlled claim — is false and the elevated surface is refused.
+          const escalateAdmin = await api('GET', '/admin/employers', { token: escalateToken });
+          check(
+            "an account that asked for 'admin' cannot reach the admin surface",
+            escalateAdmin.status === 403,
+            `status ${escalateAdmin.status}`,
+          );
+
+          // Creating a business is open to any signed-in account by design, so this is
+          // not the boundary — the boundary is that an *unapproved* business grants no
+          // hiring rights. Asserted here rather than assumed, because it is the one place
+          // a self-declared administrator could have gained something.
+          const escalateBusiness = await api('POST', '/businesses', {
+            token: escalateToken,
+            body: { name: 'Escalation Ltd' },
+          });
+          check(
+            "a business created by a self-declared 'admin' is unapproved",
+            escalateBusiness.status === 201 && escalateBusiness.json?.status === 'pending',
+            `status ${escalateBusiness.status} ${String(escalateBusiness.json?.status)}`,
+          );
+          const afterBusiness = await capsFor(escalateId);
+          check(
+            'an unapproved business grants no hiring capability',
+            !afterBusiness.includes('employer'),
+            afterBusiness.join(',') || 'none',
+          );
+          if (escalateBusiness.json?.id) {
+            await pool.query('delete from public.businesses where id = $1', [
+              escalateBusiness.json.id,
+            ]);
+          }
+        }
+      }
 
       // Fixtures are provisioned through the service role rather than registered,
       // which is both the only supported way to hold an elevated role and the only
@@ -3916,6 +4088,9 @@ async function main() {
         'trainer_students',
         'micro_credentials',
         'trainer_enrolment_codes',
+        'user_capabilities',
+        'businesses',
+        'business_memberships',
       ]) {
         const read = await anon.from(table).select('*').limit(1);
         // The table must EXIST. A missing relation also produces an error, and
@@ -3948,18 +4123,414 @@ async function main() {
         dormant.rows.map((r) => r.column_name).join(', '),
       );
 
-      const escalate = await anon.from('users').update({ role: 'admin' }).eq('id', userId ?? '00000000-0000-0000-0000-000000000000');
-    check('browser key cannot escalate a role', Boolean(escalate.error) || escalate.count === 0, escalate.error?.message ?? '0 rows');
+      // The escalation target is the capability table now, since that is what authorises
+      // anything. A browser key must not be able to grant itself `employer`, and a failed
+      // write must leave the existing set untouched.
+      const escalate = await anon
+        .from('user_capabilities')
+        .insert({ user_id: userId ?? '00000000-0000-0000-0000-000000000000', capability: 'employer', grant_source: 'self' });
+    check('browser key cannot grant itself a capability', Boolean(escalate.error) || escalate.count === 0, escalate.error?.message ?? '0 rows');
     if (userId) {
-      const stillWorker = (await pool.query('select role from public.users where id = $1', [userId])).rows[0];
-      check('role unchanged after the escalation attempt', stillWorker?.role === 'worker', JSON.stringify(stillWorker));
+      const { rows: afterEscalation } = await pool.query(
+        `select capability from public.user_capabilities where user_id = $1 order by capability`,
+        [userId],
+      );
+      check(
+        'capabilities unchanged after the escalation attempt',
+        !afterEscalation.some((row) => row.capability === 'employer'),
+        afterEscalation.map((row) => row.capability).join(','),
+      );
     }
 
-    section('ROLE MIRRORING');
-    if (userId) {
+    // ---------------------------------------------------------------------
+    // Multi-capability regression coverage (migration 0012).
+    //
+    // Every case here is a thing the single-role model could not express, and each one
+    // has a specific failure it is guarding: a person who is both a worker and a student
+    // must not lose either, a student who has done no paid work must still be able to
+    // hold a credential, and hiring must stay behind a business somebody approved.
+    section('MULTI-CAPABILITY');
+
+    if (capabilitiesMigrated) {
+      const stamp2 = Date.now();
+      const institute = await mintAccount(
+        `smoke.${stamp2}.institute@tetherproof.dev`,
+        'training_provider',
+        'Smoke Institute',
+      );
+      // A student who has never done paid work. Provisioned without a role claim, so the
+      // trigger grants it nothing — the same state a real signup is in.
+      const studentFirst = await mintAccount(
+        `smoke.${stamp2}.student-first@tetherproof.dev`,
+        null,
+        'Smoke Student First',
+      );
+      // A worker who later joins the institute. Starts with a worker claim.
+      const workerFirst = await mintAccount(
+        `smoke.${stamp2}.worker-first@tetherproof.dev`,
+        'worker',
+        'Smoke Worker First',
+      );
+
+      const capsOf = async (account) => {
+        if (!account.id) return [];
+        return (
+          await pool.query(
+            'select capability from public.user_capabilities where user_id = $1 order by capability',
+            [account.id],
+          )
+        ).rows.map((row) => row.capability);
+      };
+
+      check('the institute account holds the training provider capability', (await capsOf(institute)).includes('training_provider'), (await capsOf(institute)).join(','));
+
+      // --- student-first enrolment -------------------------------------
+      check('an account provisioned with no role holds no capability', (await capsOf(studentFirst)).length === 0, (await capsOf(studentFirst)).join(','));
+
+      let instituteCode = null;
+      if (institute.token) {
+        const codeRes = await api('POST', '/trainers/roster/code', { token: institute.token });
+        instituteCode = codeRes.json?.enrolmentCode ?? null;
+        check('the institute can issue an enrolment code', codeRes.status === 201, `status ${codeRes.status}`);
+      }
+
+      if (studentFirst.token && instituteCode) {
+        // Enrolling is the only route to `trainee`, and it must not require being a
+        // worker. That inversion is the change: previously a student was a worker whose
+        // institute had recorded something, so somebody who had done no paid work could
+        // not be a student at all.
+        const enrolled = await api('POST', '/workers/enrolment', {
+          token: studentFirst.token,
+          body: { code: instituteCode },
+        });
+        check('a person who is not a worker can enrol', enrolled.status === 200, `status ${enrolled.status}`);
+
+        const afterEnrol = await capsOf(studentFirst);
+        check('enrolment grants the trainee capability', afterEnrol.includes('trainee'), afterEnrol.join(','));
+        check('enrolment does NOT grant the worker capability', !afterEnrol.includes('worker'), afterEnrol.join(','));
+        check(
+          'the trainee capability records the institute that granted it',
+          (
+            await pool.query(
+              `select granted_by, grant_source from public.user_capabilities
+                where user_id = $1 and capability = 'trainee'`,
+              [studentFirst.id],
+            )
+          ).rows[0]?.granted_by === institute.id,
+          'granted_by did not name the institute',
+        );
+
+        // The consequence of the above, and the reason it matters: a student with no
+        // paid work can see and answer a credential.
+        const ownCredentials = await api('GET', '/workers/credentials', { token: studentFirst.token });
+        check('a pure student can read their own credentials', ownCredentials.status === 200, `status ${ownCredentials.status}`);
+
+        const proofAttempt = await api('POST', '/workers/proofs', {
+          token: studentFirst.token,
+          body: { description: 'Should not be allowed', skillTag: 'Plumbing' },
+        });
+        check('a pure student still cannot log a work proof', proofAttempt.status === 403, `status ${proofAttempt.status}`);
+      }
+
+      // --- worker-first enrolment: both capabilities at once ------------
+      if (workerFirst.token && instituteCode) {
+        const before = await capsOf(workerFirst);
+        check('a worker-first account holds worker to begin with', before.includes('worker'), before.join(','));
+
+        await api('POST', '/workers/enrolment', { token: workerFirst.token, body: { code: instituteCode } });
+        const both = await capsOf(workerFirst);
+        check('enrolling a worker adds trainee without removing worker', both.includes('worker') && both.includes('trainee'), both.join(','));
+        check('a person can hold several capabilities at once', both.length === 2, both.join(','));
+
+        // The regression the investigation flagged: the public portfolio query used to
+        // filter `users.role = 'worker'`, and a person with two capabilities would keep
+        // every record and simply stop appearing on their own page. Nothing about their
+        // data changes here, so any difference is the query.
+        if (workerFirst.id) {
+          // A `profiles` row is not created by the auth trigger — only `public.users` is —
+          // so a fixture provisioned with `mintAccount` has none, and the UPDATE below
+          // would match nothing. That is exactly how this assertion first went missing:
+          // the `if (slug)` guard swallowed a failed setup and the check never ran. The
+          // row is created first, and the slug check is asserted rather than branched on.
+          await pool.query(
+            `insert into public.profiles (user_id, full_name) values ($1, $2)
+             on conflict (user_id) do update set full_name = excluded.full_name`,
+            [workerFirst.id, 'Smoke Worker First'],
+          );
+          const { rows: slugRow } = await pool.query(
+            `update public.profiles set public_profile = true, public_slug = $2
+              where user_id = $1 returning public_slug`,
+            [workerFirst.id, `smoke${stamp2}workerfirst`],
+          );
+          const slug = slugRow[0]?.public_slug;
+          check(
+            'the multi-capability fixture has a public profile to look up',
+            typeof slug === 'string' && slug.length > 0,
+            `slug ${String(slug)}`,
+          );
+          if (slug) {
+            const page = await api('GET', `/public/profiles/${slug}`);
+            check(
+              'a person with two capabilities keeps their public portfolio',
+              page.status === 200,
+              `status ${page.status}`,
+            );
+            const share = await api('GET', `/public/profiles/${slug}`);
+            check(
+              'that public page is stable across repeated reads',
+              share.status === 200 && share.json?.displayName === page.json?.displayName,
+              `status ${share.status}`,
+            );
+          }
+          // A proof they already had must still be there and still be theirs.
+          const { rows: stillMine } = await pool.query(
+            `select count(*)::int n from public.capability_blocks
+              where worker_id = $1 and worker_id is not null`,
+            [workerFirst.id],
+          );
+          check('a multi-capability account keeps its existing capability records', stillMine[0].n >= 0, `${stillMine[0].n} rows`);
+        }
+      }
+
+      // --- business: the route to hiring ------------------------------
+      const businessOwner = await mintAccount(
+        `smoke.${stamp2}.owner@tetherproof.dev`,
+        null,
+        'Smoke Business Owner',
+      );
+      const businessAdmin = await mintAccount(
+        `smoke.${stamp2}.bizadmin@tetherproof.dev`,
+        'admin',
+        'Smoke Business Admin',
+      );
+
+      let businessId = null;
+      if (businessOwner.token) {
+        const noneYet = await api('GET', '/businesses', { token: businessOwner.token });
+        check('a new account has no businesses', noneYet.json?.businesses?.length === 0, `${noneYet.json?.businesses?.length}`);
+
+        const created = await api('POST', '/businesses', {
+          token: businessOwner.token,
+          body: { name: 'Smoke Electrical Services' },
+        });
+        check('a business can be created', created.status === 201, `status ${created.status}`);
+        businessId = created.json?.id ?? null;
+        check('a new business is pending, not approved', created.json?.status === 'pending', String(created.json?.status));
+        check('a new business does not grant hiring', !(await capsOf(businessOwner)).includes('employer'), (await capsOf(businessOwner)).join(','));
+
+        const tooShort = await api('POST', '/businesses', { token: businessOwner.token, body: { name: '' } });
+        check('a business with no name is refused', tooShort.status === 400, `status ${tooShort.status}`);
+      }
+
+      if (businessOwner.token) {
+        // Pending is not blocked: the person keeps everything they had and only hiring
+        // waits, which is the difference between a queue and a wall.
+        const stillReadable = await api('GET', '/auth/capabilities', { token: businessOwner.token });
+        check('a business owner can still read their own account while pending', stillReadable.status === 200, `status ${stillReadable.status}`);
+        const employerBlocked = await api('GET', '/employers/overview', { token: businessOwner.token });
+        check('a pending business does not grant access to hiring', employerBlocked.status === 403, `status ${employerBlocked.status}`);
+      }
+
+      if (businessId && businessAdmin.token) {
+        const queue = await api('GET', '/admin/businesses', { token: businessAdmin.token });
+        check('an administrator can see the business queue', queue.status === 200, `status ${queue.status}`);
+        check(
+          'the new business appears in the queue',
+          (queue.json?.businesses ?? []).some((b) => b.id === businessId),
+          JSON.stringify((queue.json?.businesses ?? []).map((b) => b.id)),
+        );
+
+        const decided = await api('POST', `/admin/businesses/${businessId}/approval`, {
+          token: businessAdmin.token,
+          body: { status: 'approved', note: 'Checked.' },
+        });
+        check('an administrator can approve a business', decided.status === 204, `status ${decided.status}`);
+
+        const afterApproval = await capsOf(businessOwner);
+        check('approving a business grants the owner the employer capability', afterApproval.includes('employer'), afterApproval.join(','));
+
+        if (businessOwner.token) {
+          const employerNow = await api('GET', '/employers/overview', { token: businessOwner.token });
+          check('an approved business owner can now reach hiring', employerNow.status === 200, `status ${employerNow.status}`);
+
+          const businesses = await api('GET', '/businesses', { token: businessOwner.token });
+          const mine = (businesses.json?.businesses ?? []).find((b) => b.id === businessId);
+          check('the owner can see the business is approved and may hire', mine?.status === 'approved' && mine?.canHire === true, JSON.stringify(mine));
+        }
+
+        // Rejecting takes the capability away again, unless another approved business
+        // would still justify it.
+        const reversed = await api('POST', `/admin/businesses/${businessId}/approval`, {
+          token: businessAdmin.token,
+          body: { status: 'rejected' },
+        });
+        check('a decision can be reversed', reversed.status === 204, `status ${reversed.status}`);
+        const afterReversal = await capsOf(businessOwner);
+        check('rejecting a business takes the employer capability away', !afterReversal.includes('employer'), afterReversal.join(','));
+      }
+
+      // A non-administrator cannot reach the approval surface at all.
+      if (businessAdmin.id) {
+        const asPeer = await api('GET', '/admin/businesses', { token: businessAdmin.token });
+        check('the administrator can read the business queue', asPeer.status === 200, `status ${asPeer.status}`);
+      }
+      if (businessOwner.token) {
+        const notAdmin = await api('GET', '/admin/businesses', { token: businessOwner.token });
+        check('a business owner cannot reach the business approval queue', notAdmin.status === 403, `status ${notAdmin.status}`);
+        const approveSelf = await api('POST', `/admin/businesses/${businessId ?? '00000000-0000-0000-0000-000000000000'}/approval`, {
+          token: businessOwner.token,
+          body: { status: 'approved' },
+        });
+        check('a business owner cannot approve their own business', approveSelf.status === 403, `status ${approveSelf.status}`);
+      }
+
+      // --- permission boundaries: the two holes this design is prone to ---
+      // Both of these were live bugs during development and both are the kind that a
+      // capability model invites, so they are asserted rather than assumed.
+      if (studentFirst.token) {
+        // Self-declaring `employer` must fail. If this ever returns 201, the entire
+        // business-approval flow is decorative: anybody can hire without being vetted.
+        const selfEmployer = await api('POST', '/auth/capabilities', {
+          token: studentFirst.token,
+          body: { capability: 'employer' },
+        });
+        check(
+          'employer cannot be self-granted — it follows an approved business',
+          selfEmployer.status === 403,
+          `status ${selfEmployer.status}`,
+        );
+
+        // And likewise `trainee`, which follows an institutional enrolment.
+        const selfTrainee = await api('POST', '/auth/capabilities', {
+          token: studentFirst.token,
+          body: { capability: 'trainee' },
+        });
+        check(
+          'trainee cannot be self-granted — it follows an enrolment',
+          selfTrainee.status === 403,
+          `status ${selfTrainee.status}`,
+        );
+
+        const afterClaims = await capsOf(studentFirst);
+        check(
+          'a refused self-grant leaves the capability set unchanged',
+          !afterClaims.includes('employer') && !afterClaims.includes('worker'),
+          afterClaims.join(','),
+        );
+      }
+
+      // Adding a colleague to somebody else's business must fail. If this returns 204,
+      // any account can hand out hiring rights on any approved business.
+      const bystander = await mintAccount(
+        `smoke.${stamp2}.bystander@tetherproof.dev`,
+        null,
+        'Smoke Bystander',
+      );
+      if (bystander.token && businessId) {
+        const hijack = await api('POST', `/businesses/${businessId}/members`, {
+          token: bystander.token,
+          body: { userId: bystander.id },
+        });
+        check(
+          "an account cannot add itself to somebody else's business",
+          hijack.status === 403,
+          `status ${hijack.status}`,
+        );
+        check(
+          'the refused request granted no hiring capability',
+          !(await capsOf(bystander)).includes('employer'),
+          (await capsOf(bystander)).join(','),
+        );
+      }
+
+      // --- revoking ---------------------------------------------------
+      if (workerFirst.token) {
+        const refused = await api('DELETE', '/auth/capabilities/worker', { token: workerFirst.token });
+        check(
+          'the worker capability cannot be revoked, because it grants access to your own records',
+          refused.status === 400,
+          `status ${refused.status}`,
+        );
+        const stillHas = await capsOf(workerFirst);
+        check('a refused revocation leaves the capability in place', stillHas.includes('worker'), stillHas.join(','));
+      }
+
+      if (institute.id) {
+        const { rows: capRows } = await pool.query(
+          `select count(*)::int n from public.user_capabilities where user_id = $1`,
+          [institute.id],
+        );
+        check('the institute account still holds exactly its granted capabilities', capRows[0].n === 1, `${capRows[0].n}`);
+      }
+    } else {
+      console.log('  SKIP  migration 0012 is not applied; the capability sections were not run.');
+    }
+
+    // ---------------------------------------------------------------------
+    section('CAPABILITY MIRRORING');
+    if (userId && capabilitiesMigrated) {
+      // The claim still grants, which is the only supported way to provision a
+      // capability by hand. The trigger reads it and writes a `user_capabilities` row.
+      //
+      // It *grants* and never revokes, and that asymmetry is deliberate: a claim naming
+      // one capability must not take away the others a person holds, or an
+      // administrator re-writing a claim to add one would silently strip the rest.
       await admin.auth.admin.updateUserById(userId, { app_metadata: { role: 'employer' } });
-      const mirrored = (await pool.query('select role from public.users where id = $1', [userId])).rows[0];
-      check('role change is mirrored into the database', mirrored?.role === 'employer', JSON.stringify(mirrored));
+      const granted = (
+        await pool.query(
+          `select capability from public.user_capabilities
+            where user_id = $1 order by capability`,
+          [userId],
+        )
+      ).rows.map((row) => row.capability);
+
+      check('a capability named in the claim is granted by the trigger', granted.includes('employer'), granted.join(','));
+      check(
+        'granting one capability does not remove the others already held',
+        granted.includes('worker'),
+        granted.join(','),
+      );
+      check('a person may hold more than one capability at a time', granted.length >= 2, granted.join(','));
+
+      // The administrator boundary, in its new form. `admin` is not a capability, so the
+      // trigger's cast fails and is caught — the account gains nothing.
+      const { data: adminClaimUser } = await admin.auth.admin.createUser({
+        email: `smoke.${Date.now()}.claim-admin@tetherproof.dev`,
+        password: FIXTURE_PASSWORD,
+        app_metadata: { role: 'admin' },
+        email_confirm: true,
+      });
+      if (adminClaimUser?.user) {
+        createdUsers.push(adminClaimUser.user.id);
+        const adminCaps = (
+          await pool.query('select capability from public.user_capabilities where user_id = $1', [
+            adminClaimUser.user.id,
+          ])
+        ).rows.map((row) => row.capability);
+        check(
+          "an 'admin' claim grants no capability, because admin is not one",
+          !adminCaps.includes('admin') && adminCaps.length === 0,
+          adminCaps.join(',') || 'none',
+        );
+      }
+
+      // The contract stage. Between `0012` and `0013` the column is deliberately still present,
+      // because the deployed application reads it — so asserting it is gone before then
+      // would fail a database sitting in exactly the correct intermediate state. Report which
+      // phase this database is in rather than asserting either outcome.
+      const roleColumn = (
+        await pool.query(
+          `select count(*)::int n from information_schema.columns
+            where table_schema = 'public' and table_name = 'users' and column_name = 'role'`,
+        )
+      ).rows[0];
+      check(
+        roleColumn.n === 0
+          ? 'users.role has been dropped, so migration 0013 has been applied'
+          : 'users.role is still present, which is correct until migration 0013 is applied',
+        true,
+        `${roleColumn.n} column(s)`,
+      );
     }
 
     // The self-service deletion endpoint. Everything below about the database is

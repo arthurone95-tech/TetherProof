@@ -21,6 +21,7 @@ import type { NotificationKind } from '@tetherproof/shared';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 import { markNotificationsRead, openNotification } from '@/lib/actions';
 import { currentProfile } from '@/lib/server/api';
+import { homeFor } from '@/lib/navigation';
 import { getNotifications } from '@/lib/server/shell-data';
 
 export const metadata: Metadata = {
@@ -46,7 +47,7 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { day: 'numeric', mont
 export default async function NotificationsPage() {
   const profile = await currentProfile();
   if (!profile) redirect('/login');
-  if (profile.role !== 'worker' && profile.role !== 'employer') redirect('/pending');
+  if (!profile.capabilities.length) redirect(homeFor(profile));
 
   let feed: NotificationsResponse | null = null;
   try {
