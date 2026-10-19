@@ -8,6 +8,15 @@ import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 interface BackHeaderProps {
   /** Where the back button lands when there is nothing to go back to. */
   home: string;
+  /**
+   * A fixed destination for the back button, when one exists.
+   *
+   * Most sub-pages are genuinely reached from several places, so history is right for
+   * them. An individual work log is not: it is one record reached from the Logs list,
+   * and going back to wherever the person happened to come from can strand them with no
+   * route to the record they were looking at.
+   */
+  backTo?: string;
 }
 
 /**
@@ -26,12 +35,16 @@ interface BackHeaderProps {
  * reader; a title with no match falls back to "Back" rather than rendering an
  * empty header for a route the map does not know.
  */
-export function BackHeader({ home }: BackHeaderProps) {
+export function BackHeader({ home, backTo }: BackHeaderProps) {
   const pathname = usePathname();
   const router = useRouter();
   const title = subpageTitleFor(pathname);
 
   function goBack(): void {
+    if (backTo) {
+      router.push(backTo);
+      return;
+    }
     // `router.back()` navigates the browser's own history, which is exactly
     // what a back icon should do; but on a page that was entered directly the
     // history stack is empty and the call is a no-op. `history.length` is only

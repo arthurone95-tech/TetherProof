@@ -33,7 +33,9 @@ export function OrganizationForm({
   const [editing, setEditing] = useState(false);
   const [prefill, setPrefill] = useState(() => splitGps(locationGps));
   // Bumped when a device fix arrives so the inputs remount on the new value.
-  const [seed, setSeed] = useState(0);
+  // Bumped to force the hidden inputs to remount on a new value. Unread on purpose: they
+  // are uncontrolled, and a submitted form keeps whatever it held.
+  const [, setSeed] = useState(0);
 
   useEffect(() => {
     if (state.done === true) setEditing(false);
@@ -43,6 +45,18 @@ export function OrganizationForm({
     const fix = await locate();
     if (!fix) return;
     setPrefill([fix.latitude.toFixed(6), fix.longitude.toFixed(6)]);
+    setSeed((n) => n + 1);
+  }
+
+  /**
+   * Removes the stored location.
+   *
+   * Now the only way to express "no location", since the coordinates can no longer be
+   * typed. Searches then run without a distance filter, which is a real choice rather than
+   * an absence.
+   */
+  function clearLocation(): void {
+    setPrefill(['', '']);
     setSeed((n) => n + 1);
   }
 
@@ -103,31 +117,15 @@ export function OrganizationForm({
         <p className="mb-4 text-sm text-ink-600">
           Distances in search results are measured from here.{' '}
           {locationGps
-            ? 'Currently set. Clear both fields below to turn it off.'
+            ? 'Currently set.'
             : 'Nothing is set yet, so distance is not part of any search.'}
         </p>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            key={`latitude-${seed}`}
-            name="latitude"
-            label="Latitude"
-            inputMode="decimal"
-            defaultValue={prefill[0]}
-            step="any"
-            error={state.field === 'latitude' ? state.error : undefined}
-          />
-          <Field
-            key={`longitude-${seed}`}
-            name="longitude"
-            label="Longitude"
-            inputMode="decimal"
-            defaultValue={prefill[1]}
-            step="any"
-          />
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+        {/* The latitude and longitude inputs are gone, for the same reason as in the worker
+            profile: "Use my location" sets the same value, and nothing else in the app asks
+            a person to type a pair of six-digit numbers. The fields the action reads are
+            still submitted, just not on screen. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <button
             type="button"
             onClick={fillFromDevice}
@@ -136,10 +134,20 @@ export function OrganizationForm({
           >
             {locateState === 'locating' ? 'Finding you…' : 'Use my location'}
           </button>
-          <p className="text-sm text-ink-600">
-            Decimal degrees, for example 5.6037 and -0.1870. Clear both to remove it.
-          </p>
+          {locationGps ? (
+            <button
+              type="button"
+              onClick={clearLocation}
+              className="min-h-11 rounded-xl px-3 text-sm font-semibold text-ink-600 transition-colors hover:text-ink-900"
+            >
+              Clear
+            </button>
+          ) : null}
+          <p className="text-sm text-ink-600">Not sharing is fine.</p>
         </div>
+
+        <input type="hidden" name="latitude" value={prefill[0]} readOnly />
+        <input type="hidden" name="longitude" value={prefill[1]} readOnly />
 
         {locateMessage(locateState) ? (
           <p role="status" className="mt-2 text-sm text-ink-600">

@@ -1,12 +1,14 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import Link from 'next/link';
 import type { UserCapability } from '@tetherproof/shared';
 import { Field } from '@/components/ui/Field';
 import { FormSuccess } from '@/components/ui/FormSuccess';
 import { SubmitButton } from '@/components/ui/SubmitButton';
 import { activateCapability, saveProfile } from '@/lib/actions';
+import { locateMessage, useGeolocation } from '@/lib/use-geolocation';
+
 import { EMPTY_CAPABILITY, EMPTY_FORM } from '@/lib/form-state';
 
 /**
@@ -56,6 +58,22 @@ export function CapabilityConfigure({
   const needsName = capability === 'worker' || capability === 'trainee';
   const needsInstitute = capability === 'training_provider';
 
+  /*
+   * The location is held as a pair of strings rather than two visible inputs, and is seeded
+   * from whatever the profile already had — so somebody returning to finish setup does not
+   * lose the point they set earlier, and somebody new starts empty.
+   */
+  const [coords, setCoords] = useState<string[]>(
+    latitude && longitude ? [latitude, longitude] : ['', ''],
+  );
+  const { state: locateState, locate } = useGeolocation();
+
+  async function fillFromDevice(): Promise<void> {
+    const fix = await locate();
+    if (!fix) return;
+    setCoords([fix.latitude.toFixed(6), fix.longitude.toFixed(6)]);
+  }
+
   if (!needsName && !needsInstitute) return null;
 
   /*
@@ -96,23 +114,42 @@ export function CapabilityConfigure({
         />
       ) : null}
 
-      <Field
-        name="latitude"
-        label="Latitude"
-        defaultValue={latitude}
-        placeholder="5.6037"
-        inputMode="decimal"
-        error={state.field === 'latitude' ? state.error : undefined}
-        hint="Roughly where you work. Employers search by distance, so a rough point is enough. Leave both blank to skip it — searches then run without a distance filter."
-      />
+      {/*
+        No coordinate inputs, for the same reason as everywhere else in the app: the
+        location the person accepts is retrieved, not typed. "Use my location" sets the
+        value that is submitted underneath.
+      */}
+      <div className="flex flex-col gap-1.5">
+        <span className="text-sm font-medium text-ink-900">Where you work</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={fillFromDevice}
+            disabled={locateState === 'locating'}
+            className="inline-flex min-h-11 items-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {locateState === 'locating' ? 'Finding you…' : 'Use my location'}
+          </button>
+          <p className="text-xs text-ink-600">
+            Employers search by distance, so a rough point is enough. Not sharing is fine.
+          </p>
+        </div>
+      </div>
 
-      <Field
-        name="longitude"
-        label="Longitude"
-        defaultValue={longitude}
-        placeholder="-0.1870"
-        inputMode="decimal"
-      />
+      <input type="hidden" name="latitude" value={coords[0]} readOnly />
+      <input type="hidden" name="longitude" value={coords[1]} readOnly />
+
+      {locateState !== 'locating' && locateMessage(locateState) ? (
+        <p role="status" className="text-xs text-ink-600">
+          {locateMessage(locateState)}
+        </p>
+      ) : null}
+
+      {state.field === 'latitude' && state.error ? (
+        <p role="alert" className="text-sm font-semibold text-red-800">
+          {state.error}
+        </p>
+      ) : null}
 
       {state.error && !state.field ? (
         <p role="alert" className="text-sm font-semibold text-red-800">

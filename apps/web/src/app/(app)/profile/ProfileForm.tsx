@@ -65,10 +65,10 @@ export function ProfileForm({
   }, [state.done]);
 
   const [prefill, setPrefill] = useState(() => splitGps(locationGps));
-  // Bumped when a device fix arrives so the inputs remount on the new value.
-  // They are uncontrolled — a form that has been submitted keeps whatever the
-  // person typed — so there is no state to write the value into directly.
-  const [seed, setSeed] = useState(0);
+  // Bumped when a device fix arrives so the hidden inputs remount on the new value.
+  // The `seed` itself is not read: it exists only to force a remount, because the inputs
+  // are uncontrolled and a form that has been submitted keeps whatever it held.
+  const [, setSeed] = useState(0);
 
   // Whether the organisation field is shown, decided by the page from the capability set.
   // The form does not decide for itself, so the rule lives in one place.
@@ -77,6 +77,18 @@ export function ProfileForm({
     const fix = await locate();
     if (!fix) return;
     setPrefill([fix.latitude.toFixed(6), fix.longitude.toFixed(6)]);
+    setSeed((n) => n + 1);
+  }
+
+  /**
+   * Removes the stored location.
+   *
+   * Kept as an explicit action because "no location" is a real choice — searches then run
+   * without a distance filter — and it is now the only way to express it, since the
+   * coordinates can no longer be typed.
+   */
+  function clearLocation(): void {
+    setPrefill(['', '']);
     setSeed((n) => n + 1);
   }
 
@@ -195,32 +207,22 @@ export function ProfileForm({
           <fieldset className="rounded-xl border border-brand-100 p-4">
             <legend className="px-1 text-sm font-medium text-ink-900">Your location</legend>
             <p className="mb-4 text-sm text-ink-600">
-              Employers can narrow a search by distance, and yours is measured from this point.{' '}
-              {locationGps
-                ? 'Currently set. Clear both fields below to turn it off.'
-                : 'Nothing is set yet, so you are not filtered by distance.'}
+              Employers can narrow a search by distance, and yours is measured from this
+              point. {locationGps ? 'Currently set.' : 'Nothing is set yet, so you are not filtered by distance.'}
             </p>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field
-                key={`latitude-${seed}`}
-                name="latitude"
-                label="Latitude"
-                inputMode="decimal"
-                defaultValue={prefill[0]}
-                step="any"
-              />
-              <Field
-                key={`longitude-${seed}`}
-                name="longitude"
-                label="Longitude"
-                inputMode="decimal"
-                defaultValue={prefill[1]}
-                step="any"
-              />
-            </div>
+            {/*
+              The latitude and longitude inputs were removed. Nothing else changed: the
+              coordinates are still stored, still validated by the API and still used for
+              proximity search — they are just no longer typed by hand. "Use my location"
+              below sets the same value, and "Clear" removes it, which is the only reason a
+              person ever needed to enter a number here: to say "no location".
 
-            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+              Typing them invited a class of error with no upside. A mistyped pair is silently
+              a wrong place, which is worse than no place, and nothing in the old layout
+              signalled which of two six-digit numbers had been got wrong.
+            */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               <button
                 type="button"
                 onClick={fillFromDevice}
@@ -229,10 +231,22 @@ export function ProfileForm({
               >
                 {locateState === 'locating' ? 'Finding you…' : 'Use my location'}
               </button>
-              <p className="text-sm text-ink-600">
-                Decimal degrees, for example 5.6037 and -0.1870. Clear both to remove it.
-              </p>
+              {locationGps ? (
+                <button
+                  type="button"
+                  onClick={clearLocation}
+                  className="min-h-11 rounded-xl px-3 text-sm font-semibold text-ink-600 transition-colors hover:text-ink-900"
+                >
+                  Clear
+                </button>
+              ) : null}
+              <p className="text-sm text-ink-600">Not sharing is fine.</p>
             </div>
+
+            {/* Keeps the same form fields the action reads, so the location the person just
+                accepted is submitted without the inputs ever being on screen. */}
+            <input type="hidden" name="latitude" value={prefill[0]} readOnly />
+            <input type="hidden" name="longitude" value={prefill[1]} readOnly />
 
             {locateMessage(locateState) ? (
               <p role="status" className="mt-2 text-sm text-ink-600">

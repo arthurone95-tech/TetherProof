@@ -388,6 +388,11 @@ const SUBPAGE_TITLES: ReadonlyArray<readonly [prefix: string, title: string]> = 
   ['/about', 'About'],
   ['/terms', 'Terms & Conditions'],
   ['/privacy', 'Privacy Policy'],
+  // The trailing slash is deliberate: it matches an individual log and not the list. The
+  // list is a primary destination with its own tab, so it keeps the section header. Without
+  // this an individual log fell through to the section header and looked like a browser
+  // page rather than the same drill-down pattern the rest of the app uses.
+  ['/logs/', 'Log'],
 ];
 
 /**

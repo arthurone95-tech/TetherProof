@@ -69,7 +69,11 @@ export function AppHeader({
   const pathname = usePathname();
 
   const subpageTitle = subpageTitleFor(pathname);
-  if (subpageTitle) return <BackHeader home={home} />;
+  // /logs/<id> gets a fixed destination because an individual log is reached from the
+  // list, not from several places; anywhere else, history is the right answer.
+  if (subpageTitle) {
+    return <BackHeader home={home} backTo={pathname.startsWith('/logs/') ? '/logs' : undefined} />;
+  }
 
   // Home is the brand; anywhere else a primary section names itself. `home` is
   // matched exactly, so a sibling tab under an employer's `/employer` home — say

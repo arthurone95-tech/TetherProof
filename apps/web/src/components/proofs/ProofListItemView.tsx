@@ -99,7 +99,7 @@ const PILL_FOR_STATUS: Record<
 > = {
   pending: { label: 'Awaiting confirmation', className: 'bg-amber-50 text-amber-800' },
   verified: { label: 'Verified', className: 'bg-brand-50 text-brand-700' },
-  rejected: { label: 'Not confirmed', className: 'bg-red-50 text-red-800' },
+  rejected: { label: 'Rejected', className: 'bg-red-50 text-red-800' },
   // Two different states and two different words, because they are two different
   // claims. "Held for review" says the platform is waiting on a person and has
   // decided nothing. "Blocked" is a judgement a human made and can be appealed.

@@ -60,9 +60,6 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
   const [placeName, setPlaceName] = useState<string | null>(null);
   const [naming, setNaming] = useState(false);
   const [placeFailed, setPlaceFailed] = useState(false);
-  const [typingCoords, setTypingCoords] = useState(false);
-  const [draftLat, setDraftLat] = useState('');
-  const [draftLng, setDraftLng] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   // The location section's own message. It is separate from `notice` (which is
   // the evidence section's voice), so the two blocks can never repeat each
@@ -220,7 +217,6 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
     setGps(`${lat},${lon}`);
     setPlaceName(null);
     setPlaceFailed(false);
-    setTypingCoords(false);
     setCoordsNotice(null);
     await namePlace(lat, lon);
   }
@@ -264,52 +260,11 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
     }
   }
 
-  function openManualCoords(): void {
-    const [lat = '', lon = ''] = gps.split(',');
-    setDraftLat(lat);
-    setDraftLng(lon);
-    setTypingCoords(true);
-    setCoordsNotice(null);
-  }
-
-  /**
-   * Accepts a hand-typed pair, validating it with the same rule the submission
-   * repeats before it reaches the API, so a bad pair is fixed where it was typed.
-   */
-  function saveManualCoords(): void {
-    const lat = draftLat.trim();
-    const lon = draftLng.trim();
-    const candidate = `${lat},${lon}`;
-
-    if (!/^-?\d{1,3}(\.\d+)?,-?\d{1,3}(\.\d+)?$/.test(candidate)) {
-      setCoordsNotice('Enter coordinates as latitude, longitude — for example 5.6037,-0.1870.');
-      return;
-    }
-    const latNum = Number(lat);
-    const lonNum = Number(lon);
-    if (Math.abs(latNum) > 90 || Math.abs(lonNum) > 180) {
-      setCoordsNotice(
-        'Those coordinates are out of range (latitude −90 to 90, longitude −180 to 180).',
-      );
-      return;
-    }
-
-    setGps(candidate);
-    setPlaceName(null);
-    setPlaceFailed(false);
-    setTypingCoords(false);
-    setCoordsNotice(null);
-    void namePlace(lat, lon);
-  }
-
   function clearLocation(): void {
     nameRequestRef.current += 1;
     setGps('');
     setPlaceName(null);
     setPlaceFailed(false);
-    setTypingCoords(false);
-    setDraftLat('');
-    setDraftLng('');
     setCoordsNotice(null);
   }
 
@@ -465,7 +420,7 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
         */}
         <input type="hidden" name="submissionGps" value={gps} />
 
-        {!gps && !typingCoords ? (
+        {!gps ? (
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
@@ -474,13 +429,6 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
               className="inline-flex min-h-11 items-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {locateState === 'locating' ? 'Finding you…' : 'Use my location'}
-            </button>
-            <button
-              type="button"
-              onClick={openManualCoords}
-              className="inline-flex min-h-11 items-center rounded-xl border border-brand-100 px-4 text-sm font-semibold text-ink-600 transition-colors hover:border-brand-600 hover:text-brand-700"
-            >
-              Type coordinates
             </button>
             <span className="text-sm text-ink-600">Not sharing is fine.</span>
           </div>
@@ -511,15 +459,6 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
               >
                 {locateState === 'locating' ? 'Finding you…' : 'Update my location'}
               </button>
-              {!typingCoords ? (
-                <button
-                  type="button"
-                  onClick={openManualCoords}
-                  className="inline-flex min-h-11 items-center rounded-xl border border-brand-100 px-4 text-sm font-semibold text-ink-600 transition-colors hover:border-brand-600 hover:text-brand-700"
-                >
-                  Type coordinates
-                </button>
-              ) : null}
               <button
                 type="button"
                 onClick={clearLocation}
@@ -528,56 +467,6 @@ function LogWorkFormBody({ onLogAnother }: { onLogAnother: () => void }) {
                 Clear
               </button>
             </div>
-          </div>
-        ) : null}
-
-        {typingCoords ? (
-          <div className="mt-3 rounded-xl border border-brand-100 p-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-ink-900">
-                Latitude
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  autoComplete="off"
-                  value={draftLat}
-                  onChange={(event) => setDraftLat(event.target.value)}
-                  placeholder="5.6037"
-                  className="min-h-11 rounded-xl border border-brand-100 bg-white px-3 text-base text-ink-900 placeholder:text-ink-600/60"
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-ink-900">
-                Longitude
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  autoComplete="off"
-                  value={draftLng}
-                  onChange={(event) => setDraftLng(event.target.value)}
-                  placeholder="-0.1870"
-                  className="min-h-11 rounded-xl border border-brand-100 bg-white px-3 text-base text-ink-900 placeholder:text-ink-600/60"
-                />
-              </label>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={saveManualCoords}
-                className="inline-flex min-h-11 items-center rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50"
-              >
-                Save location
-              </button>
-              <button
-                type="button"
-                onClick={() => setTypingCoords(false)}
-                className="text-sm font-semibold text-ink-600 hover:text-ink-900"
-              >
-                Cancel
-              </button>
-            </div>
-            <p className="mt-2 text-xs text-ink-600">
-              Stored as latitude, longitude. The place name is looked up from these too.
-            </p>
           </div>
         ) : null}
 
