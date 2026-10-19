@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
+import { headers } from 'next/headers';
 import { AppShell } from '@/components/shell/AppShell';
-import { capabilityLabel, homeFor, navFor } from '@/lib/navigation';
+import { capabilityLabel, navFor, WORKSPACES } from '@/lib/navigation';
+import { readStoredRole, resolveActiveRole } from '@/lib/server/active-role';
 import { currentProfile } from '@/lib/server/api';
 import { getInvitationInbox, getNotifications } from '@/lib/server/shell-data';
 
@@ -22,6 +24,27 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
   const profile = await currentProfile();
   if (!profile) redirect('/login');
 
+  /*
+   * The active role is resolved ONCE, here, on the server, and handed to both the header
+   * and the tab row. They used to work it out separately — the header from the address, the
+   * tabs from "the first capability held" — which is how the two could disagree with each
+   * other and with the page.
+   *
+   * Order: the address wins when it names a workspace, then the role remembered from last
+   * session, then the first capability held. Every candidate is checked against the
+   * capabilities the database just returned, so a stale cookie naming a role this account
+   * no longer holds falls through to one that works instead of producing a broken header.
+   *
+   * `readStoredRole` cannot be trusted as authority and is not used as any: it only decides
+   * what to draw. Authorisation is untouched and still checked per route on the server.
+   */
+  const stored = await readStoredRole();
+  const activeRole = resolveActiveRole({
+    pathname: (await headers()).get('x-pathname') ?? '',
+    capabilities: profile.capabilities,
+    stored,
+  });
+
   const [pendingInvitations, unreadNotifications] = await Promise.all([
     // Both badges are capability-gated rather than role-gated, because the person who
     // receives an invitation is a worker and the person who sent one is an employer — and
@@ -33,11 +56,12 @@ export default async function AuthenticatedLayout({ children }: { children: Reac
 
   return (
     <AppShell
-      home={homeFor(profile)}
-      items={navFor(profile)}
-      // Both switchers need the full set, including capabilities not yet held: tapping one
-      // is how somebody finds out there is something to set up.
+      home={activeRole ? WORKSPACES[activeRole].href : '/roles'}
+      items={navFor({ capabilities: profile.capabilities, active: activeRole })}
+      // The full set, including capabilities not yet held: tapping one is how somebody
+      // finds out there is something to set up.
       capabilities={profile.capabilities}
+      activeRole={activeRole}
       account={{
         name: profile.fullName,
         // No email on `ProfileResponse` by design: the organisation if there is

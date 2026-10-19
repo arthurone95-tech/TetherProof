@@ -23,6 +23,8 @@ interface AppHeaderProps {
    * a control that claims to do something it does not.
    */
   capabilities: readonly UserCapability[];
+  /** Resolved on the server; never worked out from the address in here. */
+  activeRole: UserCapability | null;
   /** Who is signed in: drives the avatar and the top of the account menu. */
   account: AccountSummary;
   /** Whether this account has an inbox (workers and employers); others see no bell. */
@@ -59,6 +61,7 @@ export function AppHeader({
   home,
   items,
   capabilities,
+  activeRole,
   account,
   showNotifications,
   unreadNotifications,
@@ -104,7 +107,7 @@ export function AppHeader({
           came to do, and burying it one tap into an avatar would make the second
           capability feel like a setting too.
         */}
-        <WorkspaceSwitcher capabilities={capabilities} />
+        <WorkspaceSwitcher capabilities={capabilities} activeRole={activeRole} />
 
         <div className="ml-auto flex items-center gap-0.5 md:gap-1">
           {showNotifications ? (

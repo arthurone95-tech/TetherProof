@@ -18,6 +18,8 @@ interface AppShellProps {
    * one more thing to choose between.
    */
   capabilities: readonly UserCapability[];
+  /** Resolved once on the server and drawn by both the header and the tab row. */
+  activeRole: UserCapability | null;
   /** Who is signed in: the avatar and the top of the account menu. */
   account: AccountSummary;
   /** Whether this account has an inbox (workers and employers): the header bell. */
@@ -62,6 +64,7 @@ export function AppShell({
   home,
   items,
   capabilities,
+  activeRole,
   account,
   showNotifications,
   pendingInvitations,
@@ -77,6 +80,7 @@ export function AppShell({
         showNotifications={showNotifications}
         unreadNotifications={unreadNotifications}
         capabilities={capabilities}
+        activeRole={activeRole}
       />
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 pt-7 pb-32 md:pb-14">{children}</main>

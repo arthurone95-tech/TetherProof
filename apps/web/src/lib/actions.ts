@@ -28,6 +28,8 @@ import type {
 import { formErrorFor } from './form-state';
 import { homeFor } from './navigation';
 import { apiPublic, apiServer, apiServerForm, currentProfile } from './server/api';
+import { isUserCapability, writeStoredRole } from './server/active-role';
+import { WORKSPACES } from './navigation';
 import { currentOrigin } from './server/origin';
 import { clearSession, refreshSession, writeSession } from './server/session';
 import { createClient as createSupabaseServerClient } from './supabase/server';
@@ -661,6 +663,57 @@ export async function sendOffer(_previous: FormState, formData: FormData): Promi
   } catch (error) {
     return { error: messageFor(error, 'We could not send that invitation. Please try again.') };
   }
+}
+
+/**
+ * Records which role the person chose, then sends them there.
+ *
+ * This is a server action rather than a link because **switching has to be a real
+ * transition**, not a repaint. Three things have to be true afterwards: the cookie
+ * remembers it, so a refresh stays put; the account is re-read, so the navigation and the
+ * header are rebuilt for that role rather than only the label changing; and the target is
+ * validated, so choosing a role the account does not hold cannot mark one as active.
+ *
+ * Reaches setup rather than an empty workspace when the role is not configured yet. That
+ * is the point of `resolveRoleDestination`: arriving at an employer workspace with no
+ * approved business shows a search page that refuses every query, which reads as a fault
+ * rather than as "you have not finished setting this up".
+ *
+ * Until that setup completes, **nothing about the current role changes** — this never
+ * writes the cookie for a role it did not successfully route to a real workspace.
+ */
+export async function switchRole(formData: FormData): Promise<void> {
+  const requested = String(formData.get('role') ?? '');
+  if (!isUserCapability(requested)) redirect('/roles');
+
+  const profile = await currentProfile();
+  if (!profile) redirect('/login');
+
+  const destination = resolveRoleDestination(requested, profile.capabilities);
+
+  // Only a role we actually land in gets remembered. A failed or abandoned setup must
+  // not overwrite the last role that worked.
+  if (destination === WORKSPACES[requested].href) {
+    await writeStoredRole(requested);
+  }
+
+  redirect(destination);
+}
+
+/**
+ * Where choosing `role` should actually go, given what the account holds.
+ *
+ * A configured role goes to its workspace. One that is held but not yet configured — an
+ * employer whose business is still pending review — goes to its setup page, which says so
+ * and explains the wait. One that is not held at all goes to setup, because the switcher
+ * lists all four and tapping one you do not have is how you find out it exists.
+ */
+function resolveRoleDestination(
+  role: UserCapability,
+  capabilities: readonly UserCapability[],
+): string {
+  if (!capabilities.includes(role)) return `/setup/${role}`;
+  return WORKSPACES[role].href;
 }
 
 // ---------------------------------------------------------------------------
