@@ -357,3 +357,94 @@ Three properties hold throughout the module:
   invitation came from and no skill at all, so a per-skill rejection count would silently
   describe only the invitations whose employer happened to save a spec, and would read as a
   complete picture of why candidates are turned down when it is not one.
+
+---
+
+## 4.12: The active role, and where it is decided
+
+Added 2026-10-19.
+
+**The rule.** The active role is resolved once per request, on the server, in
+`apps/web/src/lib/server/active-role.ts`. Both the header selector and the bottom tab row are
+drawn from that single value.
+
+Resolution order, and why:
+
+1. **The address wins** when it names a workspace. Following a link, opening a notification
+   or pasting a URL must land where it says, and must not be overruled by a remembered
+   preference.
+2. **Otherwise the remembered role**, from an httpOnly cookie, so a refresh on `/settings`
+   or signing back in opens where you left off.
+3. **Otherwise the first capability held**, which is a sensible opening position for an
+   account that has never chosen.
+
+Every candidate is validated against the capabilities the database returns for that
+request. A stale cookie naming a role the account no longer holds is discarded and a role it
+*does* hold is used instead.
+
+**What it is not.** Not a permission. The cookie is a session preference: httpOnly, cleared
+on sign out, and re-validated on read, so a tampered value can at worst change which of your
+own workspaces opens first. Authorisation is unchanged and is still checked per route.
+
+**Choosing a role is a server action**, not a link. Switching has to be a real transition —
+record the preference so a refresh stays put, and re-read the account so the navigation and
+header are rebuilt for that role rather than only the label changing. An unconfigured role
+routes to its setup page, because an employer workspace with no approved business shows a
+search page that refuses every query, which reads as a fault rather than as unfinished setup.
+
+---
+
+## 4.13: Connect
+
+Added 2026-10-19, at `/connect`.
+
+Everything the account is linked to, in one place. It is a destination rather than a section
+of Profile because the two answer different questions: **Profile** is who you are, **Connect**
+is what you have linked to. Connect is a list that grows and has to say plainly which entries
+actually work.
+
+The list is built from one table with a `kind` discriminator, so adding an integration later
+is a row and not a redesign:
+
+| kind | what it does | shown as |
+|---|---|---|
+| `oauth` | a real, working integration: reads data, connects, disconnects | Connect / Disconnect |
+| `link` | a URL the person gives us; stored and shown. No API, no sync | Add a link |
+| `soon` | named, not built | inert, labelled "Not yet" |
+
+**GitHub is the only `oauth` integration**, because it is the only one with a working flow in
+this codebase. Everything else that is named is either a validated link or marked as not yet
+built. Nothing in the `soon` group is clickable and nothing claims to be connected: an
+integration presented as working when there is no OAuth flow, no token and no API behind it is
+worse than an absent one, because somebody will rely on it.
+
+Link URLs are validated on entry — `http`/`https` only, a real hostname required, and a
+host allow-list where a source is tied to one site. A stored `javascript:` URL rendered into
+an `href` would execute, and a stored garbage value looks connected when it is not.
+
+---
+
+## 4.14: Roles and profiles, and where each thing lives
+
+Settled 2026-10-19, to remove three duplications.
+
+| destination | owns |
+|---|---|
+| **Profile** (`/profile`, via the avatar) | identity: name, photo, location, skills, capabilities, share |
+| **Connect** (`/connect`, bottom navigation) | linked sources and links |
+| **Settings** (`/settings`, via the avatar) | account-wide: privacy, deletion, roles |
+| **Roles and profiles** (`/roles`) | which capabilities are active, and their setup |
+
+**Profile is no longer in the bottom navigation.** It was reachable from the avatar all
+along, and a bottom tab is the wrong place for identity when there is already a control for
+it. The worker and trainee bottom navigation ends at **Connect** instead.
+
+**Privacy and Sharing exists once**, under Settings. Profile keeps *Share your profile*,
+which is an action to present your work, and does not also carry a link to the privacy
+settings.
+
+**Organisation management is not on the worker profile.** A worker has no organisation to
+manage, and the button that was there did nothing but return to Home — an element that
+looks actionable and is not. Employers manage their organisation at
+`/employer/organization`; training providers set their institute name on their profile,
+where it belongs, because that name appears on every credential they sign.

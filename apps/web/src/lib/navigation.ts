@@ -57,24 +57,24 @@ export interface Workspace {
 export const WORKSPACES: Record<UserCapability, Workspace> = {
   worker: {
     id: 'worker',
-    label: 'My work',
+    label: 'Work',
     href: '/dashboard',
     blurb: 'Jobs, evidence and customer verification',
     // A worker's details are the profile: their name, where they are, and the skills
     // an employer is shown. There is no separate "worker settings" page because there is
     // nothing else to put on it.
-    settingsHref: '/profile',
-    settingsLabel: 'Your details',
-    settingsMobileLabel: 'You',
+    settingsHref: '/connect',
+    settingsLabel: 'Connect',
+    settingsMobileLabel: 'Connect',
   },
   trainee: {
     id: 'trainee',
-    label: 'My training',
+    label: 'Trainee',
     href: '/credentials',
     blurb: 'Institute, milestones and credentials',
-    settingsHref: '/roles',
-    settingsLabel: 'Manage capabilities',
-    settingsMobileLabel: 'Manage',
+    settingsHref: '/connect',
+    settingsLabel: 'Connect',
+    settingsMobileLabel: 'Connect',
   },
   training_provider: {
     id: 'training_provider',
@@ -393,6 +393,9 @@ const SUBPAGE_TITLES: ReadonlyArray<readonly [prefix: string, title: string]> = 
   // this an individual log fell through to the section header and looked like a browser
   // page rather than the same drill-down pattern the rest of the app uses.
   ['/logs/', 'Log'],
+  ['/invites', 'Invitations'],
+  ['/connect', 'Connect'],
+  ['/roles', 'Roles and profiles'],
 ];
 
 /**

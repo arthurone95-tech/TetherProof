@@ -3,28 +3,42 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
-  BadgeCheck,
-  Building2,
   Check,
   ChevronDown,
-  GraduationCap,
-  Hammer,
   LayoutGrid,
+  Repeat2,
   SlidersHorizontal,
   X,
-  type LucideIcon,
 } from 'lucide-react';
 import type { UserCapability } from '@tetherproof/shared';
 import { WORKSPACES } from '@/lib/navigation';
 import { switchRole } from '@/lib/actions';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 
-const ICONS: Record<UserCapability, LucideIcon> = {
-  worker: Hammer,
-  trainee: GraduationCap,
-  training_provider: BadgeCheck,
-  employer: Building2,
+/**
+ * The roles, with the short mark each is known by.
+ *
+ * Letters rather than glyphs on purpose. These appear *inside* the selector, where the
+ * thing being identified is the role and the control's own icon already says "this is the
+ * selector". Four different icons here made the list look like four unrelated controls,
+ * and they drifted towards the workspace icon the selector is meant to be distinct from.
+ */
+const ROLE_MARKS: Record<UserCapability, string> = {
+  worker: 'W',
+  trainee: 'T',
+  training_provider: 'I',
+  employer: 'H',
 };
+
+/**
+ * One icon for the selector, always.
+ *
+ * It used to show the *active role's* icon, which made the control look like a different
+ * control in each workspace and hid the fact that it was one control. A button whose
+ * glyph depends on what you already selected has to be re-found every time. This never
+ * changes — not by role, not by page.
+ */
+const SELECTOR_ICON = Repeat2;
 
 /**
  * The role selector, in the header.
@@ -92,8 +106,9 @@ export function WorkspaceSwitcher({
 
   if (!activeRole && capabilities.length === 0) return null;
 
+  // The label follows the active role, because that is what the button is telling you.
+  // The icon never does.
   const label = activeRole ? WORKSPACES[activeRole].label : 'Roles';
-  const TriggerIcon = activeRole ? ICONS[activeRole] : LayoutGrid;
 
   return (
     /*
@@ -116,7 +131,7 @@ export function WorkspaceSwitcher({
         aria-haspopup="menu"
         className="inline-flex min-h-10 max-w-[9.5rem] items-center gap-1.5 rounded-xl border border-brand-100 bg-white px-2.5 text-sm font-semibold text-ink-800 transition-colors hover:bg-brand-50 sm:px-3"
       >
-        <TriggerIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-brand-700" strokeWidth={ICON_STROKE_WIDTH} />
+        <SELECTOR_ICON aria-hidden="true" className="h-4 w-4 shrink-0 text-brand-700" strokeWidth={ICON_STROKE_WIDTH} />
         <span className="hidden truncate sm:inline">{label}</span>
         <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-ink-500" strokeWidth={ICON_STROKE_WIDTH} />
       </button>
@@ -160,7 +175,6 @@ export function WorkspaceSwitcher({
             <ul className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3">
               {all.map((id) => {
                 const workspace = WORKSPACES[id];
-                const Icon = ICONS[id];
                 const isHeld = capabilities.includes(id);
                 const isActive = id === activeRole;
 
@@ -194,7 +208,7 @@ export function WorkspaceSwitcher({
                                 : 'bg-neutral-100 text-ink-500'
                           }`}
                         >
-                          <Icon aria-hidden="true" className="h-5 w-5" strokeWidth={ICON_STROKE_WIDTH} />
+                          <span className="text-sm font-bold" aria-hidden="true">{ROLE_MARKS[id]}</span>
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-1.5 text-sm font-semibold text-ink-900">

@@ -3263,3 +3263,116 @@ A dropdown anchored under a header button overflows a phone screen. So the panel
 element** whose positioning classes change at `md`: `fixed inset-x-0 bottom-0` with a scrim
 and a drag handle on a phone, `absolute left-0 top-full` with no scrim on a desktop. One
 implementation, two shapes, and no second component that could drift from the first.
+
+---
+
+## E-069: There was no persisted active role at all
+
+* **Status:** Resolved
+* **Found:** 2026-10-19, while working through the worker interface corrections.
+
+### Description
+The active role was derived from the URL, which is correct only while you are *inside* a
+workspace. On `/profile`, `/settings`, `/notifications`, `/roles` and the setup pages,
+nothing could be marked active — and the header either named the wrong role or gave up.
+
+Worse, **two places computed it separately and disagreed**: the header used the address, and
+the tab row assumed "the first capability you hold", read from a database query with no
+`ORDER BY`. That is how a single page could show two roles highlighted, and how standing on
+one role's setup page could tick a completely different role. Neither was a rendering bug;
+both were two sources of truth.
+
+It also meant the choice could not survive a refresh, because the URL was the only record of
+it, and could not be restored after signing back in.
+
+### Fix
+`lib/server/active-role.ts` resolves it **once, on the server**:
+
+1. the address wins when it names a workspace — a link, a notification or a pasted URL must
+   land where it says;
+2. otherwise the role remembered from last session, so a refresh on `/settings` or a
+   sign-in opens where you left off;
+3. otherwise the first capability held.
+
+Every candidate is checked against the capabilities the database just returned, so a stale
+or hand-edited cookie naming a role this account no longer holds falls through to one that
+works rather than producing a broken header. `listCapabilities` also gained an `ORDER BY`,
+because a list treated as a sequence must not depend on the planner.
+
+Choosing a role is now a server action rather than a link: it records the preference and
+rebuilds the navigation for that role, instead of moving only the label.
+
+### Not a security change
+The cookie is a **session preference**, not account data — httpOnly, cleared on sign out,
+re-validated on every read. A tampered value can at worst change which of your own
+workspaces opens first. Authorisation is untouched and still checked per route on the server.
+
+13 tests pin the rules, including that the result does not depend on the order capabilities
+arrive in, which was the old fallback's actual defect.
+
+---
+
+## E-070: Rejected work logs were labelled "Not confirmed"
+
+* **Status:** Resolved
+* **Found:** 2026-10-19.
+
+### Description
+`ProofListItemView` rendered a rejected proof as **"Not confirmed"**. That phrase describes
+the *absence* of a confirmation, which is also true of a proof nobody has answered yet — so
+a rejected log and an awaiting log read as the same state from the badge alone. The rest of
+the app already said "Rejected" in two other places, so the list was also inconsistent with
+its own siblings.
+
+### Fix
+The label is "Rejected", matching the wording already used elsewhere. Verified, awaiting and
+rejected remain three distinct labels.
+
+---
+
+## E-071: Manual coordinate entry removed from every user-facing form
+
+* **Status:** Resolved
+* **Found:** 2026-10-19.
+
+### Description
+Latitude and longitude could be typed into the work-logging form (behind a "Type coordinates"
+toggle), the worker profile, the employer organisation form, and capability setup.
+
+Nothing underneath changed and nothing needed to: the coordinates are still stored, still
+validated by the API, and still used for proximity search and the fraud model.
+
+### Why removing them is a correction rather than a removal
+The only reason a person ever entered a number was to say **"no location"**, and there is an
+action for that. Typing a coordinate also admitted a class of error with no upside: a
+mistyped pair is silently the wrong place, which is worse than no place, because a search
+within the wrong radius returns plausible-looking results. Nothing in the old layout said
+which of two six-digit numbers had been got wrong.
+
+Each form keeps hidden inputs carrying exactly what the visible ones did, so the value
+"Use my location" produces is submitted unchanged. A **Clear** action was added where the
+removed inputs had been the only way to express no location — a real choice, since searches
+then run without a distance filter.
+
+---
+
+## E-072: An individual work log fell through to the section header
+
+* **Status:** Resolved
+* **Found:** 2026-10-19.
+
+### Description
+`/logs/<id>` was absent from `SUBPAGE_TITLES`, so `subpageTitleFor` returned `null`, the app
+treated it as a primary section, and it rendered the section header rather than the back
+header. That is why a single log read as a browser page instead of the drill-down pattern
+used by every other sub-page.
+
+### Fix
+Added as `'/logs/'` **with the trailing slash**, which matches an individual log and not the
+list — the list is a primary destination with its own tab and keeps the section header.
+
+`BackHeader` gained an optional `backTo`. An individual log always returns to `/logs` rather
+than to browser history: it is one record reached from the list, so going back to wherever
+the person happened to come from could strand them in the app with no route to the record
+they were looking at. History remains the default everywhere else, because those pages are
+genuinely reached from several places.

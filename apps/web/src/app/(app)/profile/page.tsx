@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import type { ConnectionsResponse, WorkerCapabilityProfileResponse } from '@tetherproof/shared';
+import { ArrowRight } from 'lucide-react';
+import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
+import type { WorkerCapabilityProfileResponse } from '@tetherproof/shared';
 import { Card } from '@/components/ui/Card';
 import { currentProfile, apiServer } from '@/lib/server/api';
 import { CapabilitiesCard } from './CapabilitiesCard';
-import { ConnectionsCard } from './ConnectionsCard';
 import { ProfileForm } from './ProfileForm';
 import { ShareCard } from './ShareCard';
 
@@ -46,12 +48,10 @@ export default async function ProfilePage() {
   const isEmployer = profile.capabilities.includes('employer');
 
   let capabilities: WorkerCapabilityProfileResponse | null = null;
-  let connections: ConnectionsResponse | null = null;
   if (isWorker) {
-    [capabilities, connections] = await Promise.all([
-      apiServer<WorkerCapabilityProfileResponse>('/workers/capabilities').catch(() => null),
-      apiServer<ConnectionsResponse>('/workers/connections').catch(() => null),
-    ]);
+    capabilities = await apiServer<WorkerCapabilityProfileResponse>('/workers/capabilities').catch(
+      () => null,
+    );
   }
 
   return (
@@ -78,9 +78,27 @@ export default async function ProfilePage() {
         </Card>
       ) : null}
 
-      {isWorker && connections ? (
-        <Card title="Connected sources">
-          <ConnectionsCard connections={connections.connections} />
+      {/*
+        Connected sources moved to /connect.
+
+        It is a list that grows, and it has to say plainly which entries actually work —
+        a different job from Profile's, which is about who you are rather than what you
+        have linked. A pointer is left behind because somebody who connected a GitHub
+        account expects to find it, and a page that simply lacks a section reads as a loss
+        rather than a move.
+      */}
+      {isWorker ? (
+        <Card title="Connect">
+          <p className="text-sm text-ink-600">
+            Your linked work sources and profiles live on their own page.
+          </p>
+          <Link
+            href="/connect"
+            className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-brand-700 hover:text-brand-800"
+          >
+            Go to Connect
+            <ArrowRight aria-hidden="true" className="h-4 w-4" strokeWidth={ICON_STROKE_WIDTH} />
+          </Link>
         </Card>
       ) : null}
     </div>
