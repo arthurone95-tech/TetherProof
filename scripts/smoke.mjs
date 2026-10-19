@@ -4382,6 +4382,80 @@ async function main() {
           body: { status: 'approved' },
         });
         check('a business owner cannot approve their own business', approveSelf.status === 403, `status ${approveSelf.status}`);
+
+        // --- §2.6: a role switch is not an authorisation decision -------------------
+        //
+        // Correct navigation is not access control. Every one of these is the same account
+        // and the same token used everywhere -- only the address and the capability
+        // differ -- so this proves the guard is the server's and not the interface's.
+        if (workerFirst.token) {
+          const forWorkersOnly = [
+            ['GET', '/trainers/roster'],
+            ['GET', '/trainers/credentials'],
+            ['GET', '/trainers/demand'],
+            ['GET', '/trainers/overview'],
+          ];
+          for (const [method, path] of forWorkersOnly) {
+            const r = await api(method, path, { token: workerFirst.token });
+            check(
+              `a worker cannot reach ${path} by typing the address`,
+              r.status === 403,
+              `status ${r.status}`,
+            );
+          }
+
+          // And the reverse: a training provider is not a worker.
+          if (institute.token) {
+            const proofAttempt = await api('POST', '/workers/proofs', {
+              token: institute.token,
+              body: { description: 'Should not be allowed', skillTag: 'Plumbing' },
+            });
+            check(
+              'a training provider cannot log a work proof by typing the address',
+              proofAttempt.status === 403,
+              `status ${proofAttempt.status}`,
+            );
+            const overview = await api('GET', '/workers/overview', { token: institute.token });
+            check(
+              'a training provider cannot read the worker overview',
+              overview.status === 403,
+              `status ${overview.status}`,
+            );
+          }
+
+          // Holding two capabilities must not leak across the boundary between them.
+          // This is the case a single role could never express: one token, two guards.
+          if (businessOwner.token && (await capsOf(businessOwner)).includes('employer')) {
+            const employerSide = await api('GET', '/employers/overview', {
+              token: businessOwner.token,
+            });
+            check(
+              'an employer capability opens the hiring side',
+              employerSide.status === 200,
+              `status ${employerSide.status}`,
+            );
+            const trainerSide = await api('GET', '/trainers/roster', {
+              token: businessOwner.token,
+            });
+            check(
+              'and does not open the institute side, which it never held',
+              trainerSide.status === 403,
+              `status ${trainerSide.status}`,
+            );
+          }
+
+          // The credential route accepts either worker or trainee, but not neither.
+          if (studentFirst.token) {
+            const withoutEither = await api('GET', '/workers/credentials', {
+              token: studentFirst.token,
+            });
+            check(
+              'a pure student can read their own credentials',
+              withoutEither.status === 200,
+              `status ${withoutEither.status}`,
+            );
+          }
+        }
       }
 
       // --- permission boundaries: the two holes this design is prone to ---

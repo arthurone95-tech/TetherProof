@@ -146,9 +146,20 @@ const SECTION_TITLES: ReadonlyArray<readonly [string, string]> = [
   ['/workspace', 'Workspace'],
   ['/logs', 'Logs'],
   ['/profile', 'Profile'],
+  ['/connect', 'Connect'],
+  // The brand belongs on Home and nowhere else. `/invites` used to keep it, which meant
+  // two destinations in the same tab row carried the same heading and a person had no way
+  // to tell from the header which one they were on.
+  ['/invites', 'Invitations'],
   ['/employer/search', 'Find candidates'],
   ['/employer/candidates', 'People'],
   ['/employer/organization', 'Organization'],
+  ['/employer', 'Hiring'],
+  // Institution destinations. `/trainer` is the institute's Home, so it keeps the brand
+  // through `onHome`; its siblings name themselves.
+  ['/trainer/roster', 'Roster'],
+  ['/trainer/credentials', 'Issue'],
+  ['/trainer/demand', 'Demand'],
   ['/admin', 'Approvals'],
 ];
 

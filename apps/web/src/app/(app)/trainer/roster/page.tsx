@@ -51,8 +51,7 @@ export default async function TrainerRosterPage() {
           <div className="rounded-xl border border-dashed border-brand-200 bg-brand-50/20 p-6 text-center">
             <p className="text-sm font-semibold text-ink-900">Nobody has joined yet</p>
             <p className="mx-auto mt-1 max-w-md text-xs text-ink-600">
-              Create an enrolment code above and share it with the students on your course. They
-              redeem it from their own account, and they will appear here.
+              Share the enrolment code above. Students appear here once they redeem it.
             </p>
           </div>
         ) : (

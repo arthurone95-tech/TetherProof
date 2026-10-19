@@ -35,12 +35,23 @@ export const metadata: Metadata = {
  * employer happened to save a spec for, and would read as a complete picture of why
  * candidates are turned down when it is not one.
  */
+/**
+ * How many rows the page shows.
+ *
+ * Applied server-side, in the query, rather than by slicing in the browser: with a few hundred
+ * skills the difference is real, and fetching all of them to display fifteen would make the page
+ * slower exactly when there is most to see.
+ */
+const DEMAND_LIMIT = 15;
+
 export default async function TrainerDemandPage() {
   const user = await currentProfile();
   if (!user) redirect('/login');
   if (!user.capabilities.includes('training_provider')) redirect(homeFor(user));
 
-  const insights = await apiServer<DemandInsightsResponse>('/trainers/demand?limit=15');
+  const insights = await apiServer<DemandInsightsResponse>(
+    `/trainers/demand?limit=${DEMAND_LIMIT}`,
+  );
   const { totals, skills } = insights;
 
   const rejectedShare =
@@ -57,18 +68,27 @@ export default async function TrainerDemandPage() {
 
       <Card title="Where demand outruns supply">
         <p className="text-sm text-ink-600">
-          Ranked by the gap between what employers are searching for and how many people on this
-          network offer it. Read from {totals.institutions}{' '}
-          {totals.institutions === 1 ? 'institute' : 'institutes'} and every employer search
-          currently running.
+          Ranked by the gap between what employers search for and who offers it.
         </p>
+
+        {/*
+          The aggregate and the visible rows are different numbers, and a page that shows
+          both without saying so invites the wrong conclusion — "only four skills have
+          demand" when there are several hundred. The totals above count everything; this
+          list is capped server-side, so it says how it is capped.
+        */}
+        {skills.length > 0 && skills.length >= DEMAND_LIMIT ? (
+          <p className="mt-1 text-xs text-ink-600">
+            Showing the {DEMAND_LIMIT} biggest gaps of {totals.institutions}{' '}
+            {totals.institutions === 1 ? 'institute' : 'institutes'} currently searching.
+          </p>
+        ) : null}
 
         {skills.length === 0 ? (
           <div className="mt-4 rounded-xl border border-dashed border-brand-200 bg-brand-50/20 p-6 text-center">
             <p className="text-sm font-semibold text-ink-900">No demand signal yet</p>
             <p className="mx-auto mt-1 max-w-md text-xs text-ink-600">
-              This dashboard reads the searches employers run on TetherProof. The first saved
-              search will appear here with the skill it names.
+              This reads the searches employers run on TetherProof.
             </p>
           </div>
         ) : (

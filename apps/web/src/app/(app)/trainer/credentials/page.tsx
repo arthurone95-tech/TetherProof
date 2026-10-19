@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import type { CredentialListResponse, RosterResponse } from '@tetherproof/shared';
-import { Banner } from '@/components/ui/Banner';
 import { Card } from '@/components/ui/Card';
 import { apiServer, currentProfile } from '@/lib/server/api';
 import { homeFor } from '@/lib/navigation';
@@ -41,17 +40,20 @@ export default async function TrainerCredentialsPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <Banner tone="info" title="What signing off does">
-        Recording a practical tells the student you have signed it off. It does not become part of
-        their client-verified work, and it is not something you can put on their record without
-        their answer — they hold it only once they accept.
-      </Banner>
+      {/*
+        The explanation used to sit in a banner above the form, four sentences of which
+        the one that mattered was buried at the end. It is now one line beside the control
+        it governs, and it keeps the part that is genuinely surprising: a milestone is NOT
+        client-verified work, and the student holds it only after accepting.
 
+        Nothing was removed that changes what happens. The distinction between a credential
+        and a work proof is the most important rule in this module, so it stayed - it just
+        stopped being a paragraph in front of a dropdown.
+      */}
       {roster.students.length === 0 ? (
         <Card title="Sign off a practical">
           <p className="text-sm text-ink-600">
-            Nobody is on your roster yet. Students join by redeeming the enrolment code on the
-            roster page, and then they can be issued a milestone.
+            No students yet. They join from the roster page by redeeming your enrolment code.
           </p>
         </Card>
       ) : (

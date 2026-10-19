@@ -53,11 +53,12 @@ export function EnrolmentCodePanel({
             Enrolment code
           </h2>
           <p className="mt-1 text-xs leading-relaxed text-ink-600">
+            {/* One line. The previous version explained what the digest means, when to
+                regenerate, and how a student redeems it — none of which a person needs
+                standing in front of a button whose label already says what it does. */}
             {organizationName
-              ? `Share this with students at ${organizationName}. They redeem it from their own account.`
-              : 'Share this with your students. They redeem it from their own account.'}{' '}
-            We only keep a copy that cannot be read back, so generate a new one whenever you
-            need a fresh link.
+              ? `Share this with your students at ${organizationName}.`
+              : 'Share this with your students.'}
           </p>
 
           {code ? (
