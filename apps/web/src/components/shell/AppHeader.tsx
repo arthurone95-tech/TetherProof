@@ -151,6 +151,7 @@ const SECTION_TITLES: ReadonlyArray<readonly [string, string]> = [
   // two destinations in the same tab row carried the same heading and a person had no way
   // to tell from the header which one they were on.
   ['/invites', 'Invitations'],
+  ['/roles', 'Roles and profiles'],
   ['/employer/search', 'Find candidates'],
   ['/employer/candidates', 'People'],
   ['/employer/organization', 'Organization'],

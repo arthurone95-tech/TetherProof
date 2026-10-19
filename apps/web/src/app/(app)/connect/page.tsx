@@ -1,9 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { ArrowLeft } from 'lucide-react';
 import type { ConnectionsResponse } from '@tetherproof/shared';
-import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 import { apiServer, currentProfile } from '@/lib/server/api';
 import { ConnectionsCard } from './ConnectionsCard';
 import { LinkConnections } from './LinkConnections';
@@ -50,21 +48,21 @@ export default async function ConnectPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
-      <Link
-        href="/dashboard"
-        className="inline-flex min-h-11 w-fit items-center gap-1.5 text-sm font-semibold text-ink-600 hover:text-ink-900"
-      >
-        <ArrowLeft aria-hidden="true" className="h-4 w-4" strokeWidth={ICON_STROKE_WIDTH} />
-        Back
-      </Link>
+      {/*
+        No heading and no back arrow here.
 
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold text-ink-900">Connect</h1>
-        <p className="text-sm text-ink-600">
-          Link your work to this account so an employer can see it without taking your word
-          for it.
-        </p>
-      </header>
+        The header already names the page — it is the one `h1` for a primary section, and
+        repeating it below gave the screen two titles for one page. And a back arrow
+        suggested somewhere to return *from*, which is wrong here: Connect is a tab you
+        navigate to, not something drilled into, so there is no "back" beyond the tab row
+        directly beneath it.
+
+        What is left is the one line that is not a repeat of the header.
+      */}
+      <p className="text-sm text-ink-600">
+        Link your work to this account so an employer can see it without taking your word
+        for it.
+      </p>
 
       <ConnectionsCard connections={response.connections} />
 

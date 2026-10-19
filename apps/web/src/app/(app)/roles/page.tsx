@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import {
-  ArrowLeft,
   BadgeCheck,
   Building2,
   Check,
@@ -56,21 +55,16 @@ export default async function CapabilitiesSettingsPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <Link
-        href="/roles"
-        className="inline-flex min-h-11 w-fit items-center gap-1.5 text-sm font-semibold text-ink-600 hover:text-ink-900"
-      >
-        <ArrowLeft aria-hidden="true" className="h-4 w-4" strokeWidth={ICON_STROKE_WIDTH} />
-        Settings
-      </Link>
-
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold text-ink-900">Roles &amp; profiles</h1>
-        <p className="text-sm text-ink-600">
-          One account, and as many of these as you need. Switch between them from the
-          workspace button without signing out, and each keeps its own records.
-        </p>
-      </header>
+      {/*
+        No heading and no back arrow, for the same reasons as /connect: the header already
+        names the page, and a back link here pointed at /roles itself — a "back" to where
+        you already are. Both are corrected in the header and the navigation model rather
+        than worked around per page.
+      */}
+      <p className="text-sm text-ink-600">
+        One account, and as many of these as you need. Switch between them from the
+        workspace button without signing out, and each keeps its own records.
+      </p>
 
       {held.length > 0 ? (
         <section aria-labelledby="active-heading" className="flex flex-col gap-2">

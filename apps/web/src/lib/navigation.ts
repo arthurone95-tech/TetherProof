@@ -393,9 +393,17 @@ const SUBPAGE_TITLES: ReadonlyArray<readonly [prefix: string, title: string]> = 
   // this an individual log fell through to the section header and looked like a browser
   // page rather than the same drill-down pattern the rest of the app uses.
   ['/logs/', 'Log'],
-  ['/invites', 'Invitations'],
-  ['/connect', 'Connect'],
-  ['/roles', 'Roles and profiles'],
+  /*
+   * `/invites`, `/connect` and `/roles` are deliberately NOT here.
+   *
+   * Being in this list means two things: the header renders a back icon instead of the
+   * section title, and the bottom tab row is suppressed — because a sub-page is something
+   * you drilled into and read, not somewhere you live.
+   *
+   * Those three are destinations. Invitations is a tab. Connect is a tab. Roles is where the
+   * role selector sends you. Listing them here hid the navigation on all three and put a
+   * browser-style back arrow on a page you did not come from anywhere in particular.
+   */
 ];
 
 /**
