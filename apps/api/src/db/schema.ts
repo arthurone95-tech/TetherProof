@@ -290,6 +290,22 @@ export const profiles = pgTable(
       .notNull()
       .default(true),
     /**
+     * Whether the addresses this worker connected on Connect may be shown with
+     * their profile where it is read, such as employer search.
+     *
+     * A link is added in order to be seen, so the default is true and the
+     * ordinary worker changes nothing. It is a separate switch because it is a
+     * separate disclosure: `discoverable` governs whether the worker appears at
+     * all, `publicProfile` governs a page the worker shares by address, and
+     * this governs what rides along with the card the worker does not hand out
+     * themselves.
+     *
+     * Nothing consumes it yet — links are collected on Connect but not yet
+     * stored — so it is the worker's recorded choice, honoured the moment a
+     * surface does display links, rather than a default made for them later.
+     */
+    showLinksOnProfile: boolean('show_links_on_profile').notNull().default(true),
+    /**
      * Whether the shareable capability profile page answers.
      *
      * The page is public and exists only because the worker turned it on, so the

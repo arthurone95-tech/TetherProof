@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import type { ConnectionsResponse } from '@tetherproof/shared';
 import { apiServer, currentProfile } from '@/lib/server/api';
@@ -67,17 +66,6 @@ export default async function ConnectPage() {
       <ConnectionsCard connections={response.connections} />
 
       <LinkConnections />
-
-      {/*
-        Your profile itself is not here on purpose. It is reached from the avatar in the
-        header, and it is about who you are rather than what you have linked.
-      */}
-      <p className="text-xs text-ink-600">
-        Looking to change your name, photo or location?{' '}
-        <Link href="/profile" className="font-semibold text-brand-700 hover:text-brand-800">
-          That is in your profile →
-        </Link>
-      </p>
     </div>
   );
 }

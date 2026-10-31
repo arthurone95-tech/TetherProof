@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight, Pencil } from 'lucide-react';
+import { Pencil } from 'lucide-react';
 import { saveProfile } from '@/lib/actions';
 import { EMPTY_FORM, type FormState } from '@/lib/form-state';
 import { locateMessage, useGeolocation } from '@/lib/use-geolocation';
@@ -36,7 +36,6 @@ import { AvatarEditor } from './AvatarEditor';
 export function ProfileForm({
   showOrganizationName,
   fullName,
-  organizationName,
   locationGps,
   avatarUrl,
 }: {
@@ -49,7 +48,6 @@ export function ProfileForm({
    */
   showOrganizationName: boolean;
   fullName: string | null;
-  organizationName: string | null;
   locationGps: string | null;
   avatarUrl: string | null;
 }) {
@@ -124,27 +122,6 @@ export function ProfileForm({
             ) : null}
           </div>
         </div>
-
-        {showOrganizationName ? (
-          <Link
-            href="/employer/organization"
-            className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-brand-100 p-3 transition-colors hover:border-brand-600"
-          >
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold text-ink-900">
-                {organizationName?.trim() || 'No organization name set'}
-              </span>
-              <span className="block text-xs text-ink-600">
-                Company details and search location are managed here.
-              </span>
-            </span>
-            <ArrowRight
-              aria-hidden="true"
-              className="h-4 w-4 shrink-0 text-ink-500"
-              strokeWidth={ICON_STROKE_WIDTH}
-            />
-          </Link>
-        ) : null}
 
         <FormSuccess when={state.done === true}>Your details are saved.</FormSuccess>
 

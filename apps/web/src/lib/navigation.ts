@@ -315,7 +315,10 @@ const NAV_BY_WORKSPACE: Record<UserCapability, NavItem[]> = {
  * help about the product, and the documents. Invitations and notifications are
  * deliberately absent: they are the member's inbox, so they sit in the header
  * as their own icons (with their badges) and never need a menu to be found.
- * Every row is open to every role. Static pages are public, but a signed-in
+ * The rows are listed for every account, with one role-dependent exception applied
+ * by the menu component: Settings is left out while the worker workspace is active,
+ * because a worker's privacy choices and account deletion live on Profile. Every
+ * other row is open to every role. Static pages are public, but a signed-in
  * person reaching them from the app gets the app's back header rather than
  * marketing chrome.
  *
@@ -383,6 +386,10 @@ export function roleLabel(role: UserRole): string {
  */
 const SUBPAGE_TITLES: ReadonlyArray<readonly [prefix: string, title: string]> = [
   ['/notifications', 'Notifications'],
+  // Before `/settings` on purpose: the matcher below takes the first prefix that
+  // fits, so the specific page has to come first for its header to read its own
+  // name rather than the name of the group it lives under.
+  ['/settings/privacy', 'Privacy & sharing'],
   ['/settings', 'Settings'],
   ['/help', 'Help'],
   ['/about', 'About'],

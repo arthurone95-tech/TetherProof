@@ -1,0 +1,85 @@
+
+
+	THE MULTI-ROLE-ACCOUNT-SUPPORT
+
+The investigation is complete. Proceed with the agreed multi-capability implementation. Do not ask me to decide between alternatives already covered below.
+
+**Decisions**
+- One person has one account and can hold multiple authorised capabilities simultaneously.
+- Support Worker, Employer, Trainer, and Trainee/Student.
+- Worker and Trainee/Student can coexist under the same personal account.
+- Users switch between authorised sections/workspaces without signing out.
+- Include a simple, secure business workspace so a person can work independently and also hire through their business.
+- Worker access is activated by the user. Student access comes through valid training enrolment or invitation. Employer hiring permissions follow the existing approval process and require authorised business membership. Trainer access requires authorised registration/approval. Admin cannot be self-assigned.
+- Keep customer-verified work proofs separate from institution-issued training credentials.
+- Preserve existing authentication, authorisation, RLS, privacy, and fraud protections. Reuse existing structures wherever safe.
+
+**Implementation**
+Implement the complete agreed design. Update the role/capability data model, database migration and auth claims, API authorisation, profile response, frontend role checks and redirects, navigation/workspace switcher, student credential access, worker portfolio/search queries, and the minimal business entity/membership/approval model needed for the agreed UX.
+
+Audit every existing role check, especially the public portfolio query that currently filters `users.role = 'worker'`. A person with multiple capabilities must not disappear from Worker search or lose their existing records.
+
+Do not create duplicate accounts, make capabilities self-claimable where approval is required, or treat student credentials as verified work. Keep the implementation straightforward and avoid unrelated features or speculative abstractions.
+
+**Validation**
+Run migrations only in the appropriate development/test environment. Run all unit, lint, typecheck, build, security, fraud, integrity, and smoke tests available. Add regression tests for combined capabilities, student-first enrolment, worker-first enrolment, business access, permission boundaries, and preservation of existing worker portfolios and credential/work-proof separation.
+
+Do not commit, push, deploy, or run production migrations without my explicit approval.
+
+Complete the work and return one consolidated report: migration/schema changes, files changed, capability-granting rules, user experience, test results, remaining blockers, and the exact production actions that would require approval. Do not stop at an investigation report or ask unnecessary follow-up questions.
+
+
+## Registration and Capability Setup UX
+
+Update TetherProof's registration and onboarding experience to follow this agreed design.
+
+### 1. Account creation
+- The Create Account page must create one personal account without asking the user to select Worker, Employer, Trainer, or Trainee/Student.
+- Keep registration simple and consistent with the existing authentication system.
+- Do not create separate accounts for different roles.
+
+### 2. Post-registration dashboard
+After signing in, users should see a clear dashboard where they can activate or access the capabilities relevant to them:
+
+- **Worker:** Activate a personal work profile to record completed jobs, submit evidence, and build a verified work portfolio.
+- **Employer:** Set up or join a business workspace and access hiring features when authorised.
+- **Trainer:** Register or request authorisation to manage a training institution, students, and practical credentials.
+- **Trainee/Student:** Join a training institution using a valid invitation or enrolment code. If the user already has an account, link the enrolment to that account rather than creating another one.
+
+### 3. Simple navigation
+- Clearly distinguish available capabilities from capabilities that are already active.
+- Provide straightforward actions such as **Activate Worker Profile**, **Set Up Business**, **Register as Training Provider**, and **Join a Training Institution**.
+- Once multiple capabilities are available, provide a simple navigation menu or workspace switcher to access them.
+- Users must not need to log out and back in to switch between their authorised areas.
+- Do not display unnecessary setup actions for capabilities the user already has.
+
+### 4. Correct access and permissions
+- Creating an account does not automatically grant every capability.
+- Worker activation may be self-service.
+- Employer hiring permissions and business access must follow the required approval and membership rules.
+- Trainer access must follow the training-provider authorisation process.
+- Student access must be linked to valid institutional enrolment.
+- Never allow users to grant themselves administrator privileges or bypass authorisation checks.
+
+### 5. Unified personal portfolio
+A person who is both a Worker and a Trainee/Student must use one account and one linked personal identity.
+
+Their portfolio must distinguish:
+- Customer-verified work and associated evidence.
+- Institution-issued training credentials and practical milestones.
+
+Training credentials must never automatically count as customer-verified work or make an otherwise ineligible worker discoverable in employer search.
+
+### 6. Implementation requirements
+- Inspect the existing registration, login, onboarding, dashboard, and navigation flows before changing them.
+- Implement this design consistently with the agreed multi-capability architecture and the existing application style.
+- Reuse existing components and authentication flows where appropriate. Avoid unnecessary abstractions, duplicate screens, unrelated redesigns, and additional complexity.
+- Ensure existing users can access their accounts and records after the changes. Do not silently remove existing permissions or data.
+- Add appropriate loading, empty, success, validation, and error states.
+
+### 7. Validation and restrictions
+Test account creation without role selection, activation of multiple capabilities, student enrolment for existing accounts, business setup and authorisation, trainer access, workspace switching, and preservation of existing work and training records.
+
+Run the relevant automated tests and security checks. Do not commit, push, deploy, or run production migrations without explicit approval.
+
+Implement the agreed experience and include the changes in the consolidated implementation report. Do not return another proposal asking me to choose between approaches that have already been decided.

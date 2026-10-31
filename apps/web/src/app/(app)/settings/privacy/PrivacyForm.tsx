@@ -15,6 +15,7 @@ interface PrivacyFormProps {
   publicProfile: boolean;
   publicSlug: string | null;
   invitationPreference: InvitationPreference;
+  showLinksOnProfile: boolean;
 }
 
 const INVITATION_OPTIONS: Array<{
@@ -25,7 +26,7 @@ const INVITATION_OPTIONS: Array<{
   {
     value: 'all',
     label: 'Any approved employer',
-    description: 'Any employer whose account is allowed to send invitations can reach you.',
+    description: 'Allow any permitted employer account to send you direct invitations.',
   },
   {
     value: 'approved_only',
@@ -36,7 +37,7 @@ const INVITATION_OPTIONS: Array<{
 ];
 
 /**
- * The worker's three privacy choices, saved in one form.
+ * The worker's privacy choices, saved in one form.
  *
  * A checkbox alone submits "on" when ticked and nothing at all when unticked,
  * which cannot distinguish "off was chosen" from "the control was never on the
@@ -56,6 +57,7 @@ export function PrivacyForm({
   publicProfile,
   publicSlug,
   invitationPreference,
+  showLinksOnProfile,
 }: PrivacyFormProps) {
   const [state, action] = useActionState(savePrivacySetting, EMPTY_FORM as FormState);
   const [copied, setCopied] = useState(false);
@@ -89,8 +91,39 @@ export function PrivacyForm({
           <span className="min-w-0">
             <span className="block font-medium text-ink-900">Let employers find me</span>
             <span className="mt-0.5 block text-sm text-ink-600">
-              When on, you appear in employer search results and can match their specs. Turning it
-              off stops new matches — invitations and offers already sent stay where they are.
+              Allow allowed employers to discover your profile and match with open roles.
+            </span>
+          </span>
+        </label>
+      </fieldset>
+
+      {/*
+        The links a worker added on Connect are theirs to show or not. A link is
+        usually added in order to be seen, so the box starts ticked; a worker
+        who keeps addresses for their own reference can untick it and keep them
+        off the profile without leaving search — `discoverable` answers a
+        different question.
+
+        Nothing renders links with a profile yet, so this toggle records the
+        answer rather than withdrawing a display. That is the point of putting
+        it here now: when a surface does show links, the choice is already the
+        worker's and is not made for them by a default.
+      */}
+      <fieldset className="rounded-xl border border-brand-100 p-4">
+        <legend className="px-1 text-sm font-medium text-ink-900">Connections and links</legend>
+        <label className="flex cursor-pointer items-start gap-3">
+          <input type="hidden" name="showLinksOnProfile" value="off" />
+          <input
+            type="checkbox"
+            name="showLinksOnProfile"
+            value="on"
+            defaultChecked={showLinksOnProfile}
+            className="mt-1 h-4 w-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
+          />
+          <span className="min-w-0">
+            <span className="block font-medium text-ink-900">Show my links on my profile</span>
+            <span className="mt-0.5 block text-sm text-ink-600">
+              Display your connected site, channel, and social links on your profile for employers.
             </span>
           </span>
         </label>
@@ -117,9 +150,7 @@ export function PrivacyForm({
           <span className="min-w-0">
             <span className="block font-medium text-ink-900">Show my name on links I send out</span>
             <span className="mt-0.5 block text-sm text-ink-600">
-              When on, the confirmation page names you beside the work so the person you worked for
-              knows who they are answering. Turning it off leaves your name off that page. The work
-              and its evidence are still shown either way, and nothing else about you is.
+              Include your name alongside shared work so recipients know who submitted it.
             </span>
           </span>
         </label>
@@ -160,9 +191,7 @@ export function PrivacyForm({
           <span className="min-w-0">
             <span className="block font-medium text-ink-900">Let anyone with the link see my verified skills</span>
             <span className="mt-0.5 block text-sm text-ink-600">
-              Creates a page at a private address showing only your skills and verified counts —
-              never your media, location, or contact details. The address cannot be searched for;
-              only people you share it with can open it. Turning the page off takes it down.
+              Share a private link displaying your verified skills without revealing personal details.
             </span>
           </span>
         </label>

@@ -31,14 +31,26 @@ export default async function SettingsPage() {
   const profile = await currentProfile();
   if (!profile) redirect('/login');
 
-  const account: Entry[] = [
-    {
+  // Settings is not a worker destination. Their privacy choices and account deletion
+  // live on Profile, so a worker-only account that reaches this address is sent there
+  // rather than shown a page with nothing of its own. Accounts that hold another
+  // capability keep the page for those workspaces.
+  if (profile.capabilities.length === 1 && profile.capabilities.includes('worker')) {
+    redirect('/profile');
+  }
+
+  // Workers reach their profile from the account menu, so the settings index does not
+  // repeat it for them. Accounts without the worker capability keep the entry.
+  const account: Entry[] = [];
+
+  if (!profile.capabilities.includes('worker')) {
+    account.push({
       href: '/profile',
       title: 'Your profile',
       description: 'Your name, photo, and location.',
       icon: UserRound,
-    },
-  ];
+    });
+  }
 
   if (profile.capabilities.includes('employer')) {
     account.push({
@@ -70,7 +82,7 @@ export default async function SettingsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-7">
-      <SettingsGroup title="Account" entries={account} />
+      {account.length > 0 ? <SettingsGroup title="Account" entries={account} /> : null}
 
       {preferences.length > 0 ? <SettingsGroup title="Privacy" entries={preferences} /> : null}
 

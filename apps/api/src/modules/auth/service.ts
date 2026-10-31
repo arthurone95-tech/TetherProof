@@ -569,6 +569,7 @@ export async function getProfile(userId: string): Promise<ProfileResponse> {
       publicProfile: profiles.publicProfile,
       publicSlug: profiles.publicSlug,
       invitationPreference: profiles.invitationPreference,
+      showLinksOnProfile: profiles.showLinksOnProfile,
     })
     .from(users)
     .leftJoin(profiles, eq(profiles.userId, users.id))
@@ -599,6 +600,7 @@ export async function getProfile(userId: string): Promise<ProfileResponse> {
     publicProfile: row.publicProfile ?? false,
     publicSlug: row.publicSlug ?? null,
     invitationPreference: row.invitationPreference ?? 'all',
+    showLinksOnProfile: row.showLinksOnProfile ?? true,
     avatarUrl: await signedAvatarUrl(row.avatarUrl),
   };
 }
@@ -635,6 +637,9 @@ export async function updateProfile(userId: string, input: UpdateProfileInput) {
   if (input.discoverable !== undefined) patch.discoverable = input.discoverable;
   if (input.showNameOnVerificationLink !== undefined) {
     patch.showNameOnVerificationLink = input.showNameOnVerificationLink;
+  }
+  if (input.showLinksOnProfile !== undefined) {
+    patch.showLinksOnProfile = input.showLinksOnProfile;
   }
   if (input.invitationPreference !== undefined) {
     patch.invitationPreference = input.invitationPreference;
@@ -674,6 +679,7 @@ export async function updateProfile(userId: string, input: UpdateProfileInput) {
       publicProfile: profiles.publicProfile,
       publicSlug: profiles.publicSlug,
       invitationPreference: profiles.invitationPreference,
+      showLinksOnProfile: profiles.showLinksOnProfile,
     });
 
   const row = written[0];
@@ -690,6 +696,7 @@ export async function updateProfile(userId: string, input: UpdateProfileInput) {
     publicProfile: row.publicProfile ?? false,
     publicSlug: row.publicSlug ?? null,
     invitationPreference: row.invitationPreference ?? 'all',
+    showLinksOnProfile: row.showLinksOnProfile ?? true,
     avatarUrl: await signedAvatarUrl(row.avatarUrl),
   };
 }

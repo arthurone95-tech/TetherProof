@@ -1236,10 +1236,11 @@ export async function updateProof(
  * Where the signed-in member's privacy choices are saved.
  *
  * One action for the whole privacy card: discoverability (whether employer
- * search may surface the worker), the public capability page (whether it exists
- * at all — enabling it generates the unguessable address), and the invitation
- * preference (who may invite). Each choice maps onto the one profile PATCH the
- * API accepts, so the card cannot drift from what the API enforces — and what
+ * search may surface the worker), the name shown on a confirmation link, the
+ * public capability page (whether it exists at all — enabling it generates the
+ * unguessable address), the invitation preference (who may invite), and whether
+ * the worker's connected links may be shown with their profile. Each choice maps
+ * onto the one profile PATCH the API accepts — and what it
  * it enforces at the layers that matter, not merely displays.
  *
  * A checkbox submits nothing when it is off and "on" when it is on, so a
@@ -1253,12 +1254,14 @@ export async function savePrivacySetting(_previous: FormState, formData: FormDat
   const discoverable = readCheckbox(formData, 'discoverable');
   const showNameOnVerificationLink = readCheckbox(formData, 'showNameOnVerificationLink');
   const publicProfile = readCheckbox(formData, 'publicProfile');
+  const showLinksOnProfile = readCheckbox(formData, 'showLinksOnProfile');
   const invitationPreference = String(formData.get('invitationPreference') ?? '');
 
   const body: Record<string, unknown> = {};
   if (discoverable !== null) body.discoverable = discoverable;
   if (showNameOnVerificationLink !== null) body.showNameOnVerificationLink = showNameOnVerificationLink;
   if (publicProfile !== null) body.publicProfile = publicProfile;
+  if (showLinksOnProfile !== null) body.showLinksOnProfile = showLinksOnProfile;
   if (invitationPreference) {
     if (invitationPreference !== 'all' && invitationPreference !== 'approved_only') {
       return { error: 'Choose who may invite you.' };

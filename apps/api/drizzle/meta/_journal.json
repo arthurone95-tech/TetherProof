@@ -99,6 +99,13 @@
       "when": 1791800000001,
       "tag": "0013_drop_user_role",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792500000000,
+      "tag": "0014_profile_links_visibility",
+      "breakpoints": true
     }
   ]
 }

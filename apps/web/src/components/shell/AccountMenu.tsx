@@ -30,10 +30,13 @@ export interface AccountSummary {
  * The account menu: the member's avatar in the header, opening the screens that
  * are about the account and the product rather than the work.
  *
- * It replaces the phone-only hamburger and is shown at every width, so Settings,
+ * It replaces the phone-only hamburger and is shown at every width, so Profile,
  * Help and the documents are reachable the same way on a phone and on a desktop.
- * The panel starts with who is signed in (photo or initial, name, and the
- * organisation or role), then the destinations in three groups.
+ * Settings is the one row that depends on the workspace: a worker reaches their
+ * privacy choices and account deletion from Profile, so the menu does not offer
+ * a second door to them, while every other workspace keeps Settings. The panel
+ * starts with who is signed in (photo or initial, name, and the organisation or
+ * role), then the destinations in three groups.
  *
  * Dismissal is the same set of listeners the old menu had, each for its own
  * reason: navigating means the menu's job is done, Escape is the keyboard's way
@@ -41,7 +44,13 @@ export interface AccountSummary {
  * dismissal on a touch screen. Arrow keys, Home and End move between rows, so the
  * menu is usable without a pointer.
  */
-export function AccountMenu({ account }: { account: AccountSummary }) {
+export function AccountMenu({
+  account,
+  showSettings,
+}: {
+  account: AccountSummary;
+  showSettings: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -153,25 +162,35 @@ export function AccountMenu({ account }: { account: AccountSummary }) {
           <div role="menu" aria-label="Account">
             {ACCOUNT_MENU.map((group) => (
               <div key={group.id} role="group" className="border-t border-brand-100 p-2">
-                {group.items.map((item) => {
-                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      role="menuitem"
-                      tabIndex={-1}
-                      aria-current={active ? 'page' : undefined}
-                      onClick={() => setOpen(false)}
-                      className={`flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:bg-brand-50 focus-visible:outline-none ${
-                        active ? 'bg-brand-50 text-brand-700' : 'text-ink-900 hover:bg-brand-50'
-                      }`}
-                    >
-                      <MenuRowIcon name={item.icon} className="h-5 w-5 shrink-0 text-ink-600" />
-                      {item.label}
-                    </Link>
-                  );
-                })}
+                {group.items
+                  /*
+                    Settings belongs to every workspace except the worker's. A worker's
+                    privacy choices and account deletion live on Profile, so an entry
+                    here would be a second door to the same two things — and the menu
+                    would name a destination that has nothing of its own. The filter is
+                    by active workspace, not by account: a person who is also an employer
+                    still finds Settings the moment they switch to that role.
+                  */
+                  .filter((item) => showSettings || item.href !== '/settings')
+                  .map((item) => {
+                    const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        role="menuitem"
+                        tabIndex={-1}
+                        aria-current={active ? 'page' : undefined}
+                        onClick={() => setOpen(false)}
+                        className={`flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:bg-brand-50 focus-visible:outline-none ${
+                          active ? 'bg-brand-50 text-brand-700' : 'text-ink-900 hover:bg-brand-50'
+                        }`}
+                      >
+                        <MenuRowIcon name={item.icon} className="h-5 w-5 shrink-0 text-ink-600" />
+                        {item.label}
+                      </Link>
+                    );
+                  })}
               </div>
             ))}
 

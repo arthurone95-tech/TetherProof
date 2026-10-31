@@ -444,6 +444,17 @@ export interface ProfileResponse {
   publicProfile: boolean;
   publicSlug: string | null;
   invitationPreference: InvitationPreference;
+  /**
+   * Whether the links the worker connected may be shown with their profile
+   * where it is read — employer search and any future surface.
+   *
+   * Recorded choice, not yet an enforced display: the links themselves are
+   * collected on Connect but not stored, so nothing renders them yet. The
+   * setting exists now so the answer is the worker's when that lands rather
+   * than a default made on their behalf. Non-workers hold the default and it
+   * is ignored, the same as the privacy fields above.
+   */
+  showLinksOnProfile: boolean;
 }
 
 /**

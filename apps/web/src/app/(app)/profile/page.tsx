@@ -1,14 +1,11 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { ArrowRight } from 'lucide-react';
-import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
-import type { WorkerCapabilityProfileResponse } from '@tetherproof/shared';
+import { ChevronRight, ShieldCheck, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
-import { currentProfile, apiServer } from '@/lib/server/api';
-import { CapabilitiesCard } from './CapabilitiesCard';
+import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
+import { currentProfile } from '@/lib/server/api';
 import { ProfileForm } from './ProfileForm';
-import { ShareCard } from './ShareCard';
 
 export const metadata: Metadata = {
   title: 'Profile — TetherProof',
@@ -24,12 +21,19 @@ export const metadata: Metadata = {
  * organization name and search location are not edited here because they are
  * not personal — they live on the Organization page, one source of truth for
  * what candidates and an administrator see. The rest of the page is the worker
- * record: proven capabilities, the shareable page, and the connected sources.
+ * record: the capability section and the account's privacy and deletion choices.
  *
- * The capability read and the connection read are deliberately parallel: one
- * round trip for both, and either failing on its own hides that card rather
- * than taking the page down — a missing capability list on a worker with an
- * otherwise healthy record is worse than a page that will not render over it.
+ * Privacy and deletion sit here rather than behind Settings because for a
+ * worker there is nothing else in Settings, and a separate destination for two
+ * rows made both harder to find than a section on the page they already open.
+ * Every other workspace keeps Settings untouched; this page is the worker's one
+ * place for them.
+ *
+ * The capability card is kept as a section with no contents for now. It used to
+ * read `GET /workers/capabilities` and render one row per skill; that read is
+ * gone, and what replaces it is an open decision. The section stays because an
+ * empty card is a slot the reader recognises, while a missing card reads as a
+ * feature the account never had.
  *
  * No email address, and not as an oversight: `ProfileResponse` does not carry
  * one. Identity data stays in Supabase Auth and is not duplicated into the
@@ -47,59 +51,77 @@ export default async function ProfilePage() {
   const isWorker = profile.capabilities.includes('worker');
   const isEmployer = profile.capabilities.includes('employer');
 
-  let capabilities: WorkerCapabilityProfileResponse | null = null;
-  if (isWorker) {
-    capabilities = await apiServer<WorkerCapabilityProfileResponse>('/workers/capabilities').catch(
-      () => null,
-    );
-  }
-
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
       <Card title="Your details">
         <ProfileForm
           showOrganizationName={isEmployer || profile.capabilities.includes('training_provider')}
           fullName={profile.fullName}
-          organizationName={profile.organizationName}
           locationGps={profile.locationGps}
           avatarUrl={profile.avatarUrl}
         />
       </Card>
 
-      {capabilities?.skills.length || capabilities?.verifiedTotal ? (
+      {/*
+        A section that is deliberately empty. Nothing is read for it and nothing
+        is rendered inside — what belongs here is an open decision, and a
+        placeholder that pretended to show something would be worse than none.
+      */}
+      {isWorker ? (
         <Card title="Your capabilities">
-          <CapabilitiesCard capabilities={capabilities} />
+          <></>
         </Card>
       ) : null}
 
       {isWorker ? (
-        <Card title="Share your proof">
-          <ShareCard enabled={profile.publicProfile} slug={profile.publicSlug} />
+        <Card title="Privacy & sharing">
+          <p className="text-sm text-ink-600">
+            Choose who can find you, who may invite you, what appears on your profile, and
+            whether your verified skills have a shareable page.
+          </p>
+          <Link
+            href="/settings/privacy"
+            className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-xl border border-brand-600 px-4 text-sm font-semibold text-brand-700 transition-colors hover:bg-brand-50"
+          >
+            <ShieldCheck aria-hidden="true" className="h-4 w-4" strokeWidth={ICON_STROKE_WIDTH} />
+            Manage privacy
+          </Link>
         </Card>
       ) : null}
 
       {/*
-        Connected sources moved to /connect.
-
-        It is a list that grows, and it has to say plainly which entries actually work —
-        a different job from Profile's, which is about who you are rather than what you
-        have linked. A pointer is left behind because somebody who connected a GitHub
-        account expects to find it, and a page that simply lacks a section reads as a loss
-        rather than a move.
+        Last on the page on purpose: deletion is the one action here that cannot
+        be undone, so it sits below everything the account is and keeps its own
+        heading and colour rather than reading as one more row.
       */}
       {isWorker ? (
-        <Card title="Connect">
-          <p className="text-sm text-ink-600">
-            Your linked work sources and profiles live on their own page.
-          </p>
-          <Link
-            href="/connect"
-            className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-brand-700 hover:text-brand-800"
+        <section aria-labelledby="danger-heading" className="flex flex-col gap-3">
+          <h2
+            id="danger-heading"
+            className="px-1 text-xs font-bold tracking-wider text-ink-500 uppercase"
           >
-            Go to Connect
-            <ArrowRight aria-hidden="true" className="h-4 w-4" strokeWidth={ICON_STROKE_WIDTH} />
+            Danger zone
+          </h2>
+          <Link
+            href="/settings/account"
+            className="flex items-center gap-3 rounded-2xl border border-red-200 bg-white p-4 transition-colors hover:border-red-500"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-700">
+              <Trash2 aria-hidden="true" className="h-5 w-5" strokeWidth={ICON_STROKE_WIDTH} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block font-semibold text-red-800">Delete account</span>
+              <span className="block text-sm text-ink-600">
+                Remove your account and start its data cleanup. This cannot be undone.
+              </span>
+            </span>
+            <ChevronRight
+              aria-hidden="true"
+              className="h-5 w-5 shrink-0 text-red-700"
+              strokeWidth={ICON_STROKE_WIDTH}
+            />
           </Link>
-        </Card>
+        </section>
       ) : null}
     </div>
   );

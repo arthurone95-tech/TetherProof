@@ -144,6 +144,7 @@ export const updateProfileSchema = z
     showNameOnVerificationLink: z.boolean().optional(),
     publicProfile: z.boolean().optional(),
     invitationPreference: z.enum(['all', 'approved_only']).optional(),
+    showLinksOnProfile: z.boolean().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: 'Provide at least one field to update.',

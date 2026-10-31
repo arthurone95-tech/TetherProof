@@ -126,7 +126,7 @@ export function AppHeader({
               }
             />
           ) : null}
-          <AccountMenu account={account} />
+          <AccountMenu account={account} showSettings={activeRole !== 'worker'} />
         </div>
       </div>
     </header>
