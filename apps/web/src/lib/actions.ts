@@ -13,6 +13,7 @@ import type {
   UpdateProofInput,
   UserCapability,
   VerificationResendResponse,
+  WorkerLink,
 } from '@tetherproof/shared';
 import { ApiRequestError, isCredentialRefusal } from './api-error';
 import type {
@@ -1521,6 +1522,48 @@ export async function githubRevoke(_previous: FormState, formData: FormData): Pr
     return { done: true };
   } catch (error) {
     return { error: messageFor(error, 'We could not disconnect that source. Please try again.') };
+  }
+}
+
+/**
+ * Saves an address a worker attached to their account on Connect.
+ *
+ * Stored only: no credential, no API call, nothing read from the source. The
+ * worker vouches for the address by pasting it, the same way they vouch for
+ * anything else they write on their profile. The page is revalidated so the
+ * saved link appears without a manual reload.
+ */
+export async function addWorkerLink(
+  name: string,
+  url: string,
+): Promise<{ ok: true; link: WorkerLink } | { ok: false; error: string }> {
+  try {
+    const link = await apiServer<WorkerLink>('/workers/links', { method: 'POST', body: { name, url } });
+    revalidatePath('/connect');
+    revalidatePath('/profile');
+    return { ok: true, link };
+  } catch (error) {
+    return { ok: false, error: messageFor(error, 'We could not save that link. Please try again.') };
+  }
+}
+
+/**
+ * Removes an address a worker attached to their account.
+ *
+ * The worker owns the row, so this is a hard delete rather than a status flip:
+ * a removed link should not linger anywhere, including the profile that may
+ * have been showing it.
+ */
+export async function removeWorkerLink(
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    await apiServer(`/workers/links/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    revalidatePath('/connect');
+    revalidatePath('/profile');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: messageFor(error, 'We could not remove that link. Please try again.') };
   }
 }
 

@@ -30,8 +30,7 @@ export function ConnectionsCard({ connections }: { connections: ConnectionInfo[]
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-ink-600">
-        Sources of work you have connected. TetherProof reads public profile data only — a
-        connection never lets TetherProof post, change, or delete anything on your behalf.
+        Connected work sources. TetherProof reads public profile data only and never posts on your behalf.
       </p>
 
       <div className="rounded-xl border border-brand-100 p-4">

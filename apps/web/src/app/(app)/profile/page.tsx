@@ -4,7 +4,8 @@ import { redirect } from 'next/navigation';
 import { ChevronRight, ShieldCheck, Trash2 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
-import { currentProfile } from '@/lib/server/api';
+import { currentProfile, apiServer } from '@/lib/server/api';
+import type { WorkerLinksResponse } from '@tetherproof/shared';
 import { ProfileForm } from './ProfileForm';
 
 export const metadata: Metadata = {
@@ -51,6 +52,12 @@ export default async function ProfilePage() {
   const isWorker = profile.capabilities.includes('worker');
   const isEmployer = profile.capabilities.includes('employer');
 
+  let workerLinks: WorkerLinksResponse['links'] = [];
+  if (isWorker && profile.showLinksOnProfile) {
+    const linksResponse = await apiServer<WorkerLinksResponse>('/workers/links').catch(() => ({ links: [] }));
+    workerLinks = linksResponse.links;
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
       <Card title="Your details">
@@ -89,8 +96,27 @@ export default async function ProfilePage() {
         </Card>
       ) : null}
 
+      {isWorker && profile.showLinksOnProfile && workerLinks.length > 0 ? (
+        <Card title="Links">
+          <ul className="flex flex-col gap-2">
+            {workerLinks.map((link) => (
+              <li key={link.id} className="rounded-xl border border-brand-100 p-3">
+                <p className="text-sm font-semibold text-ink-900">{link.name}</p>
+                <a
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer nofollow"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 hover:text-brand-800"
+                >
+                  {link.url.replace(/^https?:\/\//, '')}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
+
       {/*
-        Last on the page on purpose: deletion is the one action here that cannot
         be undone, so it sits below everything the account is and keeps its own
         heading and colour rather than reading as one more row.
       */}

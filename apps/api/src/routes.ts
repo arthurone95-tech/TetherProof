@@ -6,6 +6,7 @@ import {
   capabilityRouter,
 } from './modules/capabilities/routes.js';
 import { connectionsRouter } from './modules/connections/routes.js';
+import { workerLinksRouter } from './modules/links/routes.js';
 import {
   employerAdminRouter,
   employerRouter,
@@ -60,6 +61,10 @@ apiRouter.use('/notifications', notificationsRouter);
 // Telemetry connections (GitHub scaffold). Mounted under `/workers` so the
 // module owns its whole surface: list, start, callback, revoke.
 apiRouter.use('/workers/connections', connectionsRouter);
+
+// Addresses a worker attached to their account on Connect. Stored only: no
+// credential, no API call, nothing read from the source.
+apiRouter.use('/workers/links', workerLinksRouter);
 
 // A worker's own micro-credentials and enrolment. Under `/workers` for the same
 // reason as the proofs above it: the authenticated party is a worker, and the

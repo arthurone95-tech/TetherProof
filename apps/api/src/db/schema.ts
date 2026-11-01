@@ -336,6 +336,27 @@ export const profiles = pgTable(
   ],
 );
 
+/**
+ * Addresses a worker attached to their account on Connect.
+ *
+ * Stored only — no credential, no API call, nothing read from the source. The
+ * worker vouches for the address by pasting it, the same way they vouch for
+ * anything else they write on their profile. One row per link, owned by the
+ * worker, removable by them at any time.
+ */
+export const workerLinks = pgTable(
+  'worker_links',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: varchar('name', { length: 120 }).notNull(),
+    url: varchar('url', { length: 300 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('worker_links_user_idx').on(table.userId)],
+);
 export const capabilityBlocks = pgTable(
   'capability_blocks',
   {

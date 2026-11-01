@@ -961,6 +961,23 @@ export interface ConnectionsResponse {
 }
 
 /**
+ * One address a worker attached to their account on Connect.
+ *
+ * Stored, not signed in to: the name is what the worker calls it and the URL is
+ * what an employer opens. Nothing is read from the source automatically.
+ */
+export interface WorkerLink {
+  id: string;
+  name: string;
+  url: string;
+  createdAt: string;
+}
+
+export interface WorkerLinksResponse {
+  links: WorkerLink[];
+}
+
+/**
  * The fresh confirmation link produced by `POST /workers/proofs/:id/verification/resend`.
  *
  * Same shape as the first submission's link result: the token is returned exactly

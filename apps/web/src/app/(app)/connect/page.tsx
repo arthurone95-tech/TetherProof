@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import type { ConnectionsResponse } from '@tetherproof/shared';
+import type { ConnectionsResponse, WorkerLinksResponse } from '@tetherproof/shared';
 import { apiServer, currentProfile } from '@/lib/server/api';
 import { ConnectionsCard } from './ConnectionsCard';
 import { LinkConnections } from './LinkConnections';
@@ -41,9 +41,10 @@ export default async function ConnectPage() {
   if (!user) redirect('/login');
 
   // A failure here must not take the whole page down: links are still usable without it.
-  const response = await apiServer<ConnectionsResponse>('/workers/connections').catch(() => ({
-    connections: [],
-  }));
+  const [connectionsResponse, linksResponse] = await Promise.all([
+    apiServer<ConnectionsResponse>('/workers/connections').catch(() => ({ connections: [] })),
+    apiServer<WorkerLinksResponse>('/workers/links').catch(() => ({ links: [] })),
+  ]);
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
@@ -63,9 +64,9 @@ export default async function ConnectPage() {
         for it.
       </p>
 
-      <ConnectionsCard connections={response.connections} />
+      <ConnectionsCard connections={connectionsResponse.connections} />
 
-      <LinkConnections />
+      <LinkConnections initialLinks={linksResponse.links} />
     </div>
   );
 }
