@@ -15,12 +15,13 @@ import {
 } from 'lucide-react';
 import type { EmployerOverviewResponse, EmployerVerificationStatus } from '@tetherproof/shared';
 import { Banner } from '@/components/ui/Banner';
+import { Card } from '@/components/ui/Card';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 import { apiServer, currentProfile } from '@/lib/server/api';
 import { homeFor } from '@/lib/navigation';
 
 export const metadata: Metadata = {
-  title: 'Employer dashboard — TetherProof',
+  title: 'Hiring — TetherProof',
 };
 
 const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -106,6 +107,30 @@ export default async function EmployerDashboardPage() {
       <PageIntro greeting={greeting} />
 
       <ApprovalNotice overview={overview} />
+
+      {overview.activeSearches === 0 ? (
+        <Card title="Get started">
+          <ol className="flex flex-col gap-2 text-sm text-ink-700">
+            <li>1. Name your business and submit it for review.</li>
+            <li>2. Wait for approval — hiring unlocks then.</li>
+            <li>3. Create your first search.</li>
+          </ol>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Link
+              href="/employer/organization"
+              className="inline-flex min-h-10 items-center rounded-xl border border-brand-600 px-3 text-sm font-semibold text-brand-700 hover:bg-brand-50"
+            >
+              Name the business
+            </Link>
+            <Link
+              href="/employer/search"
+              className="inline-flex min-h-10 items-center rounded-xl border border-brand-600 px-3 text-sm font-semibold text-brand-700 hover:bg-brand-50"
+            >
+              Create a search
+            </Link>
+          </div>
+        </Card>
+      ) : null}
 
       <section aria-label="At a glance" className="grid grid-cols-2 gap-3 sm:gap-4">
         <MetricCard
@@ -218,7 +243,7 @@ function PageIntro({ greeting }: { greeting: string }) {
   return (
     <header className="flex flex-col gap-1">
       <p className="text-sm font-semibold text-brand-700">Welcome back, {greeting}</p>
-      <h1 className="text-2xl font-bold text-ink-900">Employer dashboard</h1>
+      <h1 className="text-2xl font-bold text-ink-900">Hiring</h1>
       <p className="text-sm text-ink-600">
         Your searches, the invitations you have sent, and the people who answered, in one place.
       </p>

@@ -742,6 +742,18 @@ export interface AdminBusinessesResponse {
   businesses: AdminBusinessListItem[];
 }
 
+/** One member of a business, for the owner's members screen. */
+export interface BusinessMember {
+  userId: string;
+  memberRole: 'owner' | 'member';
+  fullName: string | null;
+}
+
+/** The members of a business, from `GET /businesses/:businessId/members`. */
+export interface BusinessMembersResponse {
+  members: BusinessMember[];
+}
+
 // ---------------------------------------------------------------------------
 // Training providers (doc/02 Module 4)
 // ---------------------------------------------------------------------------

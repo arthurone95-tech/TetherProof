@@ -182,6 +182,34 @@ trainerRouter.get(
 );
 
 // ---------------------------------------------------------------------------
+// Aggregate demand
+// ---------------------------------------------------------------------------
+
+/**
+ * The network's aggregate demand.
+ *
+ * The same `getDemandInsights` read the training provider's dashboard uses, without
+ * the training-provider scope: any signed-in account can read it, and it carries no
+ * personal data — only skills other accounts are searching for, counts of those
+ * searches, and the network-wide offer totals. That is what a student (or worker) needs
+ * to see "what employers near me are asking for" without a role that would have refused
+ * them at the mount.
+ */
+export const demandRouter = Router();
+
+demandRouter.use(authenticate);
+
+demandRouter.get(
+  '/demand',
+  validateQuery(demandQuerySchema),
+  asyncHandler(async (req, res) => {
+    const { limit } = req.query as unknown as DemandQuery;
+    const insights: DemandInsightsResponse = await getDemandInsights(null, limit);
+    res.json(insights);
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // The student's side
 // ---------------------------------------------------------------------------
 

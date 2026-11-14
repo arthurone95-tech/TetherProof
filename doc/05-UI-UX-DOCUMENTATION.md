@@ -74,3 +74,12 @@ This document defines the user interface (UI) and user experience (UX) standards
 * **Plain, Direct Language:** Interface labels, instructions, and error messages use short sentences and everyday words. Avoid jargon, internal terminology, and technical identifiers that only make sense to engineers.
 * **No Exposed Internals:** Error messages never reveal stack traces, database details, or third-party service names. They state what happened in user terms and what the user can do next.
 * **Neutral and Respectful:** Copy addresses users by role rather than by assumed identity, and avoids language that could be read as dismissive of non-technical work.
+
+---
+
+## Update 2026-11-14
+
+Labels across nav tabs, headings and buttons now use one word per concept: Hiring / Business for
+employers; Institute for training providers; My training for students; Log work for workers.
+Training providers have their own details page at /trainer/details. The worker dashboard heading is
+``Your work record`` and the public-page pill reads ``Public page: On / Off`` linking to Privacy.

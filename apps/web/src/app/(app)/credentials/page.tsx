@@ -1,13 +1,13 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import type { StudentCredentialsResponse } from '@tetherproof/shared';
+import type { DemandInsightsResponse, StudentCredentialsResponse } from '@tetherproof/shared';
 import { apiServer, currentProfile } from '@/lib/server/api';
 import { homeFor } from '@/lib/navigation';
 import { EnrolWithInstitute } from './EnrolWithInstitute';
 import { StudentCredentialList } from './StudentCredentialList';
 
 export const metadata: Metadata = {
-  title: 'My credentials — TetherProof',
+  title: 'My training — TetherProof',
 };
 
 /**
@@ -35,16 +35,25 @@ export default async function StudentCredentialsPage() {
   // somebody who had done no paid work to be a student at all. The API made the same change;
   // if only one side moved, a student would be able to read their credentials through the
   // endpoint but be redirected away from the page that shows them.
-  if (!user.capabilities.includes('trainee') && !user.capabilities.includes('worker')) {
+  if (user.capabilities.length > 0 && !user.capabilities.includes('trainee') && !user.capabilities.includes('worker')) {
     redirect(homeFor(user));
   }
 
   const credentials = await apiServer<StudentCredentialsResponse>('/workers/credentials');
 
+  let demand: DemandInsightsResponse | null = null;
+  try {
+    // Aggregate demand only — no student or worker data is included, so this is safe
+    // to read for a person who holds no capability at all.
+    demand = await apiServer<DemandInsightsResponse>('/demand?limit=8');
+  } catch {
+    demand = null;
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold text-ink-900">My credentials</h1>
+        <h1 className="text-2xl font-bold text-ink-900">My training</h1>
         <p className="text-sm text-ink-600">
           Milestones a training provider has signed off on, and the answer each one is waiting for.
         </p>
@@ -60,6 +69,31 @@ export default async function StudentCredentialsPage() {
       ) : null}
 
       <StudentCredentialList credentials={credentials} />
+
+      {demand ? (
+        <section className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-ink-900">Skills employers are searching for</h2>
+          <p className="mt-1 text-sm text-ink-600">
+            Aggregate demand from the network, so this is not about any one employer and about no
+            personal data at all. It is what the market is asking for, and it is where your next
+            milestone could come from.
+          </p>
+          {demand.skills.length > 0 ? (
+            <ul className="mt-3 flex flex-wrap gap-2">
+              {demand.skills.slice(0, 8).map((skill) => (
+                <li
+                  key={skill.skillTag}
+                  className="rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-800"
+                >
+                  {skill.skillTag}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-3 text-sm text-ink-600">No demand signal yet.</p>
+          )}
+        </section>
+      ) : null}
 
       <EnrolWithInstitute />
 

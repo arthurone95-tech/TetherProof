@@ -8,7 +8,7 @@ import { homeFor } from '@/lib/navigation';
 import { OrganizationForm } from './OrganizationForm';
 
 export const metadata: Metadata = {
-  title: 'Organization — TetherProof',
+  title: 'Business — TetherProof',
 };
 
 const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -37,7 +37,7 @@ export default async function EmployerOrganizationPage() {
     <div className="flex flex-col gap-5">
       <VerificationNotice approval={approval} />
 
-      <Card title="Organization">
+      <Card title="Business">
         <p className="text-sm text-ink-600">
           Candidates see your organization name on an invitation. Distance in search results is
           measured from your location, which is optional.

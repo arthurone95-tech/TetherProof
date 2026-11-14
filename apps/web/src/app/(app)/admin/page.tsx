@@ -2,17 +2,13 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import type {
   AdminBusinessesResponse,
-  AdminEmployerListItem,
-  AdminEmployersResponse,
   AdminProofReviewItem,
   AdminProofReviewResponse,
-  EmployerVerificationStatus,
 } from '@tetherproof/shared';
 import { Card } from '@/components/ui/Card';
 import { apiServer, currentProfile } from '@/lib/server/api';
 import { homeFor } from '@/lib/navigation';
 import { AdminBusinessRow } from './AdminBusinessRow';
-import { ApprovalForm } from './ApprovalForm';
 import { ProofReviewForm } from './ProofReviewForm';
 
 export const metadata: Metadata = {
@@ -25,11 +21,6 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   year: 'numeric',
 });
 
-const STATUS_STYLES: Record<EmployerVerificationStatus, { label: string; chip: string }> = {
-  pending: { label: 'Pending', chip: 'bg-amber-100 text-amber-800' },
-  approved: { label: 'Approved', chip: 'bg-emerald-100 text-emerald-800' },
-  rejected: { label: 'Rejected', chip: 'bg-red-100 text-red-800' },
-};
 
 /**
  * The review console.
@@ -49,18 +40,10 @@ export default async function AdminPage() {
   if (!user) redirect('/login');
   if (!user.isAdmin) redirect(homeFor(user));
 
-  const [response, reviews, businesses] = await Promise.all([
-    apiServer<AdminEmployersResponse>('/admin/employers'),
+  const [reviews, businesses] = await Promise.all([
     apiServer<AdminProofReviewResponse>('/admin/proof-review'),
-    // The business queue, on the same console. A business decision and an employer
-    // decision are the same kind of judgement — has somebody looked at this organisation —
-    // so they belong on one screen rather than in two places an administrator has to
-    // remember to check.
     apiServer<AdminBusinessesResponse>('/admin/businesses').catch(() => ({ businesses: [] })),
   ]);
-
-  const pending = response.employers.filter((employer) => employer.status === 'pending');
-  const reviewed = response.employers.filter((employer) => employer.status !== 'pending');
 
   // Undecided work first, then anything a reviewer has already ruled on, so the
   // queue never buries the record that is waiting on a person under the ones that
@@ -88,54 +71,11 @@ export default async function AdminPage() {
             ))}
           </ul>
         </section>
-      ) : null}
-
-      <section aria-labelledby="employer-heading" className="flex flex-col gap-6">
-        <header className="flex flex-col gap-1">
-          <h1 id="employer-heading" className="text-2xl font-bold text-ink-900">
-            Employer approvals
-          </h1>
-          <p className="text-sm text-ink-600">
-            {pending.length > 0
-              ? `${pending.length} ${pending.length === 1 ? 'organization is' : 'organizations are'} waiting for a decision.`
-              : 'No organizations are waiting for a decision.'}
-          </p>
-        </header>
-
-        {response.employers.length === 0 ? (
-          <Card>
-            <p className="text-sm text-ink-600">No employer accounts have registered yet.</p>
-          </Card>
-        ) : null}
-
-        {pending.length > 0 ? (
-          <section aria-labelledby="pending-heading" className="flex flex-col gap-3">
-            <h2
-              id="pending-heading"
-              className="text-xs font-bold uppercase tracking-wider text-ink-500"
-            >
-              Waiting for review
-            </h2>
-            {pending.map((employer) => (
-              <EmployerReviewCard key={employer.employerId} employer={employer} />
-            ))}
-          </section>
-        ) : null}
-
-        {reviewed.length > 0 ? (
-          <section aria-labelledby="reviewed-heading" className="flex flex-col gap-3">
-            <h2
-              id="reviewed-heading"
-              className="text-xs font-bold uppercase tracking-wider text-ink-500"
-            >
-              Reviewed
-            </h2>
-            {reviewed.map((employer) => (
-              <EmployerReviewCard key={employer.employerId} employer={employer} />
-            ))}
-          </section>
-        ) : null}
-      </section>
+      ) : (
+        <Card>
+          <p className="text-sm text-ink-600">No businesses are waiting for review.</p>
+        </Card>
+      )}
 
       <section aria-labelledby="proofs-heading" className="flex flex-col gap-6">
         <header className="flex flex-col gap-1">
@@ -268,34 +208,3 @@ function ProofReviewCard({ item }: { item: AdminProofReviewItem }) {
   );
 }
 
-function EmployerReviewCard({ employer }: { employer: AdminEmployerListItem }) {
-  const status = STATUS_STYLES[employer.status];
-
-  return (
-    <Card>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-lg font-semibold text-ink-900">
-            {employer.organizationName?.trim() || 'Unnamed organization'}
-          </p>
-          <p className="text-sm text-ink-600">
-            {employer.contactName?.trim() || 'No contact name'} · registered{' '}
-            {DATE_FORMATTER.format(new Date(employer.registeredAt))}
-          </p>
-        </div>
-        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${status.chip}`}>
-          {status.label}
-        </span>
-      </div>
-
-      {employer.reviewedAt ? (
-        <p className="mt-2 text-xs text-ink-500">
-          Last reviewed {DATE_FORMATTER.format(new Date(employer.reviewedAt))}
-          {employer.note?.trim() ? ` · “${employer.note}”` : ''}
-        </p>
-      ) : null}
-
-      <ApprovalForm employerId={employer.employerId} />
-    </Card>
-  );
-}

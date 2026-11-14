@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import type { StudentCredentialsResponse, WorkerOverviewResponse } from '@tetherproof/shared';
+import type { StudentCredentialsResponse, WorkerCapabilityProfileResponse, WorkerOverviewResponse } from '@tetherproof/shared';
 import { ProofListItemView } from '@/components/proofs/ProofListItemView';
+import { skillLevelLabel } from '@/lib/capabilities';
 import { apiServer, currentProfile } from '@/lib/server/api';
 import { homeFor } from '@/lib/navigation';
 
@@ -17,13 +18,12 @@ export default async function WorkerDashboardPage() {
 
   let overview: WorkerOverviewResponse | null = null;
   let awaitingCredentials = 0;
+  let capabilityProfile: WorkerCapabilityProfileResponse | null = null;
   try {
     overview = await apiServer<WorkerOverviewResponse>('/workers/overview');
-    // Read separately and never allowed to take the dashboard down with it. A
-    // failure here means "no prompt", which is the right degradation: the page a
-    // worker came for still renders.
     const credentials = await apiServer<StudentCredentialsResponse>('/workers/credentials');
     awaitingCredentials = credentials.awaiting.length;
+    capabilityProfile = await apiServer<WorkerCapabilityProfileResponse>('/workers/capabilities').catch(() => null);
   } catch {
     overview = null;
   }
@@ -49,7 +49,7 @@ export default async function WorkerDashboardPage() {
       {/* Top Identity & Status Bar */}
       <div className="flex items-center justify-between px-1">
         <div>
-          <h1 className="text-sm font-bold text-ink-900 leading-tight">Secure Professional Ledger</h1>
+          <h1 className="text-sm font-bold text-ink-900 leading-tight">Your work record</h1>
         </div>
         {/*
           The member's own standing, driven by the public-page choice on Privacy.
@@ -59,7 +59,8 @@ export default async function WorkerDashboardPage() {
           is withdrawn. Nothing is stored — the /auth/me profile carries the
           boolean, so the pill follows the toggle on the next render.
         */}
-        <span
+        <Link
+          href="/settings/privacy"
           title={
             user.publicProfile
               ? 'Your public capability page is on, so anyone with the link can see your verified skills.'
@@ -75,16 +76,57 @@ export default async function WorkerDashboardPage() {
             aria-hidden="true"
             className={`h-1.5 w-1.5 rounded-full ${user.publicProfile ? 'bg-emerald-500' : 'bg-neutral-400'}`}
           />
-          {user.publicProfile ? 'Online' : 'Offline'}
-        </span>
+          Public page: {user.publicProfile ? 'On' : 'Off'}
+        </Link>
       </div>
 
       {totalLogs > 0 ? (
-        <CleanRecordCard 
-          total={totalLogs} 
-          verified={verifiedLogs} 
-          awaiting={awaitingVerificationLogs} 
+        <CleanRecordCard
+          total={totalLogs}
+          verified={verifiedLogs}
+          awaiting={awaitingVerificationLogs}
         />
+      ) : null}
+
+      {capabilityProfile && capabilityProfile.skills.length > 0 ? (
+        <div className="rounded-2xl border border-brand-100 bg-white p-4 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wider text-ink-500">Your skills</p>
+          <ul className="mt-2 flex flex-wrap gap-2">
+            {capabilityProfile.skills.map((skill) => (
+              <li
+                key={skill.skillTag}
+                className="inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-800"
+              >
+                {skill.skillTag}
+                <span className="text-brand-600">{skillLevelLabel(skill.skillLevel)}</span>
+              </li>
+            ))}
+          </ul>
+          {user.publicProfile && user.publicSlug ? (
+            <p className="mt-3 text-xs text-ink-600">
+              Shareable page:{' '}
+              <Link href={`/share/${user.publicSlug}`} className="font-semibold text-brand-700 hover:text-brand-800">
+                /share/{user.publicSlug}
+              </Link>
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {overview.awaitingVerificationLogs > 0 ? (
+        <Link
+          href="/logs"
+          className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3 transition-colors hover:border-amber-300"
+        >
+          <span className="text-sm font-semibold text-amber-900">
+            {overview.awaitingVerificationLogs === 1
+              ? '1 job is waiting for a customer to confirm'
+              : `${overview.awaitingVerificationLogs} jobs are waiting for a customer to confirm`}
+          </span>
+          <span aria-hidden="true" className="shrink-0 text-sm font-bold text-amber-800">
+            Review →
+          </span>
+        </Link>
       ) : null}
 
       {/*

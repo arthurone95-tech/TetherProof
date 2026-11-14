@@ -208,3 +208,16 @@ deployment file would be worse than none.
 **Still open from earlier phases:** the Twilio account behind `doc/13` E-027 (Phase 3), the
 Training Provider module and admin approval page (Phase 4), and the missing ESLint and unit-test
 runners (E-010), which is also why the CI workflow has no lint or unit-test job.
+
+## Update 2026-11-14
+
+- Part A-E scope work in progress: employer approval unification (code), setup forms, student
+  enrolment guard, landing page, roles/businesses, nav label renames, worker dashboard, persisted
+  links, privacy toggle.
+- Employer approval is now a single source of truth (the business), with the legacy
+  `employer_approvals` read paths moved off it (E-073). The `0016` backfill is proposed but not
+  applied; see the follow-up batch.
+- Business team members read path added (`GET /businesses/:businessId/members`) and the employer
+  members screen built; aggregate demand read exposed for signed-in accounts (`GET /demand`) and
+  surfaced on the student training page.
+

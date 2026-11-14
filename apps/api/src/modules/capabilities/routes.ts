@@ -24,6 +24,7 @@ import {
   createBusiness,
   listBusinesses,
   listBusinessesForAdmin,
+  listMembers,
   setBusinessStatus,
 } from './businesses.js';
 
@@ -154,6 +155,22 @@ businessRouter.post(
     const auth = account(req);
     await addMember(readParam(req, 'businessId'), req.body.userId, auth.userId);
     res.status(204).end();
+  }),
+);
+
+/**
+ * The members of a business, for the owner's screen.
+ *
+ * Read-only and owner-scoped, mirroring the write: the owner is the person who decides who
+ * may hire, so only they need the roster.
+ */
+businessRouter.get(
+  '/:businessId/members',
+  validateParams(businessIdParamSchema),
+  asyncHandler(async (req, res) => {
+    const auth = account(req);
+    const result = await listMembers(readParam(req, 'businessId'), auth.userId);
+    res.json(result);
   }),
 );
 

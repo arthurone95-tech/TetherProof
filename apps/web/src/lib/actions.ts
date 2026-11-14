@@ -1568,6 +1568,35 @@ export async function removeWorkerLink(
 }
 
 /**
+ * Adds a colleague to a business, which grants them the employer capability.
+ *
+ * The business owner is the only party allowed to do this, and the API checks the
+ * caller against the business owner before it runs — the same check the read-side
+ * member list uses.
+ */
+export async function addEmployerMemberAction(
+  _previous: unknown,
+  formData: FormData,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const businessId = String(formData.get('businessId') ?? '');
+  const userId = String(formData.get('userId') ?? '');
+  if (!businessId || !userId) {
+    return { ok: false, error: 'Choose a business and a member account before adding.' };
+  }
+
+  try {
+    await apiServer(`/businesses/${encodeURIComponent(businessId)}/members`, {
+      method: 'POST',
+      body: { userId },
+    });
+    revalidatePath('/employer/members');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: messageFor(error, 'We could not add that member. Please try again.') };
+  }
+}
+
+/**
  * True when the thrown value is Next.js's redirect control signal.
  *
  * `redirect` signals by throwing, so a `catch` that swallows everything would turn

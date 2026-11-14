@@ -142,6 +142,27 @@ export default async function TrainerDemandPage() {
         )}
       </Card>
 
+      <Card title="Milestones you could create">
+        <p className="text-sm text-ink-600">
+          Based on the skills employers are searching for most. Name a milestone after one of these
+          and it becomes something your students can earn.
+        </p>
+        {skills.length > 0 ? (
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {skills.slice(0, 8).map((skill) => (
+              <li
+                key={skill.skillTag}
+                className="rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-800"
+              >
+                {skill.skillTag}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-sm text-ink-600">No demand signal yet.</p>
+        )}
+      </Card>
+
       <Banner tone="info" title="How to read this">
         This is what employers on TetherProof are searching for right now, not an official
         labour-market statistic. A skill with no searches has not been shown to be unwanted — only

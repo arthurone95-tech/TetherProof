@@ -62,8 +62,8 @@ export default async function CapabilitiesSettingsPage() {
         than worked around per page.
       */}
       <p className="text-sm text-ink-600">
-        One account, and as many of these as you need. Switch between them from the
-        workspace button without signing out, and each keeps its own records.
+        What brings you here? Pick one and we will take you straight into setting it up. You can
+        add the others later, and one account holds all of them.
       </p>
 
       {held.length > 0 ? (
@@ -133,12 +133,6 @@ export default async function CapabilitiesSettingsPage() {
         </div>
       )}
 
-      {held.length > 1 ? (
-        <p className="text-xs text-ink-600">
-          Use the workspace button to move between them. On a phone it floats near the
-          bottom corner; on a desktop it sits in the header.
-        </p>
-      ) : null}
     </div>
   );
 }

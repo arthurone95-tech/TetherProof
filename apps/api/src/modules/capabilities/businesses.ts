@@ -29,6 +29,8 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type {
   AdminBusinessListItem,
+  BusinessMember,
+  BusinessMembersResponse,
   BusinessSummary,
   BusinessesResponse,
 } from '@tetherproof/shared';
@@ -380,4 +382,53 @@ export async function addMember(
     .onConflictDoNothing({ target: [businessMemberships.businessId, businessMemberships.userId] });
 
   await grant(userId, 'employer', 'business', business.ownerUserId);
+}
+
+/**
+ * The members of a business, for the owner's screen.
+ *
+ * Read-only and owner-scoped for the same reason adding is: the person deciding who may
+ * hire is the owner, and a colleague seeing the roster is the owner's roster. The rows are
+ * ids plus names — never contact details, which belong to accepted invitations and to the
+ * worker who agreed to be contacted.
+ */
+export async function listMembers(
+  businessId: string,
+  callerId: string,
+): Promise<BusinessMembersResponse> {
+  const [business] = await db
+    .select({ id: businesses.id, ownerUserId: businesses.ownerUserId })
+    .from(businesses)
+    .where(eq(businesses.id, businessId))
+    .limit(1);
+
+  if (!business) throw AppError.notFound('That business was not found.');
+
+  if (business.ownerUserId !== callerId) {
+    throw AppError.forbidden('Only the owner of this business can list its members.');
+  }
+
+  const rows = await db
+    .select({
+      userId: businessMemberships.userId,
+      memberRole: businessMemberships.memberRole,
+    })
+    .from(businessMemberships)
+    .where(eq(businessMemberships.businessId, businessId));
+
+  const members: BusinessMember[] = [];
+  for (const row of rows) {
+    const [profile] = await db
+      .select({ fullName: profiles.fullName })
+      .from(profiles)
+      .where(eq(profiles.userId, row.userId))
+      .limit(1);
+    members.push({
+      userId: row.userId,
+      memberRole: row.memberRole,
+      fullName: profile?.fullName?.trim() || null,
+    });
+  }
+
+  return { members };
 }

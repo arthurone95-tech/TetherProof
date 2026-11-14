@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type {
   AcceptedCandidate,
   AdminEmployerListItem,
@@ -15,17 +15,18 @@ import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { db } from '../../db/client.js';
 import {
+  businessMemberships,
+  businesses,
   directOffers,
-  employerApprovals,
   employerSpecs,
   profiles,
-  userCapabilities,
   users,
   type DirectOfferRow,
   type EmployerSpecRow,
 } from '../../db/schema.js';
 import { AppError } from '../../lib/errors.js';
 import { hasCapability } from '../capabilities/service.js';
+import { createBusiness, listBusinesses, setBusinessStatus } from '../capabilities/businesses.js';
 import {
   CANDIDATE_HANDLE_TTL_HOURS,
   issueCandidateHandle,
@@ -55,23 +56,51 @@ import type {
 // ---------------------------------------------------------------------------
 
 /**
+ * The approval state behind the single source of truth: a business.
+ *
+ * A business the account owns or is a member of carries the decision — status,
+ * reviewer, review time and note — so one record answers every question the
+ * platform has about whether that account may send invitations.
+ */
+async function approvalForUser(
+  userId: string,
+): Promise<{ status: EmployerVerificationStatus; note: string | null; reviewedAt: Date | null }> {
+  const rows = await db
+    .select({
+      status: businesses.status,
+      note: businesses.note,
+      reviewedAt: businesses.reviewedAt,
+    })
+    .from(businesses)
+    .leftJoin(businessMemberships, eq(businessMemberships.businessId, businesses.id))
+    .where(
+      sql`${businesses.ownerUserId} = ${userId} or ${businessMemberships.userId} = ${userId}`,
+    );
+
+  const approved = rows.find((row) => row.status === 'approved');
+  const chosen = approved ?? rows[0];
+
+  if (!chosen) {
+    return { status: 'pending', note: null, reviewedAt: null };
+  }
+
+  return {
+    status: chosen.status,
+    note: chosen.note ?? null,
+    reviewedAt: chosen.reviewedAt ?? null,
+  };
+}
+
+/**
  * Current approval state for an employer.
  *
- * An absent row means pending. That is deliberately the same as an explicit
- * pending row, so a newly registered employer needs no setup step before they can
- * search: reading a table that may not have a row yet would otherwise force a
- * write on every read path.
+ * An account with no business yet has nothing to decide on, which is `pending` —
+ * the same answer an explicit pending row used to give, and the same answer a
+ * newly registered employer now gets without a write on every read.
  */
-export async function getApprovalStatus(
-  employerId: string,
-): Promise<EmployerVerificationStatus> {
-  const rows = await db
-    .select({ status: employerApprovals.status })
-    .from(employerApprovals)
-    .where(eq(employerApprovals.employerId, employerId))
-    .limit(1);
-
-  return rows[0]?.status ?? 'pending';
+export async function getApprovalStatus(employerId: string): Promise<EmployerVerificationStatus> {
+  const { status } = await approvalForUser(employerId);
+  return status;
 }
 
 /**
@@ -143,26 +172,17 @@ export async function setApprovalStatus(
     });
   }
 
-  const reviewedAt = decision.status === 'pending' ? null : new Date();
+  // The decision lands on a business, because the business is the single source of
+  // truth for employer approval. The account's own business is created on the way to
+  // its first decision, so this account-level endpoint keeps its promise without
+  // writing a second approval record that nothing reads any more.
+  const existing = await listBusinesses(employerId);
+  const target = existing.businesses[0];
+  const businessId = target
+    ? target.id
+    : (await createBusiness(employerId, 'Untitled business')).id;
 
-  await db
-    .insert(employerApprovals)
-    .values({
-      employerId,
-      status: decision.status,
-      reviewedBy,
-      note: decision.note ?? null,
-      reviewedAt,
-    })
-    .onConflictDoUpdate({
-      target: employerApprovals.employerId,
-      set: {
-        status: decision.status,
-        reviewedBy,
-        note: decision.note ?? null,
-        reviewedAt,
-      },
-    });
+  await setBusinessStatus(businessId, decision.status, reviewedBy, decision.note ?? null);
 
   return decision.status;
 }
@@ -173,21 +193,11 @@ export async function getOwnApproval(employerId: string): Promise<{
   note: string | null;
   reviewedAt: string | null;
 }> {
-  const rows = await db
-    .select({
-      status: employerApprovals.status,
-      note: employerApprovals.note,
-      reviewedAt: employerApprovals.reviewedAt,
-    })
-    .from(employerApprovals)
-    .where(eq(employerApprovals.employerId, employerId))
-    .limit(1);
-
-  const row = rows[0];
+  const record = await approvalForUser(employerId);
   return {
-    status: row?.status ?? 'pending',
-    note: row?.note ?? null,
-    reviewedAt: row?.reviewedAt ? row.reviewedAt.toISOString() : null,
+    status: record.status,
+    note: record.note,
+    reviewedAt: record.reviewedAt ? record.reviewedAt.toISOString() : null,
   };
 }
 
@@ -643,26 +653,37 @@ export async function listReceivedOffers(workerId: string): Promise<ReceivedOffe
   // Only employers who actually appear in these offers need an approval looked up,
   // so the query is narrowed to them. Loading the whole approval table would be a
   // full scan of every decision ever made and would put unrelated approvals in
-  // memory for a handful of rows that matter.
+  // memory for a handful of rows that matter. The answer comes from the businesses
+  // those employers own or belong to, so it is the same rule the send gate applies.
+  const approved = new Set<string>();
   const employerIds = [...new Set(rows.map((row) => row.employerId))];
-  const approvals =
-    employerIds.length === 0
-      ? []
-      : await db
-          .select({ employerId: employerApprovals.employerId, status: employerApprovals.status })
-          .from(employerApprovals)
-          .where(
-            and(
-              inArray(employerApprovals.employerId, employerIds),
-              eq(employerApprovals.status, 'approved'),
-            ),
-          );
-  const approved = new Map(approvals.map((row) => [row.employerId, true]));
+  if (employerIds.length > 0) {
+    const approvedBusinesses = await db
+      .select({
+        ownerUserId: businesses.ownerUserId,
+        memberUserId: businessMemberships.userId,
+      })
+      .from(businesses)
+      .leftJoin(businessMemberships, eq(businessMemberships.businessId, businesses.id))
+      .where(
+        and(
+          or(
+            inArray(businesses.ownerUserId, employerIds),
+            inArray(businessMemberships.userId, employerIds),
+          ),
+          eq(businesses.status, 'approved'),
+        ),
+      );
+    for (const row of approvedBusinesses) {
+      if (row.ownerUserId) approved.add(row.ownerUserId);
+      if (row.memberUserId) approved.add(row.memberUserId);
+    }
+  }
 
   return rows.map((row) => ({
     id: row.id,
     employerOrganization: row.employerOrganization,
-    employerApproved: approved.get(row.employerId) ?? false,
+    employerApproved: approved.has(row.employerId),
     note: row.note,
     status: row.status,
     // Identity flows one way and only after agreement. Before acceptance the
@@ -909,24 +930,26 @@ async function readAcceptedContacts(
  * touched it.
  */
 export async function listEmployersForAdmin(): Promise<AdminEmployerListItem[]> {
+  // The queue is the businesses that are pending or decided, because the business is
+  // the single source of truth for employer approval. The owner is the account under
+  // review, and the organisation name on the business is the one that gets reviewed.
   const rows = await db
     .select({
-      employerId: users.id,
-      organizationName: profiles.organizationName,
-      contactName: profiles.fullName,
-      status: employerApprovals.status,
-      note: employerApprovals.note,
-      reviewedAt: employerApprovals.reviewedAt,
-      registeredAt: users.createdAt,
+      id: businesses.id,
+      name: businesses.name,
+      ownerId: businesses.ownerUserId,
+      status: businesses.status,
+      createdAt: businesses.createdAt,
+      reviewedAt: businesses.reviewedAt,
+      note: businesses.note,
+      ownerName: sql<string | null>`coalesce(
+        ${profiles.fullName},
+        (select raw_user_meta_data ->> 'full_name' from auth.users where id = ${businesses.ownerUserId})
+      )`,
     })
-    .from(users)
-    .innerJoin(
-      userCapabilities,
-      and(eq(userCapabilities.userId, users.id), eq(userCapabilities.capability, 'employer')),
-    )
-    .leftJoin(profiles, eq(profiles.userId, users.id))
-    .leftJoin(employerApprovals, eq(employerApprovals.employerId, users.id))
-    .orderBy(asc(users.createdAt));
+    .from(businesses)
+    .leftJoin(profiles, eq(profiles.userId, businesses.ownerUserId))
+    .orderBy(asc(businesses.createdAt));
 
   const priority: Record<EmployerVerificationStatus, number> = {
     pending: 0,
@@ -936,13 +959,13 @@ export async function listEmployersForAdmin(): Promise<AdminEmployerListItem[]> 
 
   return rows
     .map((row) => ({
-      employerId: row.employerId,
-      organizationName: row.organizationName,
-      contactName: row.contactName,
-      status: row.status ?? 'pending',
+      employerId: row.ownerId,
+      organizationName: row.name,
+      contactName: row.ownerName?.trim() || null,
+      status: row.status,
       note: row.note,
       reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
-      registeredAt: row.registeredAt.toISOString(),
+      registeredAt: row.createdAt.toISOString(),
     }))
     .sort((a, b) => priority[a.status] - priority[b.status]);
 }

@@ -81,11 +81,9 @@ export const WORKSPACES: Record<UserCapability, Workspace> = {
     label: 'Institute',
     href: '/trainer',
     blurb: 'Students, milestone issuer and demand',
-    // The institute's name is the profile's organisation field. It is what appears on
-    // every credential this provider signs, so it matters more here than for an employer.
-    settingsHref: '/profile',
+    settingsHref: '/trainer/details',
     settingsLabel: 'Institute details',
-    settingsMobileLabel: 'Inst.',
+    settingsMobileLabel: 'Details',
   },
   employer: {
     id: 'employer',
@@ -240,7 +238,7 @@ export function can(
  */
 const WORKER_NAV: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', mobileLabel: 'Home', icon: 'home' },
-  { href: '/workspace', label: 'Workspace', mobileLabel: 'Work', icon: 'workspace' },
+  { href: '/workspace', label: 'Log work', mobileLabel: 'Log', icon: 'workspace' },
   { href: '/logs', label: 'Logs', icon: 'logs' },
   { href: '/invites', label: 'Invitations', mobileLabel: 'Invites', icon: 'invitations' },
 ];
@@ -256,9 +254,9 @@ const WORKER_NAV: NavItem[] = [
  */
 const EMPLOYER_NAV: NavItem[] = [
   { href: '/employer', label: 'Dashboard', mobileLabel: 'Home', icon: 'home' },
-  { href: '/employer/search', label: 'Candidate search', mobileLabel: 'Search', icon: 'search' },
-  { href: '/employer/candidates', label: 'Candidates', mobileLabel: 'People', icon: 'candidates' },
-  { href: '/employer/organization', label: 'Organization', mobileLabel: 'Org', icon: 'organization' },
+  { href: '/employer/search', label: 'Find workers', mobileLabel: 'Find', icon: 'search' },
+  { href: '/employer/candidates', label: 'Invited', mobileLabel: 'Invited', icon: 'candidates' },
+  { href: '/employer/organization', label: 'Business', mobileLabel: 'Biz', icon: 'organization' },
 ];
 
 /** Administrators have the approval console and the shared profile. */
@@ -295,7 +293,7 @@ const TRAINER_NAV: NavItem[] = [
  * a different workspace entirely.
  */
 const TRAINEE_NAV: NavItem[] = [
-  { href: '/credentials', label: 'My credentials', mobileLabel: 'Home', icon: 'home' },
+  { href: '/credentials', label: 'My training', mobileLabel: 'Training', icon: 'home' },
 ];
 
 /** Which tab row belongs to which workspace. */

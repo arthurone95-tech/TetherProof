@@ -9,7 +9,7 @@ import { apiServer, currentProfile } from '@/lib/server/api';
 import { homeFor } from '@/lib/navigation';
 
 export const metadata: Metadata = {
-  title: 'Training dashboard — TetherProof',
+  title: 'Institute — TetherProof',
 };
 
 type Tone = 'brand' | 'amber' | 'emerald' | 'neutral';
@@ -184,7 +184,7 @@ function PageIntro({ greeting }: { greeting: string }) {
   return (
     <header className="flex flex-col gap-1">
       <p className="text-sm font-semibold text-brand-700">Welcome back, {greeting}</p>
-      <h1 className="text-2xl font-bold text-ink-900">Training dashboard</h1>
+      <h1 className="text-2xl font-bold text-ink-900">Institute</h1>
       <p className="text-sm text-ink-600">
         Your students, the milestones you have signed off, and the skills the market is short of.
       </p>

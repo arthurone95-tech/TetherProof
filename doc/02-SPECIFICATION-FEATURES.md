@@ -448,3 +448,21 @@ manage, and the button that was there did nothing but return to Home — an elem
 looks actionable and is not. Employers manage their organisation at
 `/employer/organization`; training providers set their institute name on their profile,
 where it belongs, because that name appears on every credential they sign.
+
+---
+
+## Update 2026-11-14
+
+Employer approval, invitations and hiring are keyed to the approved business, not to an employer
+account: approving a business grants the owner's employer capability, and the read paths answer
+from that single source (doc/13 E-073). The organisation management surface is now the employer
+area at /employer/organization, with a new members screen at /employer/members.
+
+Student facing: aggregate demand surfaced on the training page; the enrolment guard lets
+capability-less accounts reach it.
+
+Institute facing: the aggregate demand read is exposed at GET /demand for every signed-in
+account (GET /trainers/demand keeps the training-provider-scoped view).
+
+Employer team members: list members and add member at GET/POST /businesses/:businessId/members,
+with the owner-only members screen at /employer/members.

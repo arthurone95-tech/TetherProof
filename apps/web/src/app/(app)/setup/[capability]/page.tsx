@@ -17,6 +17,8 @@ import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 import { apiServer, currentProfile } from '@/lib/server/api';
 import { WORKSPACES } from '@/lib/navigation';
 import { CapabilityActivate, CapabilityConfigure } from './CapabilityConfigure';
+import { BusinessForm } from '@/app/(app)/businesses/BusinessForm';
+import { EnrolWithInstitute } from '@/app/(app)/credentials/EnrolWithInstitute';
 
 export const metadata: Metadata = {
   title: 'Set up — TetherProof',
@@ -152,22 +154,41 @@ export default async function SetupPage({ params }: { params: Promise<{ capabili
         </Banner>
       )}
 
-      {!held ? <CapabilityActivate capability={id} /> : null}
+      {!held && id !== 'employer' && id !== 'trainee' ? <CapabilityActivate capability={id} /> : null}
+
+      {!held && id === 'employer' ? (
+        <Card title="Set up a business">
+          <p className="text-sm text-ink-600">
+            Hiring runs through a business. Create one below and it will be reviewed before you can
+            send invitations.
+          </p>
+          <div className="mt-3">
+            <BusinessForm />
+          </div>
+        </Card>
+      ) : null}
+
+      {!held && id === 'trainee' ? <EnrolWithInstitute /> : null}
 
       {held ? (
         <>
           {id === 'trainee' ? (
             <Card title="Enter your enrolment code">
               <p className="text-sm text-ink-600">
-                Your institute gave you a code. Enter it on your credentials page to finish
-                setting this up.
+                Your institute gave you a code. Enter it here to finish setting this up.
               </p>
-              <Link
-                href="/credentials"
-                className="mt-3 inline-block text-sm font-semibold text-brand-700 hover:text-brand-800"
-              >
-                Go to my credentials →
-              </Link>
+              <div className="mt-3">
+                <EnrolWithInstitute />
+              </div>
+            </Card>
+          ) : id === 'employer' ? (
+            <Card title="Set up a business">
+              <p className="text-sm text-ink-600">
+                Create a business below. Hiring opens once an administrator approves it.
+              </p>
+              <div className="mt-3">
+                <BusinessForm />
+              </div>
             </Card>
           ) : (
             <CapabilityConfigure

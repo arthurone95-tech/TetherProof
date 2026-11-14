@@ -19,6 +19,7 @@ import { proofRouter } from './modules/proofs/routes.js';
 import { publicRouter } from './modules/public/routes.js';
 import { adminReviewRouter, reviewRouter } from './modules/review/routes.js';
 import {
+  demandRouter,
   studentCredentialRouter,
   studentEnrolmentRouter,
   trainerRouter,
@@ -80,6 +81,11 @@ apiRouter.use('/workers', studentCredentialRouter);
 // Its own prefix so the elevated surface stays identifiable, and so a role check
 // is one mount rather than something each handler repeats.
 apiRouter.use('/trainers', trainerRouter);
+
+// The same aggregate demand read, for every signed-in account that is not a training
+// provider. Keeps the analytics behind a single service function while letting a
+// student read "what employers are searching for" without a training-provider role.
+apiRouter.use('/demand', demandRouter);
 
 // Public capability profiles behind shareable links. Json, read-only, and
 // gated by the worker's own flag plus an unguessable slug.

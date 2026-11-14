@@ -15,12 +15,16 @@ export const metadata: Metadata = {
  * follows a stale bookmarked link does not have to sign in twice. The check reads
  * the httpOnly cookie, which means no token is rendered into the page.
  */
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
   const user = await currentProfile();
-
   if (user) {
     redirect(homeFor(user));
   }
-
-  return <LoginView />;
+  const { tab } = await searchParams;
+  const initialPanel = tab === 'register' ? 'register' : 'sign-in';
+  return <LoginView initialPanel={initialPanel} />;
 }

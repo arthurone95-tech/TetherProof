@@ -39,8 +39,8 @@ const PANELS: Record<Panel, { heading: string; blurb?: string }> = {
  * as-is, so an error is rendered directly rather than replaced with something
  * vaguer.
  */
-export function LoginView() {
-  const [panel, setPanel] = useState<Panel>('sign-in');
+export function LoginView({ initialPanel = 'sign-in' }: { initialPanel?: 'sign-in' | 'register' }) {
+  const [panel, setPanel] = useState<Panel>(initialPanel);
 
   // Typed on the register panel and carried to the confirm panel, because the
   // API only ever answers with a masked address. It is the reader's own address.

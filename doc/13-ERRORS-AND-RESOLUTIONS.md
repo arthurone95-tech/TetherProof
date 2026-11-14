@@ -3376,3 +3376,97 @@ than to browser history: it is one record reached from the list, so going back t
 the person happened to come from could strand them in the app with no route to the record
 they were looking at. History remains the default everywhere else, because those pages are
 genuinely reached from several places.
+
+---
+
+## E-073: The employer approval was read from two places at once
+
+* **Status:** Fixed
+* **Found:** 2026-11-14, during the employer-approval unification pass.
+* **Related:** `apps/api/src/modules/employers/service.ts` (`getApprovalStatus`,
+  `getOwnApproval`, `listReceivedOffers`, `listEmployersForAdmin`, `setApprovalStatus`),
+  `apps/api/src/modules/capabilities/businesses.ts` (`setBusinessStatus`, `addMember`,
+  `listMembers`), `apps/web/src/app/(app)/admin/page.tsx`.
+
+### Description
+
+The business approval flow (migration `0012`) made `public.businesses` the vehicle for employer
+rights, and `setBusinessStatus` already granted or revoked the employer capability from it.
+But three of the read paths the product still answered from had not been moved:
+
+* `getApprovalStatus` read `public.employer_approvals` after checking businesses, as a bridge
+  for legacy accounts;
+* `getOwnApproval` read `public.employer_approvals` directly, so the dashboard's status tile
+  and the note/reviewed-at copy could disagree with the send gate;
+* `listReceivedOffers` built the worker's "is this employer approved" answer from
+  `public.employer_approvals`.
+
+The result was a split source of truth: an employer approved through a business showed a
+dashboard that could still answer "pending" from a stale table, and the worker's invitation
+list could show an employer approved while the send gate said no.
+
+### Fix
+
+All four reads now go through one helper, `approvalForUser`, which reads the account's
+business(es) — owner or member — and returns status, note and review time from that single row.
+The legacy `employer_approvals` table is no longer consulted by any read path, and
+`setApprovalStatus` now lands the decision on a business (creating the account's business on
+its first decision) rather than writing a second approval record. The administrator's queue
+lists businesses rather than employer rows.
+
+### Verification
+
+* `npm run typecheck` passes across shared, api and web.
+* `npm run lint` passes.
+* `npm run build` passes, and the new `/employer/members` route is generated.
+
+---
+
+## E-074: The employer and trainee setup screens were dead ends
+
+* **Status:** Fixed
+* **Found:** 2026-11-14, while closing the /setup flow after the approval unification.
+* **Related:** `apps/web/src/app/(app)/setup/[capability]/page.tsx`,
+  `apps/web/src/app/(app)/setup/[capability]/CapabilityConfigure.tsx`.
+
+### Description
+
+`CapabilityActivate` returns `null` for `employer` and `trainee`, and `CapabilityConfigure`
+returns `null` for anything that needs neither a name nor an institute. The workspace switcher
+sends people to `/setup/<capability>`, so an employer landing there got the two-step layout with
+no form, and a trainee got the same.
+
+### Fix
+
+`/setup/employer` now renders the business form (create the business that gets reviewed), and
+`/setup/trainee` renders the enrolment-code form. The employer and trainee branches of
+`CapabilityConfigure` are no longer the destination.
+
+### Verification
+
+* `npm run typecheck`, `npm run lint` and `npm run build` pass.
+
+---
+
+## E-075: A capability-less account could not reach the enrolment form
+
+* **Status:** Fixed
+* **Found:** 2026-11-14, during the student-flow pass.
+* **Related:** `apps/web/src/app/(app)/credentials/page.tsx`,
+  `apps/api/src/modules/trainers/service.ts` (`redeemEnrolmentCode`).
+
+### Description
+
+The credentials page redirected any account that held neither `worker` nor `trainee` away from
+the enrolment form, even though redeeming an enrolment code is the very action that grants
+`trainee` to someone who holds nothing. The API already accepted the redemption (it is mounted
+on `authenticate` alone); only the page guard disagreed, so the flow dead-ended.
+
+### Fix
+
+The page guard now lets a capability-less account through, and still redirects accounts that
+hold other capabilities (for example employer) away.
+
+### Verification
+
+* `npm run typecheck` passes.

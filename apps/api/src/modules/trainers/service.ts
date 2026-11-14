@@ -628,7 +628,7 @@ export async function respondToCredential(
  * employer happened to save a spec for. See `demand.ts`.
  */
 export async function getDemandInsights(
-  _trainerId: string,
+  _trainerId: string | null,
   limit: number,
 ): Promise<DemandInsightsResponse> {
   const [searches, supply, offerTotals, institutionCount] = await Promise.all([

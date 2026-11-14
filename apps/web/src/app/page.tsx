@@ -19,7 +19,12 @@ const modules = [
   {
     title: 'Training Provider',
     body: 'Sign off practical milestones and see which skills the market actually needs.',
-    available: false,
+    available: true,
+  },
+  {
+    title: 'Student',
+    body: 'Hold the milestones your institute signs off, separate from customer-verified work.',
+    available: true,
   },
 ];
 
@@ -82,6 +87,14 @@ export default async function HomePage({
         </p>
       </header>
 
+      <div className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm">
+        <p className="text-xs font-bold uppercase tracking-wider text-ink-500">Example</p>
+        <p className="mt-2 text-sm font-semibold text-ink-900">Solar installation — 4 verified proofs</p>
+        <p className="mt-1 text-xs text-ink-600">
+          A sample of what a verified skill looks like on a worker&apos;s profile. Not a real person.
+        </p>
+      </div>
+
       {user ? (
         <div className="rounded-2xl border border-brand-100 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-ink-900">
@@ -92,13 +105,7 @@ export default async function HomePage({
             href={homeFor(user)}
             className="mt-4 inline-flex min-h-12 items-center rounded-xl bg-brand-600 px-6 font-semibold text-white hover:bg-brand-700"
           >
-            {user.capabilities.length === 0 ? 'Choose your workspace' : 'Go to your workspace'}
-          </Link>
-          <Link
-            href="/settings/account"
-            className="mt-3 block text-sm text-ink-600 underline hover:text-ink-900"
-          >
-            Delete your account
+            {user.capabilities.length === 0 ? 'What brings you here?' : 'Go to your workspace'}
           </Link>
         </div>
       ) : (
@@ -113,14 +120,23 @@ export default async function HomePage({
             <>
               <h2 className="text-lg font-semibold text-ink-900">Sign in or create an account</h2>
               <p className="mt-2 text-sm text-ink-600">
-                Workers and employers can both get started. It takes an email address and a password.
+                One account for work, hiring, training and learning. It takes an email address and a
+                password.
               </p>
-              <Link
-                href="/login"
-                className="mt-4 inline-flex min-h-12 items-center rounded-xl bg-brand-600 px-6 font-semibold text-white hover:bg-brand-700"
-              >
-                Sign in
-              </Link>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Link
+                  href="/login"
+                  className="inline-flex min-h-12 items-center rounded-xl bg-brand-600 px-6 font-semibold text-white hover:bg-brand-700"
+                >
+                  Sign in
+                </Link>
+                <Link
+                  href="/login?tab=register"
+                  className="inline-flex min-h-12 items-center rounded-xl border border-brand-600 bg-white px-6 font-semibold text-brand-700 hover:bg-brand-50"
+                >
+                  Create account
+                </Link>
+              </div>
             </>
           )}
         </div>
@@ -140,6 +156,66 @@ export default async function HomePage({
           </Card>
         ))}
       </div>
+
+      <section className="grid gap-4 sm:grid-cols-3">
+        <Link
+          href="/login?tab=register"
+          className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm transition-colors hover:border-brand-300"
+        >
+          <p className="text-sm font-semibold text-ink-900">I do the work</p>
+          <p className="mt-1 text-xs text-ink-600">
+            Log jobs, collect proof, and build a verified capability profile.
+          </p>
+        </Link>
+        <Link
+          href="/login?tab=register"
+          className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm transition-colors hover:border-brand-300"
+        >
+          <p className="text-sm font-semibold text-ink-900">I hire</p>
+          <p className="mt-1 text-xs text-ink-600">
+            Search verified proof and invite the workers you want.
+          </p>
+        </Link>
+        <Link
+          href="/login?tab=register"
+          className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm transition-colors hover:border-brand-300"
+        >
+          <p className="text-sm font-semibold text-ink-900">I train</p>
+          <p className="mt-1 text-xs text-ink-600">
+            Sign off practical milestones and see what the market needs.
+          </p>
+        </Link>
+      </section>
+
+      <section className="rounded-2xl border border-brand-100 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-ink-900">How it works</h2>
+        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+          <div>
+            <p className="text-sm font-semibold text-ink-900">For workers</p>
+            <ol className="mt-2 list-decimal pl-5 text-xs text-ink-600">
+              <li>Log a job with a photo or voice note.</li>
+              <li>Your customer confirms it.</li>
+              <li>Your verified skill profile grows.</li>
+            </ol>
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-ink-900">For employers</p>
+            <ol className="mt-2 list-decimal pl-5 text-xs text-ink-600">
+              <li>Set up a business and get approved.</li>
+              <li>Search by proven skill.</li>
+              <li>Invite the workers you want.</li>
+            </ol>
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-ink-900">For institutes</p>
+            <ol className="mt-2 list-decimal pl-5 text-xs text-ink-600">
+              <li>Register and get approved.</li>
+              <li>Issue milestones to students.</li>
+              <li>See which skills the market needs.</li>
+            </ol>
+          </div>
+        </div>
+      </section>
 
       <footer className="border-t border-brand-100 pt-6">
         <nav

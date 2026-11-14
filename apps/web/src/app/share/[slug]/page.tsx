@@ -7,9 +7,43 @@ import { skillLevelLabel } from '@/lib/capabilities';
 import { apiPublic } from '@/lib/server/api';
 import { ICON_STROKE_WIDTH } from '@/components/ui/icon';
 
-export const metadata: Metadata = {
-  title: 'Capability profile — TetherProof',
-};
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  let profile: PublicCapabilityProfileResponse | null = null;
+  try {
+    profile = await apiPublic<PublicCapabilityProfileResponse>(`/public/profiles/${encodeURIComponent(slug)}`);
+  } catch {
+    profile = null;
+  }
+
+  const name = profile?.displayName?.trim() || 'A TetherProof worker';
+  const verified = profile?.verifiedTotal ?? 0;
+  const title = `${name} — verified skills on TetherProof`;
+  const description =
+    verified > 0
+      ? `${name} has ${verified} verified proof${verified === 1 ? '' : 's'} of real work. See the skills and levels.`
+      : `${name}'s verified capability profile on TetherProof.`;
+
+  return {
+    title,
+    description,
+    openGraph: {
+      title,
+      description,
+      type: 'profile',
+      siteName: 'TetherProof',
+    },
+    twitter: {
+      card: 'summary',
+      title,
+      description,
+    },
+  };
+}
 
 // A share page reflects its subject's live record, so it is rendered per
 // request and never cached — the API answers it with no-store for the same reason.
