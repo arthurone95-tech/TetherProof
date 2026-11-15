@@ -65,6 +65,10 @@ import type {
 async function approvalForUser(
   userId: string,
 ): Promise<{ status: EmployerVerificationStatus; note: string | null; reviewedAt: Date | null }> {
+  // Defined order: an approved business wins over every other, and among the rest
+  // the most recent decision is the one the approval status follows. This keeps a
+  // rejected employer from becoming "pending" again just because an older pending
+  // business row exists.
   const rows = await db
     .select({
       status: businesses.status,
@@ -75,10 +79,13 @@ async function approvalForUser(
     .leftJoin(businessMemberships, eq(businessMemberships.businessId, businesses.id))
     .where(
       sql`${businesses.ownerUserId} = ${userId} or ${businessMemberships.userId} = ${userId}`,
+    )
+    .orderBy(
+      sql`(case when ${businesses.status} = 'approved' then 1 else 0 end) DESC`,
+      desc(businesses.createdAt),
     );
 
-  const approved = rows.find((row) => row.status === 'approved');
-  const chosen = approved ?? rows[0];
+  const chosen = rows[0];
 
   if (!chosen) {
     return { status: 'pending', note: null, reviewedAt: null };
@@ -112,9 +119,10 @@ export async function getApprovalStatus(employerId: string): Promise<EmployerVer
  * anyone has reviewed their account. Contacting a worker who never agreed to be
  * contacted is the action that needs a human to have looked at the account first.
  *
- * `rejected` is a distinct state from `pending` and is not retryable by the
- * employer, so an account that was turned down cannot simply re-apply and get
- * another automatic pending.
+ * `rejected` is a distinct state from `pending`: this account's current business
+ * is turned down and it cannot send until that decision changes. A rejected
+ * employer may still create a new business; a new business starts `pending` and
+ * confers no hiring rights until an administrator approves it.
  */
 export async function getOfferSendingStatus(employerId: string): Promise<OfferSendingStatus> {
   const status = await getApprovalStatus(employerId);

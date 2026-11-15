@@ -113,6 +113,13 @@
       "when": 1792600000000,
       "tag": "0015_worker_links",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1792700000000,
+      "tag": "0016_backfill_employer_approvals_to_businesses",
+      "breakpoints": true
     }
   ]
 }
