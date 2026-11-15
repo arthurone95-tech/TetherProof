@@ -20,10 +20,16 @@ export default async function WorkerDashboardPage() {
   let awaitingCredentials = 0;
   let capabilityProfile: WorkerCapabilityProfileResponse | null = null;
   try {
-    overview = await apiServer<WorkerOverviewResponse>('/workers/overview');
-    const credentials = await apiServer<StudentCredentialsResponse>('/workers/credentials');
-    awaitingCredentials = credentials.awaiting.length;
-    capabilityProfile = await apiServer<WorkerCapabilityProfileResponse>('/workers/capabilities').catch(() => null);
+    // These three reads are independent of each other, so fetch them in parallel
+    // instead of waiting for each one to finish before starting the next.
+    const [overviewResult, credentialsResult, capabilitiesResult] = await Promise.all([
+      apiServer<WorkerOverviewResponse>('/workers/overview'),
+      apiServer<StudentCredentialsResponse>('/workers/credentials'),
+      apiServer<WorkerCapabilityProfileResponse>('/workers/capabilities').catch(() => null),
+    ]);
+    overview = overviewResult;
+    awaitingCredentials = credentialsResult.awaiting.length;
+    capabilityProfile = capabilitiesResult;
   } catch {
     overview = null;
   }

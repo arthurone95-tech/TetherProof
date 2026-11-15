@@ -34,9 +34,19 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
     },
   );
 
-  // Reading the user validates the token and refreshes it when it is close to
-  // expiry. The result is intentionally unused.
-  await supabase.auth.getUser();
+  // If there are no Supabase auth cookies, there is no session to validate or
+  // refresh, so skip the network round-trip to `getUser()`. This covers signed-out
+  // visitors and public-page navigations, which are the majority of route
+  // transitions on a marketing-heavy site.
+  const hasAuthCookie = request.cookies.getAll().some((cookie) =>
+    cookie.name.startsWith('sb-'),
+  );
+
+  if (hasAuthCookie) {
+    // Reading the user validates the token and refreshes it when it is close to
+    // expiry. The result is intentionally unused.
+    await supabase.auth.getUser();
+  }
 
   return response;
 }

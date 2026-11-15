@@ -28,6 +28,7 @@ import type {
 } from './form-state';
 import { formErrorFor } from './form-state';
 import { homeFor } from './navigation';
+import { getInvitationInbox, getNotifications } from './server/shell-data';
 import { apiPublic, apiServer, apiServerForm, currentProfile } from './server/api';
 import { isUserCapability, writeStoredRole } from './server/active-role';
 import { WORKSPACES } from './navigation';
@@ -1611,4 +1612,32 @@ function isRedirect(error: unknown): boolean {
     typeof (error as { digest?: unknown }).digest === 'string' &&
     (error as { digest: string }).digest.startsWith('NEXT_REDIRECT')
   );
+}
+
+/**
+ * Server actions for shell badge data.
+ *
+ * These are called from the client-side `AuthenticatedShell` component so the
+ * signed-in layout shell can render immediately without waiting on badge
+ * round-trips. A missing badge degrades to zero rather than blocking the shell.
+ */
+
+/** Pending invitations count for the worker's Invitations tab badge. */
+export async function getPendingInvitationsAction(): Promise<number> {
+  try {
+    const inbox = await getInvitationInbox();
+    return inbox.pendingCount;
+  } catch {
+    return 0;
+  }
+}
+
+/** Unread notifications count for the header's notification badge. */
+export async function getUnreadNotificationsAction(): Promise<number> {
+  try {
+    const feed = await getNotifications();
+    return feed.unreadCount;
+  } catch {
+    return 0;
+  }
 }

@@ -39,16 +39,14 @@ export default async function StudentCredentialsPage() {
     redirect(homeFor(user));
   }
 
-  const credentials = await apiServer<StudentCredentialsResponse>('/workers/credentials');
-
-  let demand: DemandInsightsResponse | null = null;
-  try {
-    // Aggregate demand only — no student or worker data is included, so this is safe
-    // to read for a person who holds no capability at all.
-    demand = await apiServer<DemandInsightsResponse>('/demand?limit=8');
-  } catch {
-    demand = null;
-  }
+  // These two reads are independent — fetch them in parallel instead of waiting
+  // for each one to finish before starting the next.
+  const [credentialsResult, demandResult] = await Promise.all([
+    apiServer<StudentCredentialsResponse>('/workers/credentials'),
+    apiServer<DemandInsightsResponse>('/demand?limit=8').catch(() => null),
+  ]);
+  const credentials = credentialsResult;
+  const demand: DemandInsightsResponse | null = demandResult;
 
   return (
     <div className="flex flex-col gap-5">
