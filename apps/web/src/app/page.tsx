@@ -1,32 +1,44 @@
 import Link from 'next/link';
 import type { UserCapability } from '@tetherproof/shared';
 import { Banner } from '@/components/ui/Banner';
-import { Card } from '@/components/ui/Card';
 import { homeFor } from '@/lib/navigation';
 import { currentProfile } from '@/lib/server/api';
 
-const modules = [
+const steps = [
   {
-    title: 'Worker',
-    body: 'Log completed work by voice or photo, and build a capability profile that travels with you.',
-    available: true,
+    title: 'Log the job',
+    body: 'Record finished work with a photo or a voice note. It takes a minute.',
   },
   {
-    title: 'Employer',
-    body: 'Define capability specs and search verified proof instead of reading résumés.',
-    available: true,
+    title: 'Your customer confirms',
+    body: 'They get a link by text message. No app, no account.',
   },
   {
-    title: 'Training Provider',
-    body: 'Sign off practical milestones and see which skills the market actually needs.',
-    available: true,
-  },
-  {
-    title: 'Student',
-    body: 'Hold the milestones your institute signs off, separate from customer-verified work.',
-    available: true,
+    title: 'Employers find you',
+    body: 'Verified proof builds your profile. Employers search it by skill.',
   },
 ];
+
+const audiences = [
+  {
+    title: 'Workers',
+    body: 'Build a verified work history that travels with you from job to job.',
+  },
+  {
+    title: 'Employers',
+    body: 'Search proven skills instead of reading résumés, then invite who you want.',
+  },
+  {
+    title: 'Training providers',
+    body: 'Sign off practical milestones and see which skills the market needs.',
+  },
+  {
+    title: 'Students',
+    body: 'Keep the milestones your institute signs off, separate from customer-verified work.',
+  },
+];
+
+const sampleProofs = ['Rooftop panel mounting', 'Inverter and battery wiring', 'System commissioning'];
 
 /**
  * The signed-in summary, said in terms of what the person can actually do.
@@ -77,150 +89,155 @@ export default async function HomePage({
   const pendingMedia = Number.isFinite(parsedPending) && parsedPending > 0 ? parsedPending : 0;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-4 py-12">
-      <header className="space-y-3">
-        <p className="text-sm font-semibold tracking-wide text-brand-600">TetherProof</p>
-        <h1 className="text-3xl font-bold text-ink-900 sm:text-4xl">Proof of work, not promises.</h1>
-        <p className="text-lg text-ink-600">
-          TetherProof turns completed jobs into verified capability. Employers hire on what was actually
-          done, and workers keep proof that cannot be edited or exaggerated.
-        </p>
+    <div className="min-h-screen bg-surface">
+      {/* Top bar: wordmark on the left, one action on the right. */}
+      <header className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
+        <span className="text-lg font-bold tracking-tight text-brand-700">TetherProof</span>
+        <Link
+          href={user ? homeFor(user) : '/login'}
+          className="inline-flex min-h-11 items-center rounded-xl px-4 text-sm font-semibold text-ink-800 hover:bg-brand-50"
+        >
+          {user ? 'Your workspace' : 'Sign in'}
+        </Link>
       </header>
 
-      <div className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm">
-        <p className="text-xs font-bold uppercase tracking-wider text-ink-500">Example</p>
-        <p className="mt-2 text-sm font-semibold text-ink-900">Solar installation — 4 verified proofs</p>
-        <p className="mt-1 text-xs text-ink-600">
-          A sample of what a verified skill looks like on a worker&apos;s profile. Not a real person.
-        </p>
-      </div>
-
-      {user ? (
-        <div className="rounded-2xl border border-brand-100 bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-ink-900">
-            Signed in as {user.fullName ?? 'you'}
-          </h2>
-          <p className="mt-2 text-sm text-ink-600">{summaryFor(user.capabilities)}</p>
-          <Link
-            href={homeFor(user)}
-            className="mt-4 inline-flex min-h-12 items-center rounded-xl bg-brand-600 px-6 font-semibold text-white hover:bg-brand-700"
-          >
-            {user.capabilities.length === 0 ? 'What brings you here?' : 'Go to your workspace'}
-          </Link>
-        </div>
-      ) : (
-        <div className="rounded-2xl border border-brand-100 bg-white p-6 shadow-sm">
-          {justDeleted ? (
+      <main className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+        {justDeleted ? (
+          <div className="mt-4">
             <Banner tone="success" title="Your account has been deleted">
               {pendingMedia > 0
                 ? `We still have ${pendingMedia} of your uploaded file${pendingMedia === 1 ? '' : 's'} to remove from storage. It is recorded and on its way out, and nothing in it can be reached through your account.`
                 : 'Your profile and everything that identified you has been removed. The work you logged stays on the platform without your name attached, because proof counts are shared and one person leaving should not quietly change everyone else’s totals.'}
             </Banner>
-          ) : (
-            <>
-              <h2 className="text-lg font-semibold text-ink-900">Sign in or create an account</h2>
-              <p className="mt-2 text-sm text-ink-600">
-                One account for work, hiring, training and learning. It takes an email address and a
-                password.
-              </p>
-              <div className="mt-4 flex flex-wrap gap-3">
+          </div>
+        ) : null}
+
+        {/* Hero: text first on a phone, text left and sample profile right on a laptop. */}
+        <section className="grid gap-10 py-12 sm:py-16 lg:grid-cols-2 lg:items-center lg:gap-16 lg:py-24">
+          <div>
+            <h1 className="text-4xl font-bold tracking-tight text-ink-900 sm:text-5xl lg:text-6xl">
+              Proof of work, not promises.
+            </h1>
+            <p className="mt-5 max-w-xl text-lg text-ink-600 sm:text-xl">
+              Workers log finished jobs and customers confirm them. Employers hire on what was
+              actually done.
+            </p>
+
+            {user ? (
+              <div className="mt-8 max-w-xl rounded-2xl border border-brand-100 bg-white p-5">
+                <p className="font-semibold text-ink-900">Welcome back, {user.fullName ?? 'friend'}</p>
+                <p className="mt-1 text-ink-600">{summaryFor(user.capabilities)}</p>
                 <Link
-                  href="/login"
-                  className="inline-flex min-h-12 items-center rounded-xl bg-brand-600 px-6 font-semibold text-white hover:bg-brand-700"
+                  href={homeFor(user)}
+                  className="mt-4 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-brand-600 px-6 font-semibold text-white hover:bg-brand-700 sm:w-auto"
                 >
-                  Sign in
+                  {user.capabilities.length === 0 ? 'What brings you here?' : 'Go to your workspace'}
                 </Link>
+              </div>
+            ) : (
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                 <Link
                   href="/login?tab=register"
-                  className="inline-flex min-h-12 items-center rounded-xl border border-brand-600 bg-white px-6 font-semibold text-brand-700 hover:bg-brand-50"
+                  className="inline-flex min-h-12 items-center justify-center rounded-xl bg-brand-600 px-6 font-semibold text-white hover:bg-brand-700"
                 >
                   Create account
                 </Link>
+                <Link
+                  href="/login"
+                  className="inline-flex min-h-12 items-center justify-center rounded-xl border border-brand-600 bg-white px-6 font-semibold text-brand-700 hover:bg-brand-50"
+                >
+                  Sign in
+                </Link>
               </div>
-            </>
-          )}
-        </div>
-      )}
+            )}
+            {!user ? (
+              <p className="mt-3 text-sm text-ink-500">
+                One account for work, hiring, training and learning.
+              </p>
+            ) : null}
+          </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        {modules.map((module) => (
-          <Card key={module.title} title={module.title}>
-            <p className="text-sm text-ink-600">{module.body}</p>
-            <p
-              className={`mt-3 text-xs font-semibold tracking-wide uppercase ${
-                module.available ? 'text-brand-600' : 'text-ink-600'
-              }`}
-            >
-              {module.available ? 'Working now' : 'Not built yet'}
+          {/* The one memorable element: what a verified skill looks like. */}
+          <div className="rounded-3xl border border-brand-100 bg-white p-5 shadow-sm sm:p-7">
+            <p className="text-sm text-ink-500">Sample profile, not a real person</p>
+            <div className="mt-3 flex items-start justify-between gap-4">
+              <h2 className="text-xl font-bold text-ink-900 sm:text-2xl">Solar installation</h2>
+              <span className="shrink-0 rounded-full bg-brand-50 px-3 py-1 text-sm font-semibold text-brand-700">
+                4 verified proofs
+              </span>
+            </div>
+            <ul className="mt-5 divide-y divide-brand-100 border-t border-brand-100">
+              {sampleProofs.map((proof) => (
+                <li key={proof} className="flex items-center justify-between gap-3 py-3">
+                  <span className="text-ink-800">{proof}</span>
+                  <span className="shrink-0 text-sm font-medium text-brand-600">
+                    Customer confirmed
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        {/* How it works: a real sequence, so numbered. */}
+        <section aria-labelledby="how-it-works" className="border-t border-brand-100 py-12 sm:py-16">
+          <h2 id="how-it-works" className="text-2xl font-bold text-ink-900 sm:text-3xl">
+            How it works
+          </h2>
+          <ol className="mt-8 grid gap-8 sm:grid-cols-3 sm:gap-6 lg:gap-10">
+            {steps.map((step, index) => (
+              <li key={step.title} className="flex gap-4 sm:block">
+                <span
+                  aria-hidden="true"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-600 font-bold text-white"
+                >
+                  {index + 1}
+                </span>
+                <div className="sm:mt-4">
+                  <h3 className="text-lg font-semibold text-ink-900">{step.title}</h3>
+                  <p className="mt-1 text-ink-600">{step.body}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        {/* Who it is for: four short entries, no card chrome. */}
+        <section aria-labelledby="who-for" className="border-t border-brand-100 py-12 sm:py-16">
+          <h2 id="who-for" className="text-2xl font-bold text-ink-900 sm:text-3xl">
+            Who it is for
+          </h2>
+          <div className="mt-8 grid gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-4">
+            {audiences.map((audience) => (
+              <div key={audience.title} className="border-l-4 border-brand-300 pl-4">
+                <h3 className="text-lg font-semibold text-ink-900">{audience.title}</h3>
+                <p className="mt-1 text-ink-600">{audience.body}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Closing call to action, only for people who are not signed in yet. */}
+        {!user && !justDeleted ? (
+          <section className="mb-12 rounded-3xl bg-brand-700 px-6 py-10 text-center sm:mb-16 sm:px-10 sm:py-14">
+            <h2 className="text-2xl font-bold text-white sm:text-3xl">Start building proof today.</h2>
+            <p className="mx-auto mt-3 max-w-md text-brand-100">
+              It takes an email address and a password.
             </p>
-          </Card>
-        ))}
-      </div>
+            <Link
+              href="/login?tab=register"
+              className="mt-6 inline-flex min-h-12 w-full items-center justify-center rounded-xl bg-white px-6 font-semibold text-brand-700 hover:bg-brand-50 sm:w-auto"
+            >
+              Create account
+            </Link>
+          </section>
+        ) : null}
+      </main>
 
-      <section className="grid gap-4 sm:grid-cols-3">
-        <Link
-          href="/login?tab=register"
-          className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm transition-colors hover:border-brand-300"
-        >
-          <p className="text-sm font-semibold text-ink-900">I do the work</p>
-          <p className="mt-1 text-xs text-ink-600">
-            Log jobs, collect proof, and build a verified capability profile.
-          </p>
-        </Link>
-        <Link
-          href="/login?tab=register"
-          className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm transition-colors hover:border-brand-300"
-        >
-          <p className="text-sm font-semibold text-ink-900">I hire</p>
-          <p className="mt-1 text-xs text-ink-600">
-            Search verified proof and invite the workers you want.
-          </p>
-        </Link>
-        <Link
-          href="/login?tab=register"
-          className="rounded-2xl border border-brand-100 bg-white p-5 shadow-sm transition-colors hover:border-brand-300"
-        >
-          <p className="text-sm font-semibold text-ink-900">I train</p>
-          <p className="mt-1 text-xs text-ink-600">
-            Sign off practical milestones and see what the market needs.
-          </p>
-        </Link>
-      </section>
-
-      <section className="rounded-2xl border border-brand-100 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-ink-900">How it works</h2>
-        <div className="mt-4 grid gap-4 sm:grid-cols-3">
-          <div>
-            <p className="text-sm font-semibold text-ink-900">For workers</p>
-            <ol className="mt-2 list-decimal pl-5 text-xs text-ink-600">
-              <li>Log a job with a photo or voice note.</li>
-              <li>Your customer confirms it.</li>
-              <li>Your verified skill profile grows.</li>
-            </ol>
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-ink-900">For employers</p>
-            <ol className="mt-2 list-decimal pl-5 text-xs text-ink-600">
-              <li>Set up a business and get approved.</li>
-              <li>Search by proven skill.</li>
-              <li>Invite the workers you want.</li>
-            </ol>
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-ink-900">For institutes</p>
-            <ol className="mt-2 list-decimal pl-5 text-xs text-ink-600">
-              <li>Register and get approved.</li>
-              <li>Issue milestones to students.</li>
-              <li>See which skills the market needs.</li>
-            </ol>
-          </div>
-        </div>
-      </section>
-
-      <footer className="border-t border-brand-100 pt-6">
+      <footer className="border-t border-brand-100">
         <nav
           aria-label="Legal and support pages"
-          className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-ink-600"
+          className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-5 gap-y-2 px-4 py-6 text-sm text-ink-600 sm:px-6 lg:px-8"
         >
           <Link href="/about" className="hover:text-ink-900">
             About
@@ -236,6 +253,6 @@ export default async function HomePage({
           </Link>
         </nav>
       </footer>
-    </main>
+    </div>
   );
 }

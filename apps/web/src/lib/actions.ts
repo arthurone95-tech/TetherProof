@@ -39,11 +39,8 @@ import { createClient as createSupabaseServerClient } from './supabase/server';
 /**
  * Result of a form submission.
  *
- * Re-exported as a type so callers can import it from here alongside the actions.
- * `EMPTY_FORM` lives in `lib/form-state.ts` and cannot be re-exported: a
- * `'use server'` module may only export async functions.
+ * Import `FormState` directly from `./form-state` alongside the actions.
  */
-export type { FormState } from './form-state';
 
 function messageFor(error: unknown, fallback: string): string {
   if (error instanceof ApiRequestError) return error.message;
